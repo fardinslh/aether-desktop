@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::Path;
-use sysinfo::System;
+use sysinfo::{Pid, System};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -21,7 +21,6 @@ impl ProcessDetector {
         let mut sys = System::new_all();
         sys.refresh_all();
 
-        // System background filters to exclude from user list
         let system_exclusions: HashSet<&str> = [
             "svchost.exe",
             "smss.exe",
@@ -103,6 +102,104 @@ impl ProcessDetector {
 
         results.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
         results
+    }
+
+    /// Identifies the owning process PID and process name for a listening TCP port on Windows
+    #[cfg(windows)]
+    pub fn get_process_for_tcp_port(target_port: u16) -> Option<(u32, String)> {
+        use windows_sys::Win32::NetworkManagement::IpHelper::{
+            GetExtendedTcpTable, TCP_TABLE_OWNER_PID_ALL,
+        };
+
+        let mut size: u32 = 0;
+        const AF_INET: u32 = 2;
+
+        // First call gets buffer size
+        unsafe {
+            GetExtendedTcpTable(
+                std::ptr::null_mut(),
+                &mut size,
+                0,
+                AF_INET,
+                TCP_TABLE_OWNER_PID_ALL,
+                0,
+            );
+        }
+
+        if size == 0 {
+            return None;
+        }
+
+        let mut buffer: Vec<u8> = vec![0; size as usize];
+        let ret = unsafe {
+            GetExtendedTcpTable(
+                buffer.as_mut_ptr() as *mut _,
+                &mut size,
+                0,
+                AF_INET,
+                TCP_TABLE_OWNER_PID_ALL,
+                0,
+            )
+        };
+
+        if ret != 0 {
+            return None;
+        }
+
+        #[repr(C)]
+        struct MibTcpRowOwnerPid {
+            dw_state: u32,
+            dw_local_addr: u32,
+            dw_local_port: u32,
+            dw_remote_addr: u32,
+            dw_remote_port: u32,
+            dw_owning_pid: u32,
+        }
+
+        let num_entries = unsafe { *(buffer.as_ptr() as *const u32) } as usize;
+        let rows_ptr =
+            unsafe { buffer.as_ptr().add(std::mem::size_of::<u32>()) as *const MibTcpRowOwnerPid };
+
+        let mut found_pid: Option<u32> = None;
+
+        for i in 0..num_entries {
+            let row = unsafe { &*rows_ptr.add(i) };
+            // Local port is stored in network byte order in high 16 bits of dw_local_port on Windows
+            let port_net = (row.dw_local_port & 0xFFFF) as u16;
+            let port_host = u16::from_be(port_net);
+            const MIB_TCP_STATE_LISTEN: u32 = 2;
+
+            if port_host == target_port
+                && (row.dw_state == MIB_TCP_STATE_LISTEN || row.dw_state == 0)
+            {
+                found_pid = Some(row.dw_owning_pid);
+                break;
+            }
+        }
+
+        let pid = found_pid?;
+        let mut sys = System::new_all();
+        sys.refresh_processes(
+            sysinfo::ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
+            true,
+        );
+
+        if let Some(process) = sys.process(Pid::from_u32(pid)) {
+            let raw_name = process.name().to_string_lossy().to_string();
+            let proc_name = if raw_name.to_lowercase().ends_with(".exe") {
+                raw_name
+            } else {
+                format!("{}.exe", raw_name)
+            };
+            Some((pid, proc_name))
+        } else {
+            Some((pid, "unknown.exe".to_string()))
+        }
+    }
+
+    #[cfg(not(windows))]
+    pub fn get_process_for_tcp_port(_target_port: u16) -> Option<(u32, String)> {
+        None
     }
 
     /// Derives metadata from a file path when browsing for an .exe

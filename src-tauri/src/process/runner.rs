@@ -3,6 +3,7 @@ use crate::logging::RingBufferLogger;
 use crate::models::singbox::SingBoxConfig;
 use crate::models::AppSettings;
 use crate::routing::SingBoxConfigGenerator;
+use crate::settings::storage::atomic_replace_file;
 use crate::settings::SettingsStorage;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -11,6 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+use uuid::Uuid;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -163,6 +165,8 @@ impl AetherRunner {
 pub struct SingBoxRunner {
     handle: Option<ProcessHandle>,
     config_path: PathBuf,
+    active_executable_path: Option<String>,
+    active_interface_name: Option<String>,
 }
 
 impl SingBoxRunner {
@@ -171,6 +175,8 @@ impl SingBoxRunner {
         Self {
             handle: None,
             config_path,
+            active_executable_path: None,
+            active_interface_name: None,
         }
     }
 
@@ -190,8 +196,25 @@ impl SingBoxRunner {
         }
         let json = SingBoxConfigGenerator::to_json_string(config)
             .map_err(|e| format!("Failed to serialize sing-box config: {}", e))?;
-        std::fs::write(path, json)
-            .map_err(|e| format!("Failed to write sing-box config file to {:?}: {}", path, e))?;
+
+        let temp_write_path = path.with_extension(format!("tmp.{}.json", Uuid::new_v4()));
+        let mut file = std::fs::File::create(&temp_write_path).map_err(|e| {
+            format!(
+                "Failed to create temporary config write file {:?}: {}",
+                temp_write_path, e
+            )
+        })?;
+        use std::io::Write;
+        file.write_all(json.as_bytes())
+            .map_err(|e| format!("Failed to write config content: {}", e))?;
+        file.sync_all()
+            .map_err(|e| format!("Failed to flush config content: {}", e))?;
+        drop(file);
+
+        if let Err(e) = atomic_replace_file(&temp_write_path, path) {
+            let _ = std::fs::remove_file(&temp_write_path);
+            return Err(e);
+        }
         Ok(())
     }
 
@@ -326,14 +349,21 @@ impl SingBoxRunner {
         self.write_config_to_path(&config, &config_path)?;
         self.validate_config_file(exe_path, &config_path)?;
 
-        self.spawn_with_config(exe_path, &config_path, logger)
+        self.spawn_with_config(exe_path, &config_path, logger)?;
+
+        self.active_executable_path = Some(settings.sing_box.executable_path.clone());
+        self.active_interface_name = Some(settings.sing_box.interface_name.clone());
+        Ok(())
     }
 
-    /// Complete health and routing egress verification helper
+    /// Complete health and routing egress verification helper.
+    /// Verifies process liveness, TUN interface presence, and checks that direct system egress
+    /// matches the expected Aether public IP (preventing false positive on native ISP egress).
     pub async fn verify_router_and_egress(
         &mut self,
         interface_name: &str,
         max_duration: Duration,
+        expected_aether_ip: Option<&str>,
     ) -> Result<(), String> {
         let start = std::time::Instant::now();
         let mut tun_detected = false;
@@ -358,12 +388,12 @@ impl SingBoxRunner {
         }
 
         // Direct system egress test through TUN adapter
-        let mut egress_ok = false;
+        let mut system_trace_opt = None;
         let mut last_err = String::new();
         for _ in 1..=4 {
             match HealthProber::query_direct_system_cloudflare_trace().await {
-                Ok(_) => {
-                    egress_ok = true;
+                Ok(trace) => {
+                    system_trace_opt = Some(trace);
                     break;
                 }
                 Err(e) => {
@@ -373,39 +403,62 @@ impl SingBoxRunner {
             }
         }
 
-        if !egress_ok {
-            return Err(format!("Direct system egress failed: {}", last_err));
+        let system_trace = match system_trace_opt {
+            Some(t) => t,
+            None => return Err(format!("Direct system egress failed: {}", last_err)),
+        };
+
+        // Strict egress consistency check: system traffic must match Aether proxy egress IP
+        if let Some(exp_ip) = expected_aether_ip {
+            if !system_trace.ip.is_empty() && !exp_ip.is_empty() && system_trace.ip != exp_ip {
+                return Err(format!(
+                    "System egress IP ({}) does not match Aether egress IP ({}). Traffic is not traversing Aether outbound.",
+                    system_trace.ip, exp_ip
+                ));
+            }
         }
 
         Ok(())
     }
 
     /// Transactional Live Apply with full health and system egress verification:
-    /// 1. Generates candidate config to temporary file.
-    /// 2. Pre-validates candidate config with sing-box check while old router remains active.
-    /// 3. Backs up the known-good config.
-    /// 4. Replaces active config and spawns sing-box without regenerating.
-    /// 5. Verifies new router process alive + TUN exists + direct system egress works.
-    /// 6. If ANY verification fails: restores backup config file, spawns rollback router,
-    ///    and verifies rollback instance health.
+    /// 1. Captures known-good runtime metadata (old_exe, old_interface, old_config).
+    /// 2. Generates candidate config to temporary file.
+    /// 3. Pre-validates candidate config with sing-box check while old router remains active.
+    /// 4. Backs up the known-good config (REQUIRED - aborts if backup creation fails).
+    /// 5. Atomically replaces active config and spawns sing-box without regenerating.
+    /// 6. Verifies new router process alive + TUN exists + direct system egress matches Aether IP.
+    /// 7. If ANY verification fails: restores backup config file atomically, spawns rollback router
+    ///    using OLD executable and OLD interface metadata, and verifies rollback instance health.
     pub async fn restart_transparently(
         &mut self,
         settings: &AppSettings,
         logger: &RingBufferLogger,
+        expected_aether_ip: Option<&str>,
     ) -> Result<(), String> {
-        let exe_path = settings.sing_box.executable_path.clone();
-        let interface_name = settings.sing_box.interface_name.clone();
+        let old_exe = self
+            .active_executable_path
+            .clone()
+            .unwrap_or_else(|| settings.sing_box.executable_path.clone());
+        let old_interface = self
+            .active_interface_name
+            .clone()
+            .unwrap_or_else(|| settings.sing_box.interface_name.clone());
+
+        let candidate_exe = settings.sing_box.executable_path.clone();
+        let candidate_interface = settings.sing_box.interface_name.clone();
         let candidate_config = SingBoxConfigGenerator::generate(settings);
 
         let config_path = self.config_path.clone();
-        let candidate_path = config_path.with_extension("candidate.json");
-        let backup_path = config_path.with_extension("backup.json");
+        let candidate_path =
+            config_path.with_extension(format!("candidate.{}.json", Uuid::new_v4()));
+        let backup_path = config_path.with_extension(format!("backup.{}.json", Uuid::new_v4()));
 
         // 1. Write candidate config
         self.write_config_to_path(&candidate_config, &candidate_path)?;
 
         // 2. Validate candidate config file (old router still running!)
-        if let Err(err) = self.validate_config_file(&exe_path, &candidate_path) {
+        if let Err(err) = self.validate_config_file(&candidate_exe, &candidate_path) {
             let _ = std::fs::remove_file(&candidate_path);
             logger.log(
                 "ERROR",
@@ -421,18 +474,22 @@ impl SingBoxRunner {
             ));
         }
 
-        // 3. Backup currently active known-good config
+        // 3. Backup currently active known-good config (REQUIRED)
         if config_path.exists() {
-            let _ = std::fs::copy(&config_path, &backup_path);
+            std::fs::copy(&config_path, &backup_path).map_err(|e| {
+                let _ = std::fs::remove_file(&candidate_path);
+                format!("Unable to preserve known-good routing config (backup creation failed: {}); live apply aborted.", e)
+            })?;
         }
 
         // 4. Atomically replace active config with candidate config
-        if let Err(e) = std::fs::rename(&candidate_path, &config_path) {
-            if std::fs::copy(&candidate_path, &config_path).is_err() {
-                let _ = std::fs::remove_file(&candidate_path);
-                return Err(format!("Failed to update config file: {}", e));
-            }
+        if let Err(e) = atomic_replace_file(&candidate_path, &config_path) {
             let _ = std::fs::remove_file(&candidate_path);
+            let _ = std::fs::remove_file(&backup_path);
+            return Err(format!(
+                "Failed to atomically replace active config file: {}",
+                e
+            ));
         }
 
         // 5. Stop existing router
@@ -445,7 +502,7 @@ impl SingBoxRunner {
         tokio::time::sleep(Duration::from_millis(150)).await;
 
         // 6. Spawn sing-box with the new config file (WITHOUT regenerating from settings)
-        if let Err(start_err) = self.spawn_with_config(&exe_path, &config_path, logger) {
+        if let Err(start_err) = self.spawn_with_config(&candidate_exe, &config_path, logger) {
             logger.log(
                 "ERROR",
                 "sing-box",
@@ -456,18 +513,23 @@ impl SingBoxRunner {
             );
             return self
                 .perform_verified_rollback(
-                    &exe_path,
+                    &old_exe,
                     &backup_path,
-                    &interface_name,
+                    &old_interface,
+                    expected_aether_ip,
                     logger,
                     &start_err,
                 )
                 .await;
         }
 
-        // 7. Full live apply health verification: process alive + TUN interface + direct system egress
+        // 7. Full live apply health verification: process alive + TUN interface + direct system egress matching Aether IP
         if let Err(verify_err) = self
-            .verify_router_and_egress(&interface_name, Duration::from_secs(5))
+            .verify_router_and_egress(
+                &candidate_interface,
+                Duration::from_secs(5),
+                expected_aether_ip,
+            )
             .await
         {
             logger.log(
@@ -480,16 +542,19 @@ impl SingBoxRunner {
             );
             return self
                 .perform_verified_rollback(
-                    &exe_path,
+                    &old_exe,
                     &backup_path,
-                    &interface_name,
+                    &old_interface,
+                    expected_aether_ip,
                     logger,
                     &verify_err,
                 )
                 .await;
         }
 
-        // Succeeded: clean up backup
+        // Succeeded: update active runtime metadata and clean up backup
+        self.active_executable_path = Some(candidate_exe);
+        self.active_interface_name = Some(candidate_interface);
         let _ = std::fs::remove_file(&backup_path);
         logger.log(
             "INFO",
@@ -501,9 +566,10 @@ impl SingBoxRunner {
 
     async fn perform_verified_rollback(
         &mut self,
-        exe_path: &str,
+        old_exe: &str,
         backup_path: &Path,
-        interface_name: &str,
+        old_interface: &str,
+        expected_aether_ip: Option<&str>,
         logger: &RingBufferLogger,
         reason: &str,
     ) -> Result<(), String> {
@@ -520,26 +586,23 @@ impl SingBoxRunner {
             "sing-box",
             "Restoring previous known-good routing configuration...",
         );
-        if let Err(e) = std::fs::copy(backup_path, &config_path) {
-            return Err(format!(
-                "CRITICAL: Failed to copy backup config ({}) during rollback after error: {}",
-                e, reason
-            ));
+        if let Err(e) = atomic_replace_file(backup_path, &config_path) {
+            return Err(format!("CRITICAL: Failed to atomically restore backup config ({}) during rollback after error: {}", e, reason));
         }
 
-        // Spawn rollback instance FROM RESTORED CONFIG FILE
-        if let Err(rb_err) = self.spawn_with_config(exe_path, &config_path, logger) {
+        // Spawn rollback instance FROM RESTORED CONFIG FILE using OLD EXECUTABLE
+        if let Err(rb_err) = self.spawn_with_config(old_exe, &config_path, logger) {
             logger.log(
                 "ERROR",
                 "sing-box",
                 format!("CRITICAL: Rollback router launch failed: {}", rb_err),
             );
-            return Err(format!("CRITICAL: New routing configuration failed ({}) and automatic rollback launch also failed ({}).", reason, rb_err));
+            return Err(format!("CRITICAL: New routing configuration failed ({}) AND automatic rollback launch also failed ({}).", reason, rb_err));
         }
 
-        // Verify rollback instance health
+        // Verify rollback instance health using OLD INTERFACE
         if let Err(rb_health_err) = self
-            .verify_router_and_egress(interface_name, Duration::from_secs(5))
+            .verify_router_and_egress(old_interface, Duration::from_secs(5), expected_aether_ip)
             .await
         {
             logger.log(
@@ -550,8 +613,13 @@ impl SingBoxRunner {
                     rb_health_err
                 ),
             );
-            return Err(format!("CRITICAL: New routing configuration failed ({}) and rollback router health verification also failed ({}).", reason, rb_health_err));
+            return Err(format!("CRITICAL: New routing configuration failed ({}) AND rollback router health verification also failed ({}).", reason, rb_health_err));
         }
+
+        // Rollback verified: restore active runtime metadata to OLD
+        self.active_executable_path = Some(old_exe.to_string());
+        self.active_interface_name = Some(old_interface.to_string());
+        let _ = std::fs::remove_file(backup_path);
 
         logger.log(
             "INFO",

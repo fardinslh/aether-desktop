@@ -623,7 +623,7 @@ impl DependencyManager {
     /// Safely promotes a staging directory to final target directory without destroying the previous installation.
     /// If target already exists, moves target to a backup location.
     /// Moves staging to target, validates the promoted executable.
-    /// If promotion or validation fails, restores the backup.
+    /// If promotion or validation fails: restores the backup, requires restore success and re-validation.
     pub fn safe_promote_staging_dir<F>(
         staging_dir: &Path,
         final_dir: &Path,
@@ -638,9 +638,10 @@ impl DependencyManager {
         }
 
         let backup_dir = final_dir.with_extension(format!("backup.{}", Uuid::new_v4()));
+        let had_existing = final_dir.exists();
 
         // 1. Move existing known-good install to backup (do NOT delete!)
-        if final_dir.exists() {
+        if had_existing {
             if let Err(e) = std::fs::rename(final_dir, &backup_dir) {
                 return Err(format!("Failed to backup existing installation: {}", e));
             }
@@ -649,10 +650,17 @@ impl DependencyManager {
         // 2. Promote staging to final_dir
         if let Err(promote_err) = std::fs::rename(staging_dir, final_dir) {
             // Fallback for cross-device moves
-            if let Err(copy_err) = Self::copy_dir_recursive(staging_dir, final_dir) {
-                // Restore backup
-                if backup_dir.exists() {
-                    let _ = std::fs::rename(&backup_dir, final_dir);
+            let copy_res = Self::copy_dir_recursive(staging_dir, final_dir);
+            if let Err(copy_err) = copy_res {
+                let _ = std::fs::remove_dir_all(final_dir);
+                if had_existing && backup_dir.exists() {
+                    let restore_res = std::fs::rename(&backup_dir, final_dir);
+                    if let Err(restore_err) = restore_res {
+                        return Err(format!(
+                            "CRITICAL: Failed to promote staging directory ({} / {}) AND restore of previous installation failed ({})",
+                            promote_err, copy_err, restore_err
+                        ));
+                    }
                 }
                 return Err(format!(
                     "Failed to promote staging directory: {} (copy fallback: {})",
@@ -668,10 +676,15 @@ impl DependencyManager {
             match Self::find_executable_in_dir(final_dir, exe_name) {
                 Some(p) => p,
                 None => {
-                    // Restore backup
                     let _ = std::fs::remove_dir_all(final_dir);
-                    if backup_dir.exists() {
-                        let _ = std::fs::rename(&backup_dir, final_dir);
+                    if had_existing && backup_dir.exists() {
+                        let restore_res = std::fs::rename(&backup_dir, final_dir);
+                        if let Err(restore_err) = restore_res {
+                            return Err(format!(
+                                "CRITICAL: Executable '{}' missing in promoted installation AND restore of previous installation failed ({})",
+                                exe_name, restore_err
+                            ));
+                        }
                     }
                     return Err(format!(
                         "Executable '{}' missing in promoted installation",
@@ -685,13 +698,29 @@ impl DependencyManager {
         if let Err(val_err) = validator(&target_exe) {
             // Failed validation: restore previous known-good installation!
             let _ = std::fs::remove_dir_all(final_dir);
-            if backup_dir.exists() {
-                let _ = std::fs::rename(&backup_dir, final_dir);
+            if had_existing && backup_dir.exists() {
+                let restore_res = std::fs::rename(&backup_dir, final_dir);
+                if let Err(restore_err) = restore_res {
+                    return Err(format!(
+                        "CRITICAL: Promoted executable failed post-install validation ({}) AND restore of previous installation failed ({})",
+                        val_err, restore_err
+                    ));
+                }
+                // Verify restored installation
+                let restored_exe = final_dir.join(exe_name);
+                if let Err(reval_err) = validator(&restored_exe) {
+                    return Err(format!(
+                        "CRITICAL: Promoted executable failed validation ({}) AND restored installation failed re-validation ({})",
+                        val_err, reval_err
+                    ));
+                }
+                return Err(format!("Promoted executable failed post-install validation ({}). Previous installation restored successfully.", val_err));
+            } else {
+                return Err(format!(
+                    "Promoted executable failed post-install validation: {}",
+                    val_err
+                ));
             }
-            return Err(format!(
-                "Promoted executable failed post-install validation: {}",
-                val_err
-            ));
         }
 
         // 5. Success: remove temporary backup

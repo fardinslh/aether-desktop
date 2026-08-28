@@ -47,6 +47,7 @@ pub fn get_settings() -> Result<AppSettings, String> {
 /// Fully Transactional save_settings:
 /// - In Connected Mode: applies candidate settings live on runtime.
 ///   If disk persistence subsequently fails, rolls runtime back to previous configuration.
+///   Surfaces clear errors indicating whether rollback succeeded or failed critically.
 /// - In Disconnected Mode: saves to disk atomically.
 #[tauri::command]
 pub async fn save_settings(
@@ -66,13 +67,23 @@ pub async fn save_settings(
                 "ERROR",
                 "Settings",
                 format!(
-                    "Disk save failed ({}). Rolling back runtime routing...",
+                    "Settings persistence failed: {}. Initiating runtime rollback...",
                     save_err
                 ),
             );
-            // Roll back runtime router to old_settings
-            let _ = state.orchestrator.apply_live_settings(&old_settings).await;
-            return Err(format!("Settings persistence failed: {}. Runtime routing rolled back to previous configuration.", save_err));
+            // Attempt rollback to old_settings
+            match state.orchestrator.apply_live_settings(&old_settings).await {
+                Ok(_) => {
+                    let msg = format!("Settings persistence failed ({}). Runtime restored successfully to previous configuration.", save_err);
+                    state.logger.log("ERROR", "Settings", &msg);
+                    return Err(msg);
+                }
+                Err(rb_err) => {
+                    let msg = format!("CRITICAL: Settings persistence failed ({}) AND runtime rollback also failed ({}).", save_err, rb_err);
+                    state.logger.log("ERROR", "Settings", &msg);
+                    return Err(msg);
+                }
+            }
         }
 
         state.logger.log(

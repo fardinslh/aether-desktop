@@ -40,5 +40,6 @@ windows-sys = { version = "0.59", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Graphics_Gdi",
     "Win32_UI_Shell",
-    "Win32_NetworkManagement_IpHelper"
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_Storage_FileSystem"
 ] }

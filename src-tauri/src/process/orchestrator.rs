@@ -2,6 +2,7 @@ use crate::health::HealthProber;
 use crate::logging::RingBufferLogger;
 use crate::models::health::HealthStatus;
 use crate::models::{AppSettings, ConnectionState};
+use crate::process::detector::ProcessDetector;
 use crate::process::runner::{AetherRunner, SingBoxRunner};
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,6 +14,7 @@ pub struct ConnectionOrchestrator {
     pub aether: Mutex<AetherRunner>,
     pub singbox: Mutex<SingBoxRunner>,
     pub is_aether_managed: AtomicBool,
+    pub active_aether_ip: Arc<RwLock<Option<String>>>,
     pub state: Arc<RwLock<ConnectionState>>,
     pub logger: RingBufferLogger,
     pub last_error: Arc<RwLock<Option<String>>>,
@@ -24,6 +26,7 @@ impl ConnectionOrchestrator {
             aether: Mutex::new(AetherRunner::new()),
             singbox: Mutex::new(SingBoxRunner::new()),
             is_aether_managed: AtomicBool::new(false),
+            active_aether_ip: Arc::new(RwLock::new(None)),
             state,
             logger,
             last_error: Arc::new(RwLock::new(None)),
@@ -57,39 +60,84 @@ impl ConnectionOrchestrator {
         }
 
         *self.last_error.write() = None;
+        *self.active_aether_ip.write() = None;
+
         let aether_host = &settings.aether.host;
         let aether_port = settings.aether.port;
 
-        // 1. Safe Existing-Aether Check
+        // 1. Safe Existing-Aether Check with Process Owner Validation
         let is_port_occupied = HealthProber::check_port_open(aether_host, aether_port, 300).await;
         if is_port_occupied {
-            self.logger.log(
-                "INFO",
-                "Aether",
-                format!(
-                    "Existing listener detected on {}:{}. Validating proxy health...",
-                    aether_host, aether_port
-                ),
-            );
-            match HealthProber::query_cloudflare_trace_via_socks5(aether_host, aether_port).await {
-                Ok(trace) => {
+            let owner_info = ProcessDetector::get_process_for_tcp_port(aether_port);
+            match owner_info {
+                Some((pid, proc_name)) => {
+                    let proc_lower = proc_name.to_lowercase();
+                    if !proc_lower.starts_with("aether") {
+                        let err = format!(
+                            "Port {}:{} is in use by another process ('{}', PID: {}), which is not Aether. Resolve port conflict.",
+                            aether_host, aether_port, proc_name, pid
+                        );
+                        self.set_error(err.clone());
+                        return Err(err);
+                    }
+
                     self.logger.log(
                         "INFO",
                         "Aether",
-                        format!(
-                            "Reusing existing healthy external Aether listener on {}:{} (POP: {}, IP: {}, Latency: {} ms)",
-                            aether_host, aether_port, trace.colo, trace.ip, trace.latency_ms
-                        ),
+                        format!("Existing Aether process detected (PID: {}, '{}') on {}:{}. Validating proxy health...", pid, proc_name, aether_host, aether_port),
                     );
-                    self.is_aether_managed.store(false, Ordering::SeqCst);
+
+                    match HealthProber::query_cloudflare_trace_via_socks5(aether_host, aether_port)
+                        .await
+                    {
+                        Ok(trace) => {
+                            self.logger.log(
+                                "INFO",
+                                "Aether",
+                                format!(
+                                    "Reusing existing healthy external Aether instance (PID: {}) on {}:{} (POP: {}, IP: {}, Latency: {} ms)",
+                                    pid, aether_host, aether_port, trace.colo, trace.ip, trace.latency_ms
+                                ),
+                            );
+                            *self.active_aether_ip.write() = Some(trace.ip);
+                            self.is_aether_managed.store(false, Ordering::SeqCst);
+                        }
+                        Err(e) => {
+                            let err = format!(
+                                "Port {}:{} is owned by an existing Aether process (PID: {}), but SOCKS5 validation failed: {}. Ensure Aether is logged in and connected.",
+                                aether_host, aether_port, pid, e
+                            );
+                            self.set_error(err.clone());
+                            return Err(err);
+                        }
+                    }
                 }
-                Err(e) => {
-                    let err = format!(
-                        "Port {}:{} is in use by another application or unresponsive service, but SOCKS5 validation failed: {}. Resolve port conflict.",
-                        aether_host, aether_port, e
-                    );
-                    self.set_error(err.clone());
-                    return Err(err);
+                None => {
+                    // Could not query PID owner, probe SOCKS directly
+                    match HealthProber::query_cloudflare_trace_via_socks5(aether_host, aether_port)
+                        .await
+                    {
+                        Ok(trace) => {
+                            self.logger.log(
+                                "INFO",
+                                "Aether",
+                                format!(
+                                    "Reusing existing healthy external listener on {}:{} (POP: {}, IP: {})",
+                                    aether_host, aether_port, trace.colo, trace.ip
+                                ),
+                            );
+                            *self.active_aether_ip.write() = Some(trace.ip);
+                            self.is_aether_managed.store(false, Ordering::SeqCst);
+                        }
+                        Err(e) => {
+                            let err = format!(
+                                "Port {}:{} is in use, but proxy validation failed: {}. Resolve port conflict.",
+                                aether_host, aether_port, e
+                            );
+                            self.set_error(err.clone());
+                            return Err(err);
+                        }
+                    }
                 }
             }
         } else {
@@ -122,6 +170,7 @@ impl ConnectionOrchestrator {
                                     trace.colo, trace.ip, trace.latency_ms
                                 ),
                             );
+                            *self.active_aether_ip.write() = Some(trace.ip);
                             aether_ready = true;
                             break;
                         }
@@ -160,14 +209,18 @@ impl ConnectionOrchestrator {
             }
         }
 
-        // 3. Bounded routing and system egress verification
+        // 3. Bounded routing and system egress verification matching Aether IP
         self.set_state(ConnectionState::TestingRouting);
         let interface_name = &settings.sing_box.interface_name;
+        let expected_aether_ip = self.active_aether_ip.read().clone();
 
-        // Verify router process, TUN interface presence, and direct system egress
         let mut sb_guard = self.singbox.lock().await;
         if let Err(verify_err) = sb_guard
-            .verify_router_and_egress(interface_name, Duration::from_secs(6))
+            .verify_router_and_egress(
+                interface_name,
+                Duration::from_secs(6),
+                expected_aether_ip.as_deref(),
+            )
             .await
         {
             let err = format!(
@@ -216,6 +269,7 @@ impl ConnectionOrchestrator {
             );
         }
 
+        *self.active_aether_ip.write() = None;
         self.set_state(ConnectionState::Disconnected);
         self.logger.log(
             "INFO",
@@ -233,8 +287,11 @@ impl ConnectionOrchestrator {
                 "ROUTING",
                 "Applying live settings to running sing-box router...",
             );
+            let expected_aether_ip = self.active_aether_ip.read().clone();
             let mut sb_guard = self.singbox.lock().await;
-            sb_guard.restart_transparently(settings, &self.logger).await
+            sb_guard
+                .restart_transparently(settings, &self.logger, expected_aether_ip.as_deref())
+                .await
         } else {
             Ok(())
         }

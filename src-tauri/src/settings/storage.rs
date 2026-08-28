@@ -1,87 +1,137 @@
 use crate::models::AppSettings;
-use directories::ProjectDirs;
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use uuid::Uuid;
+
+#[cfg(windows)]
+pub fn atomic_replace_file(temp_path: &Path, destination_path: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, ReplaceFileW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let temp_w: Vec<u16> = temp_path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let dest_w: Vec<u16> = destination_path
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+
+    if destination_path.exists() {
+        let success = unsafe {
+            ReplaceFileW(
+                dest_w.as_ptr(),
+                temp_w.as_ptr(),
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        if success != 0 {
+            return Ok(());
+        }
+    }
+
+    let success = unsafe {
+        MoveFileExW(
+            temp_w.as_ptr(),
+            dest_w.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+
+    if success != 0 {
+        Ok(())
+    } else {
+        let err = std::io::Error::last_os_error();
+        Err(format!(
+            "Atomic file replacement failed from {:?} to {:?}: {}",
+            temp_path, destination_path, err
+        ))
+    }
+}
+
+#[cfg(not(windows))]
+pub fn atomic_replace_file(temp_path: &Path, destination_path: &Path) -> Result<(), String> {
+    std::fs::rename(temp_path, destination_path)
+        .map_err(|e| format!("Atomic file replacement failed: {}", e))
+}
 
 pub struct SettingsStorage;
 
 impl SettingsStorage {
-    /// Returns the app data directory: %APPDATA%\aether-desktop on Windows
-    pub fn get_app_data_dir() -> PathBuf {
-        if let Some(proj_dirs) = ProjectDirs::from("com", "aether", "aether-desktop") {
-            proj_dirs.config_dir().to_path_buf()
-        } else {
-            PathBuf::from("C:\\ProgramData\\aether-desktop")
-        }
+    pub fn get_config_dir() -> PathBuf {
+        directories::BaseDirs::new()
+            .map(|b| b.config_dir().join("AetherDesktop"))
+            .unwrap_or_else(|| PathBuf::from("./config"))
     }
 
-    /// Returns config file path: %APPDATA%\aether-desktop\config.json
-    pub fn get_config_path() -> PathBuf {
-        Self::get_app_data_dir().join("config.json")
+    pub fn get_config_file_path() -> PathBuf {
+        Self::get_config_dir().join("config.json")
     }
 
-    /// Returns generated sing-box config path: %APPDATA%\aether-desktop\sing-box-config.json
     pub fn get_singbox_config_path() -> PathBuf {
-        Self::get_app_data_dir().join("sing-box-config.json")
+        Self::get_config_dir().join("sing-box-config.json")
     }
 
-    /// Returns logs directory: %APPDATA%\aether-desktop\logs
-    pub fn get_logs_dir() -> PathBuf {
-        Self::get_app_data_dir().join("logs")
-    }
-
-    /// Loads settings from disk, or creates default settings if not existing
     pub fn load() -> AppSettings {
-        let path = Self::get_config_path();
+        let path = Self::get_config_file_path();
         if path.exists() {
-            if let Ok(content) = fs::read_to_string(&path) {
-                if let Ok(settings) = serde_json::from_str::<AppSettings>(&content) {
-                    return settings;
+            match std::fs::read_to_string(&path) {
+                Ok(content) => match serde_json::from_str::<AppSettings>(&content) {
+                    Ok(settings) => settings,
+                    Err(e) => {
+                        eprintln!("Failed to parse settings JSON: {}. Using defaults.", e);
+                        AppSettings::default()
+                    }
+                },
+                Err(e) => {
+                    eprintln!("Failed to read settings file: {}. Using defaults.", e);
+                    AppSettings::default()
                 }
             }
+        } else {
+            let defaults = AppSettings::default();
+            let _ = Self::save(&defaults);
+            defaults
         }
-
-        let default_settings = AppSettings::default();
-        let _ = Self::save(&default_settings);
-        default_settings
     }
 
-    /// Saves settings to disk atomically (write to temp file, sync to disk, atomic rename)
+    /// Atomically persists settings to disk using Windows ReplaceFileW/MoveFileExW
     pub fn save(settings: &AppSettings) -> Result<(), String> {
-        let dir = Self::get_app_data_dir();
+        let dir = Self::get_config_dir();
         if !dir.exists() {
-            fs::create_dir_all(&dir).map_err(|e| format!("Failed to create config dir: {}", e))?;
+            std::fs::create_dir_all(&dir)
+                .map_err(|e| format!("Failed to create config directory: {}", e))?;
         }
+
+        let final_path = Self::get_config_file_path();
+        let temp_path = dir.join(format!("config.tmp.{}.json", Uuid::new_v4()));
 
         let json = serde_json::to_string_pretty(settings)
             .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-        let path = Self::get_config_path();
-        let temp_path = path.with_extension("tmp.json");
 
-        // 1. Write to temp file and flush
         let mut file = File::create(&temp_path)
             .map_err(|e| format!("Failed to create temp settings file: {}", e))?;
+
         file.write_all(json.as_bytes())
-            .map_err(|e| format!("Failed to write temp settings: {}", e))?;
+            .map_err(|e| format!("Failed to write settings to temp file: {}", e))?;
+
         file.sync_all()
-            .map_err(|e| format!("Failed to flush temp settings to disk: {}", e))?;
+            .map_err(|e| format!("Failed to flush temp settings file: {}", e))?;
+
         drop(file);
 
-        // 2. Atomic rename/replace
-        if let Err(e) = fs::rename(&temp_path, &path) {
-            // Fallback for Windows file locking / cross-device rename
-            if fs::copy(&temp_path, &path).is_err() {
-                let _ = fs::remove_file(&temp_path);
-                return Err(format!("Failed to atomically replace settings file: {}", e));
-            }
-            let _ = fs::remove_file(&temp_path);
+        if let Err(e) = atomic_replace_file(&temp_path, &final_path) {
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(e);
         }
 
         Ok(())
     }
 
-    /// Resets settings back to factory defaults
     pub fn reset() -> Result<AppSettings, String> {
         let defaults = AppSettings::default();
         Self::save(&defaults)?;
