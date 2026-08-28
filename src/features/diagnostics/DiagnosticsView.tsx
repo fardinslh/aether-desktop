@@ -1,4 +1,4 @@
-﻿import React, { useState } from "react";
+import React, { useState } from "react";
 import { Download, RefreshCw, FileCode, CheckCircle2, Copy } from "lucide-react";
 import { LogEntry } from "../../types";
 import { api } from "../../services/api";
@@ -18,7 +18,7 @@ export const DiagnosticsView: React.FC<DiagnosticsViewProps> = ({ logs, onRefres
   const handleFetchConfig = async () => {
     setConfigLoading(true);
     try {
-      const preview = await api.generateSingBoxConfigPreview();
+      const preview = await api.getSingBoxConfigPreview();
       setConfigPreview(preview);
       setShowConfigModal(true);
     } catch (e: any) {

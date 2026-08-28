@@ -1,6 +1,6 @@
-﻿import React from "react";
+import React, { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Minus, Square, X, Shield, ShieldCheck, ShieldAlert } from "lucide-react";
+import { Minus, Square, Copy, X, Shield, ShieldCheck, ShieldAlert } from "lucide-react";
 import { ConnectionState } from "../../types";
 
 interface WindowTitleBarProps {
@@ -8,31 +8,76 @@ interface WindowTitleBarProps {
 }
 
 export const WindowTitleBar: React.FC<WindowTitleBarProps> = ({ connectionState }) => {
-  const handleMinimize = async () => {
+  const [isMaximized, setIsMaximized] = useState(false);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+
+    const setupListener = async () => {
+      try {
+        const appWindow = getCurrentWindow();
+        const initialMax = await appWindow.isMaximized();
+        setIsMaximized(initialMax);
+
+        unlisten = await appWindow.onResized(async () => {
+          try {
+            const max = await appWindow.isMaximized();
+            setIsMaximized(max);
+          } catch (e) {
+            console.error("Failed to query maximized state on resize:", e);
+          }
+        });
+      } catch (err) {
+        console.warn("Window event listener not available (browser dev mode):", err);
+      }
+    };
+
+    setupListener();
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  const handleMinimize = async (e: React.MouseEvent) => {
+    e.stopPropagation();
     try {
       const appWindow = getCurrentWindow();
       await appWindow.minimize();
-    } catch {
-      // fallback in browser dev mode
+    } catch (err) {
+      console.error("Failed to minimize window:", err);
     }
   };
 
-  const handleMaximize = async () => {
+  const handleToggleMaximize = async (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
     try {
       const appWindow = getCurrentWindow();
       await appWindow.toggleMaximize();
-    } catch {
-      // fallback
+      const max = await appWindow.isMaximized();
+      setIsMaximized(max);
+    } catch (err) {
+      console.error("Failed to toggle maximize window:", err);
     }
   };
 
-  const handleClose = async () => {
+  const handleClose = async (e: React.MouseEvent) => {
+    e.stopPropagation();
     try {
       const appWindow = getCurrentWindow();
       await appWindow.close();
-    } catch {
-      // fallback
+    } catch (err) {
+      console.error("Failed to close window:", err);
     }
+  };
+
+  const handleDoubleClick = (e: React.MouseEvent) => {
+    // Only toggle if clicked directly on draggable region, not on buttons
+    const target = e.target as HTMLElement;
+    if (target.closest("button") || target.closest("[data-no-drag]")) {
+      return;
+    }
+    handleToggleMaximize();
   };
 
   const isConnected = connectionState === "CONNECTED";
@@ -43,10 +88,11 @@ export const WindowTitleBar: React.FC<WindowTitleBarProps> = ({ connectionState 
   return (
     <header
       data-tauri-drag-region
-      className="h-10 bg-background-subtle border-b border-zinc-800/80 flex items-center justify-between px-3 select-none z-50 sticky top-0"
+      onDoubleClick={handleDoubleClick}
+      className="h-10 bg-background-subtle border-b border-zinc-800/80 flex items-center justify-between px-3 select-none z-50 sticky top-0 cursor-default"
     >
       {/* Brand & Connection State Indicator */}
-      <div className="flex items-center gap-2.5 pointer-events-none">
+      <div className="flex items-center gap-2.5 pointer-events-none" data-tauri-drag-region>
         <div className="flex items-center justify-center w-5 h-5 rounded bg-brand-600/20 text-brand-400">
           {isConnected ? (
             <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
@@ -79,8 +125,8 @@ export const WindowTitleBar: React.FC<WindowTitleBarProps> = ({ connectionState 
         </div>
       </div>
 
-      {/* Window Controls */}
-      <div className="flex items-center -mr-1">
+      {/* Window Controls (Explicitly excluded from drag region) */}
+      <div className="flex items-center -mr-1" data-no-drag>
         <button
           onClick={handleMinimize}
           className="w-8 h-8 flex items-center justify-center text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/60 rounded transition-colors"
@@ -89,11 +135,11 @@ export const WindowTitleBar: React.FC<WindowTitleBarProps> = ({ connectionState 
           <Minus className="w-3.5 h-3.5" />
         </button>
         <button
-          onClick={handleMaximize}
+          onClick={handleToggleMaximize}
           className="w-8 h-8 flex items-center justify-center text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/60 rounded transition-colors"
-          title="Maximize"
+          title={isMaximized ? "Restore" : "Maximize"}
         >
-          <Square className="w-3 h-3" />
+          {isMaximized ? <Copy className="w-3 h-3 rotate-180" /> : <Square className="w-3 h-3" />}
         </button>
         <button
           onClick={handleClose}

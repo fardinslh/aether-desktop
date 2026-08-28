@@ -39,6 +39,7 @@ export const AddApplicationModal: React.FC<AddApplicationModalProps> = ({
   const [displayName, setDisplayName] = useState<string>("");
   const [processName, setProcessName] = useState<string>("");
   const [executablePath, setExecutablePath] = useState<string>("");
+  const [iconBase64, setIconBase64] = useState<string | null>(null);
   const [destination, setDestination] = useState<RouteDestination>("secondaryProxy");
 
   // Duplicate state
@@ -67,6 +68,7 @@ export const AddApplicationModal: React.FC<AddApplicationModalProps> = ({
     setDisplayName("");
     setProcessName("");
     setExecutablePath("");
+    setIconBase64(null);
     setDestination("secondaryProxy");
     setDuplicateRule(null);
   };
@@ -88,14 +90,41 @@ export const AddApplicationModal: React.FC<AddApplicationModalProps> = ({
     setDisplayName(app.name);
     setProcessName(app.processName);
     setExecutablePath(app.executablePath || "");
+    setIconBase64(app.iconBase64 || null);
+  };
+
+  const handleNativeBrowse = async () => {
+    try {
+      const selected = await api.pickExecutableFile();
+      if (selected) {
+        setExecutablePath(selected);
+        const metadata = await api.inspectExecutable(selected);
+        setDisplayName(metadata.displayName);
+        setProcessName(metadata.processName);
+        if (metadata.iconBase64) {
+          setIconBase64(metadata.iconBase64);
+        }
+      }
+    } catch (e) {
+      console.error("Native file dialog error:", e);
+    }
   };
 
   const handleBrowsePathChange = async (path: string) => {
     setExecutablePath(path);
-    if (path.trim()) {
-      const metadata = await api.inspectExecutableFile(path);
-      setDisplayName(metadata.displayName);
-      setProcessName(metadata.processName);
+    if (path.trim() && (path.includes("\\") || path.includes("/"))) {
+      try {
+        const metadata = await api.inspectExecutable(path);
+        setDisplayName(metadata.displayName);
+        setProcessName(metadata.processName);
+        if (metadata.iconBase64) {
+          setIconBase64(metadata.iconBase64);
+        }
+      } catch {
+        // manual typing fallback
+      }
+    } else {
+      setProcessName(path.trim());
     }
   };
 
@@ -116,6 +145,7 @@ export const AddApplicationModal: React.FC<AddApplicationModalProps> = ({
       enabled: true,
       source: "user",
       priority: "normal",
+      iconBase64: iconBase64 || null,
     };
 
     onAddRule(newRule);
@@ -211,7 +241,7 @@ export const AddApplicationModal: React.FC<AddApplicationModalProps> = ({
                         }`}
                       >
                         <div className="flex items-center gap-2.5">
-                          <AppIcon processName={app.processName} displayName={app.name} size="sm" />
+                          <AppIcon processName={app.processName} displayName={app.name} iconBase64={app.iconBase64} size="sm" />
                           <div>
                             <div className="text-xs font-semibold">{app.name}</div>
                             <div className="text-[11px] font-mono text-zinc-500">{app.processName}</div>
@@ -231,17 +261,27 @@ export const AddApplicationModal: React.FC<AddApplicationModalProps> = ({
             <div className="space-y-3">
               <div>
                 <label className="block text-xs font-semibold text-zinc-300 mb-1">
-                  Executable Path or Name (.exe)
+                  Select Executable File (.exe)
                 </label>
-                <input
-                  type="text"
-                  placeholder="e.g. C:\Program Files\Spotify\Spotify.exe or Telegram.exe"
-                  value={executablePath || processName}
-                  onChange={(e) => handleBrowsePathChange(e.target.value)}
-                  className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-xs text-zinc-200 font-mono focus:outline-none focus:border-brand-500"
-                />
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="e.g. C:\Program Files\Spotify\Spotify.exe or Telegram.exe"
+                    value={executablePath || processName}
+                    onChange={(e) => handleBrowsePathChange(e.target.value)}
+                    className="flex-1 px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-xs text-zinc-200 font-mono focus:outline-none focus:border-brand-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleNativeBrowse}
+                    className="px-3 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-lg text-xs font-medium flex items-center gap-1.5 shadow-sm transition-colors"
+                  >
+                    <FolderOpen className="w-3.5 h-3.5" />
+                    <span>Browse...</span>
+                  </button>
+                </div>
                 <p className="text-[11px] text-zinc-500 mt-1">
-                  You can enter a full path or just the executable name (e.g. <span className="font-mono text-zinc-400">firefox.exe</span>).
+                  Click <span className="text-zinc-300 font-medium">Browse</span> to pick any Windows .exe with the native open dialog.
                 </p>
               </div>
 
@@ -288,7 +328,7 @@ export const AddApplicationModal: React.FC<AddApplicationModalProps> = ({
           {/* Selected Application Preview */}
           {processName && !duplicateRule && (
             <div className="flex items-center gap-3 p-3 rounded-xl bg-zinc-900/60 border border-zinc-800">
-              <AppIcon processName={processName} displayName={displayName} size="md" />
+              <AppIcon processName={processName} displayName={displayName} iconBase64={iconBase64} size="md" />
               <div>
                 <div className="text-xs font-semibold text-zinc-200">
                   {displayName || processName.replace(/\.exe$/i, "")}

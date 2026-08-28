@@ -45,7 +45,7 @@ export function useAppStore() {
         setHealth(hl);
         setLogs(lg);
       } catch {
-        // ignore polling errors
+        // network polling error
       }
     }, 1500);
 
@@ -53,13 +53,20 @@ export function useAppStore() {
   }, [refreshAll]);
 
   const updateSettings = async (newSettings: AppSettings) => {
-    setSettings(newSettings);
-    await api.saveSettings(newSettings);
-
-    // If connected, show momentary applying indicator
     if (connectionState === "CONNECTED") {
       setIsApplyingRouting(true);
-      setTimeout(() => setIsApplyingRouting(false), 1200);
+    }
+    try {
+      await api.saveSettings(newSettings);
+      setSettings(newSettings);
+      setErrorDetails(null);
+    } catch (err: any) {
+      console.error("Failed to save/apply settings:", err);
+      const msg = err?.toString() || "Failed to apply live routing changes";
+      setErrorDetails(msg);
+      throw err;
+    } finally {
+      setIsApplyingRouting(false);
     }
   };
 
@@ -121,7 +128,7 @@ export function useAppStore() {
   const triggerConnect = async () => {
     setErrorDetails(null);
     try {
-      await api.connectTunnel();
+      await api.connect();
       const [st, h] = await Promise.all([api.getConnectionState(), api.getHealthStatus()]);
       setConnectionState(st);
       setHealth(h);
@@ -133,7 +140,7 @@ export function useAppStore() {
 
   const triggerDisconnect = async () => {
     try {
-      await api.disconnectTunnel();
+      await api.disconnect();
       const st = await api.getConnectionState();
       setConnectionState(st);
     } catch (err: any) {

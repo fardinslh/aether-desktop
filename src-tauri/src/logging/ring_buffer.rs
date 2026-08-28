@@ -28,7 +28,12 @@ impl RingBufferLogger {
         }
     }
 
-    pub fn log(&self, level: impl Into<String>, source: impl Into<String>, message: impl Into<String>) {
+    pub fn log(
+        &self,
+        level: impl Into<String>,
+        source: impl Into<String>,
+        message: impl Into<String>,
+    ) {
         let entry = LogEntry {
             id: uuid::Uuid::new_v4().to_string(),
             timestamp: Utc::now().to_rfc3339(),
@@ -56,7 +61,10 @@ impl RingBufferLogger {
         let entries = self.get_entries();
         let mut out = String::new();
         for e in entries {
-            out.push_str(&format!("[{}] [{}] [{}] {}\n", e.timestamp, e.level, e.source, e.message));
+            out.push_str(&format!(
+                "[{}] [{}] [{}] {}\n",
+                e.timestamp, e.level, e.source, e.message
+            ));
         }
         out
     }

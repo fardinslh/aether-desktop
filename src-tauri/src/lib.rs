@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod dependencies;
 pub mod health;
 pub mod logging;
 pub mod models;
@@ -19,7 +20,10 @@ pub fn run() {
     logger.log("INFO", "App", "Aether Desktop initialized");
 
     let connection_state = Arc::new(RwLock::new(ConnectionState::Disconnected));
-    let orchestrator = Arc::new(ConnectionOrchestrator::new(logger.clone(), connection_state.clone()));
+    let orchestrator = Arc::new(ConnectionOrchestrator::new(
+        logger.clone(),
+        connection_state.clone(),
+    ));
 
     let app_state = AppState {
         logger: logger.clone(),
@@ -37,18 +41,21 @@ pub fn run() {
             commands::save_settings,
             commands::reset_settings,
             commands::get_connection_state,
-            commands::set_connection_state,
             commands::connect_tunnel,
             commands::disconnect_tunnel,
             commands::get_health_status,
             commands::get_running_applications,
             commands::inspect_executable_file,
+            commands::pick_executable_file,
             commands::generate_singbox_config_preview,
             commands::test_secondary_proxy,
             commands::test_aether_proxy,
             commands::get_logs,
             commands::export_logs,
-            commands::validate_binaries
+            commands::validate_binaries,
+            commands::check_dependencies,
+            commands::install_aether_dependency,
+            commands::install_singbox_dependency
         ])
         .build(tauri::generate_context!())
         .expect("error while building aether desktop application")

@@ -1,5 +1,5 @@
-use aether_desktop_lib::settings::SettingsStorage;
 use aether_desktop_lib::routing::SingBoxConfigGenerator;
+use aether_desktop_lib::settings::SettingsStorage;
 
 fn main() {
     let settings = SettingsStorage::load();

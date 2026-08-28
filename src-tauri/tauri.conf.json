@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Aether Desktop",
         "width": 840,
         "height": 660,

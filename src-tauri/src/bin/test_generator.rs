@@ -1,5 +1,7 @@
 use aether_desktop_lib::models::singbox::{InboundConfig, OutboundConfig};
-use aether_desktop_lib::models::{ApplicationRule, AppSettings, RouteDestination, RulePriority, RuleSource};
+use aether_desktop_lib::models::{
+    AppSettings, ApplicationRule, RouteDestination, RulePriority, RuleSource,
+};
 use aether_desktop_lib::routing::SingBoxConfigGenerator;
 
 fn main() {
@@ -138,12 +140,8 @@ fn test_scenario_1_discord_high_priority_3478() {
     let settings = AppSettings::default();
     let config = SingBoxConfigGenerator::generate(&settings);
 
-    let outbound = SingBoxConfigGenerator::resolve_route(
-        &config,
-        Some("Discord.exe"),
-        Some(3478),
-        false,
-    );
+    let outbound =
+        SingBoxConfigGenerator::resolve_route(&config, Some("Discord.exe"), Some(3478), false);
     assert_eq!(
         outbound, "v2ray",
         "Discord.exe (High Priority) on port 3478 must route to v2ray!"
@@ -154,12 +152,8 @@ fn test_scenario_2_discord_high_priority_5349() {
     let settings = AppSettings::default();
     let config = SingBoxConfigGenerator::generate(&settings);
 
-    let outbound = SingBoxConfigGenerator::resolve_route(
-        &config,
-        Some("Discord.exe"),
-        Some(5349),
-        false,
-    );
+    let outbound =
+        SingBoxConfigGenerator::resolve_route(&config, Some("Discord.exe"), Some(5349), false);
     assert_eq!(
         outbound, "v2ray",
         "Discord.exe (High Priority) on port 5349 must route to v2ray!"
@@ -180,12 +174,8 @@ fn test_scenario_3_normal_secondary_proxy() {
 
     let config = SingBoxConfigGenerator::generate(&settings);
 
-    let outbound = SingBoxConfigGenerator::resolve_route(
-        &config,
-        Some("Spotify.exe"),
-        Some(443),
-        false,
-    );
+    let outbound =
+        SingBoxConfigGenerator::resolve_route(&config, Some("Spotify.exe"), Some(443), false);
     assert_eq!(
         outbound, "v2ray",
         "Spotify.exe (Normal Priority) on port 443 must route to v2ray!"
@@ -206,12 +196,8 @@ fn test_scenario_4_global_compatibility_fallback_against_normal_rule() {
 
     let config = SingBoxConfigGenerator::generate(&settings);
 
-    let outbound = SingBoxConfigGenerator::resolve_route(
-        &config,
-        Some("Spotify.exe"),
-        Some(3478),
-        false,
-    );
+    let outbound =
+        SingBoxConfigGenerator::resolve_route(&config, Some("Spotify.exe"), Some(3478), false);
     assert_eq!(
         outbound, "direct",
         "Spotify.exe (Normal Priority) on port 3478 must route to direct because global fallback precedes Normal rules!"
@@ -232,12 +218,8 @@ fn test_scenario_5_high_custom_override() {
 
     let config = SingBoxConfigGenerator::generate(&settings);
 
-    let outbound = SingBoxConfigGenerator::resolve_route(
-        &config,
-        Some("Spotify.exe"),
-        Some(3478),
-        false,
-    );
+    let outbound =
+        SingBoxConfigGenerator::resolve_route(&config, Some("Spotify.exe"), Some(3478), false);
     assert_eq!(
         outbound, "v2ray",
         "Spotify.exe (High Priority) on port 3478 must route to v2ray because High priority precedes global fallback!"
@@ -248,23 +230,15 @@ fn test_scenario_6_generals_regression() {
     let settings = AppSettings::default();
     let config = SingBoxConfigGenerator::generate(&settings);
 
-    let outbound_3478 = SingBoxConfigGenerator::resolve_route(
-        &config,
-        Some("generals.exe"),
-        Some(3478),
-        false,
-    );
+    let outbound_3478 =
+        SingBoxConfigGenerator::resolve_route(&config, Some("generals.exe"), Some(3478), false);
     assert_eq!(
         outbound_3478, "direct",
         "Unmatched app on port 3478 must route direct (Generals Online fix)!"
     );
 
-    let outbound_5349 = SingBoxConfigGenerator::resolve_route(
-        &config,
-        Some("generals.exe"),
-        Some(5349),
-        false,
-    );
+    let outbound_5349 =
+        SingBoxConfigGenerator::resolve_route(&config, Some("generals.exe"), Some(5349), false);
     assert_eq!(
         outbound_5349, "direct",
         "Unmatched app on port 5349 must route direct (Generals Online fix)!"
@@ -275,12 +249,8 @@ fn test_scenario_7_unmatched_normal_traffic() {
     let settings = AppSettings::default();
     let config = SingBoxConfigGenerator::generate(&settings);
 
-    let outbound = SingBoxConfigGenerator::resolve_route(
-        &config,
-        Some("curl.exe"),
-        Some(443),
-        false,
-    );
+    let outbound =
+        SingBoxConfigGenerator::resolve_route(&config, Some("curl.exe"), Some(443), false);
     assert_eq!(
         outbound, "aether",
         "Unmatched app on normal port 443 must fall through to aether!"
@@ -345,12 +315,8 @@ fn test_scenario_9_proxy_loop_prevention() {
     let config = SingBoxConfigGenerator::generate(&settings);
 
     for proc in &["aether.exe", "xray.exe", "v2ray.exe", "v2rayN.exe"] {
-        let outbound = SingBoxConfigGenerator::resolve_route(
-            &config,
-            Some(proc),
-            Some(10808),
-            false,
-        );
+        let outbound =
+            SingBoxConfigGenerator::resolve_route(&config, Some(proc), Some(10808), false);
         assert_eq!(
             outbound, "direct",
             "Process loop prevention for {} must route direct!",

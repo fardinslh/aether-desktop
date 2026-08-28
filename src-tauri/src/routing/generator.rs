@@ -122,17 +122,26 @@ impl SingBoxConfigGenerator {
             if rule.priority == RulePriority::High {
                 match rule.destination {
                     RouteDestination::Direct => {
-                        if !high_direct_apps.iter().any(|p| p.eq_ignore_ascii_case(&proc)) {
+                        if !high_direct_apps
+                            .iter()
+                            .any(|p| p.eq_ignore_ascii_case(&proc))
+                        {
                             high_direct_apps.push(proc);
                         }
                     }
                     RouteDestination::SecondaryProxy => {
-                        if !high_v2ray_apps.iter().any(|p| p.eq_ignore_ascii_case(&proc)) {
+                        if !high_v2ray_apps
+                            .iter()
+                            .any(|p| p.eq_ignore_ascii_case(&proc))
+                        {
                             high_v2ray_apps.push(proc);
                         }
                     }
                     RouteDestination::Aether => {
-                        if !high_aether_apps.iter().any(|p| p.eq_ignore_ascii_case(&proc)) {
+                        if !high_aether_apps
+                            .iter()
+                            .any(|p| p.eq_ignore_ascii_case(&proc))
+                        {
                             high_aether_apps.push(proc);
                         }
                     }
@@ -140,17 +149,26 @@ impl SingBoxConfigGenerator {
             } else {
                 match rule.destination {
                     RouteDestination::Direct => {
-                        if !normal_direct_apps.iter().any(|p| p.eq_ignore_ascii_case(&proc)) {
+                        if !normal_direct_apps
+                            .iter()
+                            .any(|p| p.eq_ignore_ascii_case(&proc))
+                        {
                             normal_direct_apps.push(proc);
                         }
                     }
                     RouteDestination::SecondaryProxy => {
-                        if !normal_v2ray_apps.iter().any(|p| p.eq_ignore_ascii_case(&proc)) {
+                        if !normal_v2ray_apps
+                            .iter()
+                            .any(|p| p.eq_ignore_ascii_case(&proc))
+                        {
                             normal_v2ray_apps.push(proc);
                         }
                     }
                     RouteDestination::Aether => {
-                        if !normal_aether_apps.iter().any(|p| p.eq_ignore_ascii_case(&proc)) {
+                        if !normal_aether_apps
+                            .iter()
+                            .any(|p| p.eq_ignore_ascii_case(&proc))
+                        {
                             normal_aether_apps.push(proc);
                         }
                     }
@@ -360,9 +378,7 @@ impl SingBoxConfigGenerator {
                 std::net::IpAddr::V4(ipv4) => {
                     ipv4.is_private() || ipv4.is_loopback() || ipv4.is_link_local()
                 }
-                std::net::IpAddr::V6(ipv6) => {
-                    ipv6.is_loopback() || ipv6.is_unicast_link_local()
-                }
+                std::net::IpAddr::V6(ipv6) => ipv6.is_loopback() || ipv6.is_unicast_link_local(),
             }
         } else {
             false

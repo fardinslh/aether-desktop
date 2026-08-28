@@ -9,6 +9,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -40,7 +41,11 @@ impl ProcessHandle {
     pub fn kill(&mut self, logger: &RingBufferLogger) {
         if let Some(mut child) = self.child.take() {
             self.stop_flag.store(true, Ordering::SeqCst);
-            logger.log("INFO", &self.name, format!("Stopping process (PID: {:?})", child.id()));
+            logger.log(
+                "INFO",
+                &self.name,
+                format!("Stopping process (PID: {:?})", child.id()),
+            );
             let _ = child.kill();
             let _ = child.wait();
             logger.log("INFO", &self.name, "Process terminated");
@@ -65,13 +70,21 @@ impl AetherRunner {
         }
     }
 
-    pub fn start(&mut self, settings: &AppSettings, logger: &RingBufferLogger) -> Result<(), String> {
+    pub fn start(
+        &mut self,
+        settings: &AppSettings,
+        logger: &RingBufferLogger,
+    ) -> Result<(), String> {
         let exe_path = &settings.aether.executable_path;
         if !Path::new(exe_path).exists() {
             return Err(format!("Aether executable not found at: {}", exe_path));
         }
 
-        logger.log("INFO", "Aether", format!("Launching Aether from {}", exe_path));
+        logger.log(
+            "INFO",
+            "Aether",
+            format!("Launching Aether from {}", exe_path),
+        );
 
         let mut cmd = Command::new(exe_path);
         cmd.args(&settings.aether.launch_arguments)
@@ -81,13 +94,19 @@ impl AetherRunner {
         #[cfg(windows)]
         cmd.creation_flags(CREATE_NO_WINDOW);
 
-        let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn Aether: {}", e))?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("Failed to spawn Aether: {}", e))?;
         let pid = child.id();
-        logger.log("INFO", "Aether", format!("Aether started with PID: {}", pid));
+        logger.log(
+            "INFO",
+            "Aether",
+            format!("Aether started with PID: {}", pid),
+        );
 
         let stop_flag = Arc::new(AtomicBool::new(false));
 
-        // Pipe stdout/stderr to logger
+        // Pipe stdout to logger
         if let Some(stdout) = child.stdout.take() {
             let log_clone = logger.clone();
             let stop_clone = stop_flag.clone();
@@ -106,6 +125,7 @@ impl AetherRunner {
             });
         }
 
+        // Pipe stderr to logger
         if let Some(stderr) = child.stderr.take() {
             let log_clone = logger.clone();
             let stop_clone = stop_flag.clone();
@@ -163,19 +183,20 @@ impl SingBoxRunner {
         }
     }
 
-    pub fn write_config(&self, config: &SingBoxConfig) -> Result<(), String> {
-        let parent = self.config_path.parent().unwrap_or_else(|| Path::new("."));
-        if !parent.exists() {
-            let _ = std::fs::create_dir_all(parent);
+    pub fn write_config_to_path(&self, config: &SingBoxConfig, path: &Path) -> Result<(), String> {
+        if let Some(parent) = path.parent() {
+            if !parent.exists() {
+                let _ = std::fs::create_dir_all(parent);
+            }
         }
         let json = SingBoxConfigGenerator::to_json_string(config)
             .map_err(|e| format!("Failed to serialize sing-box config: {}", e))?;
-        std::fs::write(&self.config_path, json)
-            .map_err(|e| format!("Failed to write sing-box config file: {}", e))?;
+        std::fs::write(path, json)
+            .map_err(|e| format!("Failed to write sing-box config file to {:?}: {}", path, e))?;
         Ok(())
     }
 
-    pub fn validate_config(&self, singbox_exe: &str) -> Result<(), String> {
+    pub fn validate_config_file(&self, singbox_exe: &str, file_path: &Path) -> Result<(), String> {
         if !Path::new(singbox_exe).exists() {
             return Err(format!("sing-box executable not found at: {}", singbox_exe));
         }
@@ -183,7 +204,7 @@ impl SingBoxRunner {
         let mut cmd = Command::new(singbox_exe);
         cmd.arg("check")
             .arg("-c")
-            .arg(&self.config_path)
+            .arg(file_path)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
@@ -196,23 +217,34 @@ impl SingBoxRunner {
 
         if !output.status.success() {
             let err = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("sing-box check failed: {}", err));
+            return Err(format!(
+                "sing-box configuration check failed: {}",
+                err.trim()
+            ));
         }
 
         Ok(())
     }
 
-    pub fn start(&mut self, settings: &AppSettings, logger: &RingBufferLogger) -> Result<(), String> {
+    pub fn start(
+        &mut self,
+        settings: &AppSettings,
+        logger: &RingBufferLogger,
+    ) -> Result<(), String> {
         let exe_path = &settings.sing_box.executable_path;
         let config = SingBoxConfigGenerator::generate(settings);
-        self.write_config(&config)?;
 
-        // Validate configuration first
-        if let Err(err) = self.validate_config(exe_path) {
-            logger.log("WARN", "sing-box", format!("Config check warning/error: {}", err));
-        }
+        // Write to active config path
+        self.write_config_to_path(&config, &self.config_path)?;
 
-        logger.log("INFO", "sing-box", format!("Launching sing-box TUN router from {}", exe_path));
+        // Pre-flight check MUST succeed; return Err if invalid
+        self.validate_config_file(exe_path, &self.config_path)?;
+
+        logger.log(
+            "INFO",
+            "sing-box",
+            format!("Launching sing-box TUN router from {}", exe_path),
+        );
 
         let mut cmd = Command::new(exe_path);
         cmd.arg("run")
@@ -224,9 +256,15 @@ impl SingBoxRunner {
         #[cfg(windows)]
         cmd.creation_flags(CREATE_NO_WINDOW);
 
-        let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn sing-box: {}", e))?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("Failed to spawn sing-box: {}", e))?;
         let pid = child.id();
-        logger.log("INFO", "sing-box", format!("sing-box started with PID: {}", pid));
+        logger.log(
+            "INFO",
+            "sing-box",
+            format!("sing-box started with PID: {}", pid),
+        );
 
         let stop_flag = Arc::new(AtomicBool::new(false));
 
@@ -275,16 +313,108 @@ impl SingBoxRunner {
         Ok(())
     }
 
+    /// Safe Live Apply with Rollback:
+    /// Validates updated config against a temp file while leaving the working router running.
+    /// Rolls back to previous backup if the new router fails to start.
     pub fn restart_transparently(
         &mut self,
         settings: &AppSettings,
         logger: &RingBufferLogger,
     ) -> Result<(), String> {
-        logger.log("INFO", "sing-box", "Applying updated routing configuration...");
+        let exe_path = &settings.sing_box.executable_path;
+        let new_config = SingBoxConfigGenerator::generate(settings);
+
+        let temp_config_path = self.config_path.with_extension("tmp.json");
+        let backup_config_path = self.config_path.with_extension("bak.json");
+
+        // 1. Write new config to temp file
+        self.write_config_to_path(&new_config, &temp_config_path)?;
+
+        // 2. Validate temp file with real sing-box binary
+        if let Err(err) = self.validate_config_file(exe_path, &temp_config_path) {
+            let _ = std::fs::remove_file(&temp_config_path);
+            logger.log(
+                "ERROR",
+                "sing-box",
+                format!("Live apply aborted: invalid configuration ({})", err),
+            );
+            return Err(format!(
+                "Configuration check failed: {}. Existing routing kept active.",
+                err
+            ));
+        }
+
+        // 3. Backup currently working config if exists
+        if self.config_path.exists() {
+            let _ = std::fs::copy(&self.config_path, &backup_config_path);
+        }
+
+        // 4. Overwrite active config file
+        if let Err(e) = std::fs::rename(&temp_config_path, &self.config_path) {
+            // If rename fails (e.g. cross-volume), try copy + remove
+            if std::fs::copy(&temp_config_path, &self.config_path).is_err() {
+                let _ = std::fs::remove_file(&temp_config_path);
+                return Err(format!("Failed to update config file: {}", e));
+            }
+            let _ = std::fs::remove_file(&temp_config_path);
+        }
+
+        // 5. Restart sing-box with validated config
+        logger.log(
+            "INFO",
+            "sing-box",
+            "Applying validated routing configuration...",
+        );
         self.stop(logger);
-        std::thread::sleep(std::time::Duration::from_millis(150));
-        self.start(settings, logger)?;
-        logger.log("INFO", "sing-box", "Updated routing configuration active");
+        thread::sleep(Duration::from_millis(200));
+
+        if let Err(start_err) = self.start(settings, logger) {
+            logger.log(
+                "ERROR",
+                "sing-box",
+                format!(
+                    "Failed to start router with new configuration: {}",
+                    start_err
+                ),
+            );
+
+            // 6. Rollback to backup config
+            if backup_config_path.exists() {
+                logger.log(
+                    "WARN",
+                    "sing-box",
+                    "Rolling back to previous working configuration...",
+                );
+                let _ = std::fs::copy(&backup_config_path, &self.config_path);
+                let _ = self.start(settings, logger);
+            }
+            return Err(format!(
+                "Failed to start router: {}. Rolled back to previous configuration.",
+                start_err
+            ));
+        }
+
+        // Verify router stayed alive
+        thread::sleep(Duration::from_millis(300));
+        if !self.is_running() {
+            logger.log(
+                "ERROR",
+                "sing-box",
+                "New router instance exited unexpectedly. Rolling back...",
+            );
+            if backup_config_path.exists() {
+                let _ = std::fs::copy(&backup_config_path, &self.config_path);
+                let _ = self.start(settings, logger);
+            }
+            return Err("Router process exited unexpectedly on restart. Rolled back.".to_string());
+        }
+
+        let _ = std::fs::remove_file(&backup_config_path);
+        logger.log(
+            "INFO",
+            "sing-box",
+            "Updated routing configuration active successfully",
+        );
         Ok(())
     }
 

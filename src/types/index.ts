@@ -26,7 +26,7 @@ export interface ApplicationRule {
   source: RuleSource;
   priority: RulePriority;
   iconBase64?: string | null;
-  // Compatibility fields
+  // Legacy compatibility fields
   name?: string;
   route?: RouteDestination;
   isPreset?: boolean;
@@ -141,6 +141,7 @@ export interface ExecutableInspection {
   displayName: string;
   processName: string;
   executablePath: string;
+  iconBase64?: string | null;
 }
 
 export interface BinaryValidationResult {
@@ -148,4 +149,21 @@ export interface BinaryValidationResult {
   aetherPath: string;
   singboxExists: boolean;
   singboxPath: string;
+}
+
+export interface DependencyStatus {
+  aetherInstalled: boolean;
+  aetherPath: string;
+  aetherVersion?: string | null;
+  singboxInstalled: boolean;
+  singboxPath: string;
+  singboxVersion?: string | null;
+}
+
+export interface DownloadProgress {
+  component: string;
+  status: string;
+  percent: number;
+  downloadedBytes: number;
+  totalBytes: number;
 }
