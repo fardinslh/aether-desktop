@@ -44,18 +44,31 @@ pub fn get_settings() -> Result<AppSettings, String> {
     Ok(SettingsStorage::load())
 }
 
+/// Transactional save_settings:
+/// - If Connected: live candidate settings must succeed on the network BEFORE saving to disk.
+/// - If Disconnected: saves to disk atomically.
 #[tauri::command]
 pub async fn save_settings(
     settings: AppSettings,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    SettingsStorage::save(&settings)?;
-    state
-        .logger
-        .log("INFO", "Settings", "Configuration saved successfully");
-
-    // Apply live changes transparently if connected and propagate any failure
-    state.orchestrator.apply_live_settings(&settings).await?;
+    let is_connected = *state.connection_state.read() == ConnectionState::Connected;
+    if is_connected {
+        // 1. In connected mode, apply candidate settings live first. If this fails, error is returned
+        // and disk storage is NOT mutated.
+        state.orchestrator.apply_live_settings(&settings).await?;
+        SettingsStorage::save(&settings)?;
+        state.logger.log(
+            "INFO",
+            "Settings",
+            "Settings validated, live applied, and persisted atomically",
+        );
+    } else {
+        SettingsStorage::save(&settings)?;
+        state
+            .logger
+            .log("INFO", "Settings", "Settings saved successfully to storage");
+    }
     Ok(())
 }
 
@@ -76,7 +89,7 @@ pub fn get_connection_state(state: State<'_, AppState>) -> ConnectionState {
 #[tauri::command]
 pub async fn connect_tunnel(state: State<'_, AppState>) -> Result<(), String> {
     let settings = SettingsStorage::load();
-    state.orchestrator.connect(settings).await
+    state.orchestrator.connect(&settings).await
 }
 
 #[tauri::command]
@@ -87,23 +100,7 @@ pub async fn disconnect_tunnel(state: State<'_, AppState>) -> Result<(), String>
 #[tauri::command]
 pub async fn get_health_status(state: State<'_, AppState>) -> Result<HealthStatus, String> {
     let settings = SettingsStorage::load();
-    let is_connected = *state.connection_state.read() == ConnectionState::Connected;
-    let aether_running = state.orchestrator.is_aether_running();
-    let singbox_running = state.orchestrator.is_singbox_running();
-
-    let health = HealthProber::evaluate_health(
-        &settings.aether.host,
-        settings.aether.port,
-        &settings.secondary_proxy.host,
-        settings.secondary_proxy.port,
-        settings.secondary_proxy.enabled,
-        &settings.sing_box.interface_name,
-        aether_running,
-        singbox_running,
-        is_connected,
-    )
-    .await;
-    Ok(health)
+    Ok(state.orchestrator.check_health(&settings).await)
 }
 
 #[tauri::command]
@@ -126,6 +123,16 @@ pub fn inspect_executable_file(file_path: String) -> ExecutableInspection {
 #[tauri::command]
 pub fn pick_executable_file() -> Result<Option<String>, String> {
     Ok(pick_windows_executable())
+}
+
+#[tauri::command]
+pub fn validate_aether_path(path: String) -> Result<String, String> {
+    DependencyManager::validate_aether_binary(Path::new(&path))
+}
+
+#[tauri::command]
+pub fn validate_singbox_path(path: String) -> Result<String, String> {
+    DependencyManager::validate_singbox_binary(Path::new(&path))
 }
 
 #[tauri::command]

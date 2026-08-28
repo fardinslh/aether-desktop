@@ -35,6 +35,8 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ settings, curren
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [manualAetherPath, setManualAetherPath] = useState(currentSettings.aether.executablePath);
   const [manualSingboxPath, setManualSingboxPath] = useState(currentSettings.singBox.executablePath);
+  const [manualAetherFeedback, setManualAetherFeedback] = useState<string | null>(null);
+  const [manualSingboxFeedback, setManualSingboxFeedback] = useState<string | null>(null);
 
   const [secProxyHost, setSecProxyHost] = useState(currentSettings.secondaryProxy.host);
   const [secProxyPort, setSecProxyPort] = useState(currentSettings.secondaryProxy.port);
@@ -106,12 +108,18 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ settings, curren
       const selected = await api.pickExecutableFile();
       if (selected) {
         setManualAetherPath(selected);
-        const updated = {
-          ...currentSettings,
-          aether: { ...currentSettings.aether, executablePath: selected },
-        };
-        await api.saveSettings(updated);
-        await refreshDependencies();
+        try {
+          const ver = await api.validateAetherPath(selected);
+          setManualAetherFeedback(`Validated: ${ver}`);
+          const updated = {
+            ...currentSettings,
+            aether: { ...currentSettings.aether, executablePath: selected },
+          };
+          await api.saveSettings(updated);
+          await refreshDependencies();
+        } catch (err: any) {
+          setManualAetherFeedback(`Validation failed: ${err}`);
+        }
       }
     } catch (e) {
       console.error("Error picking Aether:", e);
@@ -123,12 +131,18 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ settings, curren
       const selected = await api.pickExecutableFile();
       if (selected) {
         setManualSingboxPath(selected);
-        const updated = {
-          ...currentSettings,
-          singBox: { ...currentSettings.singBox, executablePath: selected },
-        };
-        await api.saveSettings(updated);
-        await refreshDependencies();
+        try {
+          const ver = await api.validateSingboxPath(selected);
+          setManualSingboxFeedback(`Validated: ${ver}`);
+          const updated = {
+            ...currentSettings,
+            singBox: { ...currentSettings.singBox, executablePath: selected },
+          };
+          await api.saveSettings(updated);
+          await refreshDependencies();
+        } catch (err: any) {
+          setManualSingboxFeedback(`Validation failed: ${err}`);
+        }
       }
     } catch (e) {
       console.error("Error picking sing-box:", e);
@@ -214,7 +228,7 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ settings, curren
                     <span>Aether Core Client</span>
                     {isAetherReady ? (
                       <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-emerald-950/70 text-emerald-400 border border-emerald-800/50">
-                        <CheckCircle2 className="w-3 h-3" /> Ready
+                        <CheckCircle2 className="w-3 h-3" /> Ready {depStatus?.aetherVersion ? `(${depStatus.aetherVersion})` : ""}
                       </span>
                     ) : (
                       <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-amber-950/70 text-amber-400 border border-amber-800/50">
@@ -284,7 +298,7 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ settings, curren
                     <span>sing-box TUN Router</span>
                     {isSingboxReady ? (
                       <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-emerald-950/70 text-emerald-400 border border-emerald-800/50">
-                        <CheckCircle2 className="w-3 h-3" /> Ready
+                        <CheckCircle2 className="w-3 h-3" /> Ready {depStatus?.singboxVersion ? `(${depStatus.singboxVersion.split(' ')[0]})` : ""}
                       </span>
                     ) : (
                       <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-amber-950/70 text-amber-400 border border-amber-800/50">
@@ -428,6 +442,11 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ settings, curren
                     <span>Browse</span>
                   </button>
                 </div>
+                {manualAetherFeedback && (
+                  <p className={`text-[11px] ${manualAetherFeedback.startsWith("Validated") ? "text-emerald-400" : "text-amber-400"}`}>
+                    {manualAetherFeedback}
+                  </p>
+                )}
               </div>
 
               <div className="space-y-1.5">
@@ -448,6 +467,11 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ settings, curren
                     <span>Browse</span>
                   </button>
                 </div>
+                {manualSingboxFeedback && (
+                  <p className={`text-[11px] ${manualSingboxFeedback.startsWith("Validated") ? "text-emerald-400" : "text-amber-400"}`}>
+                    {manualSingboxFeedback}
+                  </p>
+                )}
               </div>
             </div>
           )}

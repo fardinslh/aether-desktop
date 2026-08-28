@@ -106,7 +106,6 @@ impl AetherRunner {
 
         let stop_flag = Arc::new(AtomicBool::new(false));
 
-        // Pipe stdout to logger
         if let Some(stdout) = child.stdout.take() {
             let log_clone = logger.clone();
             let stop_clone = stop_flag.clone();
@@ -125,7 +124,6 @@ impl AetherRunner {
             });
         }
 
-        // Pipe stderr to logger
         if let Some(stderr) = child.stderr.take() {
             let log_clone = logger.clone();
             let stop_clone = stop_flag.clone();
@@ -226,30 +224,34 @@ impl SingBoxRunner {
         Ok(())
     }
 
-    pub fn start(
+    /// Spawns sing-box strictly using an already-validated configuration file on disk.
+    /// This function MUST NOT regenerate or overwrite the config file.
+    pub fn spawn_with_config(
         &mut self,
-        settings: &AppSettings,
+        singbox_exe: &str,
+        config_path: &Path,
         logger: &RingBufferLogger,
     ) -> Result<(), String> {
-        let exe_path = &settings.sing_box.executable_path;
-        let config = SingBoxConfigGenerator::generate(settings);
-
-        // Write to active config path
-        self.write_config_to_path(&config, &self.config_path)?;
-
-        // Pre-flight check MUST succeed; return Err if invalid
-        self.validate_config_file(exe_path, &self.config_path)?;
+        if !Path::new(singbox_exe).exists() {
+            return Err(format!("sing-box executable not found at: {}", singbox_exe));
+        }
+        if !config_path.exists() {
+            return Err(format!(
+                "sing-box config file not found at: {:?}",
+                config_path
+            ));
+        }
 
         logger.log(
             "INFO",
             "sing-box",
-            format!("Launching sing-box TUN router from {}", exe_path),
+            format!("Launching sing-box TUN router from {}", singbox_exe),
         );
 
-        let mut cmd = Command::new(exe_path);
+        let mut cmd = Command::new(singbox_exe);
         cmd.arg("run")
             .arg("-c")
-            .arg(&self.config_path)
+            .arg(config_path)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
@@ -313,30 +315,44 @@ impl SingBoxRunner {
         Ok(())
     }
 
-    /// Safe Live Apply with Rollback:
-    /// Validates updated config against a temp file while leaving the working router running.
-    /// Rolls back to previous backup if the new router fails to start.
+    pub fn start(
+        &mut self,
+        settings: &AppSettings,
+        logger: &RingBufferLogger,
+    ) -> Result<(), String> {
+        let exe_path = &settings.sing_box.executable_path;
+        let config = SingBoxConfigGenerator::generate(settings);
+
+        let config_path = self.config_path.clone();
+        self.write_config_to_path(&config, &config_path)?;
+        self.validate_config_file(exe_path, &config_path)?;
+
+        self.spawn_with_config(exe_path, &config_path, logger)
+    }
+
     pub fn restart_transparently(
         &mut self,
         settings: &AppSettings,
         logger: &RingBufferLogger,
     ) -> Result<(), String> {
         let exe_path = &settings.sing_box.executable_path;
-        let new_config = SingBoxConfigGenerator::generate(settings);
+        let candidate_config = SingBoxConfigGenerator::generate(settings);
 
-        let temp_config_path = self.config_path.with_extension("tmp.json");
-        let backup_config_path = self.config_path.with_extension("bak.json");
+        let config_path = self.config_path.clone();
+        let candidate_path = config_path.with_extension("candidate.json");
+        let backup_path = config_path.with_extension("backup.json");
 
-        // 1. Write new config to temp file
-        self.write_config_to_path(&new_config, &temp_config_path)?;
+        self.write_config_to_path(&candidate_config, &candidate_path)?;
 
-        // 2. Validate temp file with real sing-box binary
-        if let Err(err) = self.validate_config_file(exe_path, &temp_config_path) {
-            let _ = std::fs::remove_file(&temp_config_path);
+        if let Err(err) = self.validate_config_file(exe_path, &candidate_path) {
+            let _ = std::fs::remove_file(&candidate_path);
             logger.log(
                 "ERROR",
                 "sing-box",
-                format!("Live apply aborted: invalid configuration ({})", err),
+                format!(
+                    "Candidate config invalid: {}. Existing routing unchanged.",
+                    err
+                ),
             );
             return Err(format!(
                 "Configuration check failed: {}. Existing routing kept active.",
@@ -344,78 +360,117 @@ impl SingBoxRunner {
             ));
         }
 
-        // 3. Backup currently working config if exists
-        if self.config_path.exists() {
-            let _ = std::fs::copy(&self.config_path, &backup_config_path);
+        if config_path.exists() {
+            let _ = std::fs::copy(&config_path, &backup_path);
         }
 
-        // 4. Overwrite active config file
-        if let Err(e) = std::fs::rename(&temp_config_path, &self.config_path) {
-            // If rename fails (e.g. cross-volume), try copy + remove
-            if std::fs::copy(&temp_config_path, &self.config_path).is_err() {
-                let _ = std::fs::remove_file(&temp_config_path);
+        if let Err(e) = std::fs::rename(&candidate_path, &config_path) {
+            if std::fs::copy(&candidate_path, &config_path).is_err() {
+                let _ = std::fs::remove_file(&candidate_path);
                 return Err(format!("Failed to update config file: {}", e));
             }
-            let _ = std::fs::remove_file(&temp_config_path);
+            let _ = std::fs::remove_file(&candidate_path);
         }
 
-        // 5. Restart sing-box with validated config
         logger.log(
             "INFO",
             "sing-box",
-            "Applying validated routing configuration...",
+            "Applying validated candidate routing configuration...",
         );
         self.stop(logger);
-        thread::sleep(Duration::from_millis(200));
+        thread::sleep(Duration::from_millis(150));
 
-        if let Err(start_err) = self.start(settings, logger) {
+        if let Err(start_err) = self.spawn_with_config(exe_path, &config_path, logger) {
             logger.log(
                 "ERROR",
                 "sing-box",
                 format!(
-                    "Failed to start router with new configuration: {}",
+                    "Failed to start router with candidate config: {}. Initiating rollback...",
                     start_err
                 ),
             );
-
-            // 6. Rollback to backup config
-            if backup_config_path.exists() {
-                logger.log(
-                    "WARN",
-                    "sing-box",
-                    "Rolling back to previous working configuration...",
-                );
-                let _ = std::fs::copy(&backup_config_path, &self.config_path);
-                let _ = self.start(settings, logger);
-            }
-            return Err(format!(
-                "Failed to start router: {}. Rolled back to previous configuration.",
-                start_err
-            ));
+            return self.perform_rollback(exe_path, &backup_path, logger, &start_err);
         }
 
-        // Verify router stayed alive
-        thread::sleep(Duration::from_millis(300));
+        thread::sleep(Duration::from_millis(400));
         if !self.is_running() {
             logger.log(
                 "ERROR",
                 "sing-box",
-                "New router instance exited unexpectedly. Rolling back...",
+                "New router process exited unexpectedly on launch. Initiating rollback...",
             );
-            if backup_config_path.exists() {
-                let _ = std::fs::copy(&backup_config_path, &self.config_path);
-                let _ = self.start(settings, logger);
-            }
-            return Err("Router process exited unexpectedly on restart. Rolled back.".to_string());
+            return self.perform_rollback(
+                exe_path,
+                &backup_path,
+                logger,
+                "Process exited unexpectedly",
+            );
         }
 
-        let _ = std::fs::remove_file(&backup_config_path);
+        let _ = std::fs::remove_file(&backup_path);
         logger.log(
             "INFO",
             "sing-box",
-            "Updated routing configuration active successfully",
+            "Updated routing configuration applied and active successfully",
         );
         Ok(())
+    }
+
+    fn perform_rollback(
+        &mut self,
+        exe_path: &str,
+        backup_path: &Path,
+        logger: &RingBufferLogger,
+        reason: &str,
+    ) -> Result<(), String> {
+        self.stop(logger);
+
+        let config_path = self.config_path.clone();
+
+        if !backup_path.exists() {
+            return Err(format!(
+                "Failed to start new router ({}) and no backup config existed for rollback.",
+                reason
+            ));
+        }
+
+        logger.log(
+            "WARN",
+            "sing-box",
+            "Restoring previous known-good routing configuration...",
+        );
+        if let Err(e) = std::fs::copy(backup_path, &config_path) {
+            return Err(format!(
+                "CRITICAL: Failed to copy backup config ({}) during rollback after error: {}",
+                e, reason
+            ));
+        }
+
+        if let Err(rb_err) = self.spawn_with_config(exe_path, &config_path, logger) {
+            logger.log(
+                "ERROR",
+                "sing-box",
+                format!("CRITICAL: Rollback router launch failed: {}", rb_err),
+            );
+            return Err(format!("CRITICAL: New routing configuration failed ({}) and automatic rollback also failed ({}).", reason, rb_err));
+        }
+
+        thread::sleep(Duration::from_millis(400));
+        if !self.is_running() {
+            logger.log(
+                "ERROR",
+                "sing-box",
+                "CRITICAL: Rollback router exited unexpectedly",
+            );
+            return Err(format!("CRITICAL: New routing configuration failed ({}) and rollback router exited unexpectedly.", reason));
+        }
+
+        logger.log(
+            "INFO",
+            "sing-box",
+            "Rollback to previous known-good routing configuration succeeded",
+        );
+        Err(format!("New routing configuration failed ({}); rolled back to previous working configuration successfully.", reason))
     }
 
     pub fn stop(&mut self, logger: &RingBufferLogger) {

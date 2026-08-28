@@ -1,219 +1,272 @@
 use crate::health::HealthProber;
 use crate::logging::RingBufferLogger;
+use crate::models::health::HealthStatus;
 use crate::models::{AppSettings, ConnectionState};
 use crate::process::runner::{AetherRunner, SingBoxRunner};
 use parking_lot::{Mutex, RwLock};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::time::sleep;
 
 pub struct ConnectionOrchestrator {
-    aether_runner: Mutex<AetherRunner>,
-    singbox_runner: Mutex<SingBoxRunner>,
-    logger: RingBufferLogger,
-    connection_state: Arc<RwLock<ConnectionState>>,
+    pub aether: Mutex<AetherRunner>,
+    pub singbox: Mutex<SingBoxRunner>,
+    pub state: Arc<RwLock<ConnectionState>>,
+    pub logger: RingBufferLogger,
+    pub last_error: Arc<RwLock<Option<String>>>,
 }
 
 impl ConnectionOrchestrator {
-    pub fn new(logger: RingBufferLogger, connection_state: Arc<RwLock<ConnectionState>>) -> Self {
+    pub fn new(state: Arc<RwLock<ConnectionState>>, logger: RingBufferLogger) -> Self {
         Self {
-            aether_runner: Mutex::new(AetherRunner::new()),
-            singbox_runner: Mutex::new(SingBoxRunner::new()),
+            aether: Mutex::new(AetherRunner::new()),
+            singbox: Mutex::new(SingBoxRunner::new()),
+            state,
             logger,
-            connection_state,
+            last_error: Arc::new(RwLock::new(None)),
         }
     }
 
-    pub fn set_state(&self, state: ConnectionState) {
-        *self.connection_state.write() = state;
+    fn set_state(&self, new_state: ConnectionState) {
+        *self.state.write() = new_state;
         self.logger.log(
             "INFO",
-            "State",
-            format!("Connection state transitioned to {:?}", state),
+            "STATE",
+            format!("State changed to: {:?}", new_state),
         );
     }
 
-    pub fn is_aether_running(&self) -> bool {
-        self.aether_runner.lock().is_running()
+    fn set_error(&self, err_msg: String) {
+        *self.last_error.write() = Some(err_msg.clone());
+        self.logger
+            .log("ERROR", "STATE", format!("Connection error: {}", err_msg));
+        self.set_state(ConnectionState::Error);
     }
 
-    pub fn is_singbox_running(&self) -> bool {
-        self.singbox_runner.lock().is_running()
+    pub fn get_last_error(&self) -> Option<String> {
+        self.last_error.read().clone()
     }
 
-    pub async fn connect(&self, settings: AppSettings) -> Result<(), String> {
-        self.set_state(ConnectionState::StartingAether);
-
-        // Step 1: Check or start Aether SOCKS proxy
-        let aether_already_running =
-            HealthProber::check_port_open(&settings.aether.host, settings.aether.port, 500).await;
-        if !aether_already_running {
-            let mut runner = self.aether_runner.lock();
-            if let Err(e) = runner.start(&settings, &self.logger) {
-                self.set_state(ConnectionState::Error);
-                return Err(e);
-            }
-        } else {
-            self.logger.log(
-                "INFO",
-                "Aether",
-                format!(
-                    "Aether proxy already listening on {}:{}",
-                    settings.aether.host, settings.aether.port
-                ),
-            );
+    pub async fn connect(&self, settings: &AppSettings) -> Result<(), String> {
+        let current = *self.state.read();
+        if current != ConnectionState::Disconnected && current != ConnectionState::Error {
+            return Err("Connection already in progress or connected".to_string());
         }
 
-        // Step 2: Waiting for Aether SOCKS5 proxy port to become available
-        self.set_state(ConnectionState::WaitingForAether);
-        let mut aether_ready = false;
-        for attempt in 1..=15 {
-            if HealthProber::check_port_open(&settings.aether.host, settings.aether.port, 400).await
-            {
-                aether_ready = true;
-                break;
+        *self.last_error.write() = None;
+
+        // 1. Phase 1: Launch Aether
+        self.set_state(ConnectionState::StartingAether);
+        {
+            let mut aether_guard = self.aether.lock();
+            if let Err(e) = aether_guard.start(settings, &self.logger) {
+                self.set_error(format!("Failed to start Aether: {}", e));
+                return Err(e);
             }
-            sleep(Duration::from_millis(300)).await;
-            self.logger.log(
-                "DEBUG",
-                "Aether",
-                format!("Waiting for Aether SOCKS5 port (attempt {}/15)...", attempt),
-            );
+        }
+
+        // 2. Phase 2: Probe Aether socket and tunnel connectivity via real SOCKS request
+        self.set_state(ConnectionState::TestingAether);
+        let aether_host = &settings.aether.host;
+        let aether_port = settings.aether.port;
+
+        let mut aether_ready = false;
+        for attempt in 1..=20 {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            if HealthProber::check_port_open(aether_host, aether_port, 300).await {
+                match HealthProber::query_cloudflare_trace_via_socks5(aether_host, aether_port)
+                    .await
+                {
+                    Ok(trace) => {
+                        self.logger.log(
+                            "INFO",
+                            "Aether",
+                            format!(
+                                "Aether SOCKS5 tunnel confirmed online (POP: {}, IP: {}, Latency: {} ms)",
+                                trace.colo, trace.ip, trace.latency_ms
+                            ),
+                        );
+                        aether_ready = true;
+                        break;
+                    }
+                    Err(err) => {
+                        self.logger.log(
+                            "DEBUG",
+                            "Aether",
+                            format!("Trace probe attempt {}/20 pending: {}", attempt, err),
+                        );
+                    }
+                }
+            }
         }
 
         if !aether_ready {
-            self.set_state(ConnectionState::Error);
             let err = format!(
-                "Aether failed to listen on {}:{} within timeout",
-                settings.aether.host, settings.aether.port
+                "Aether failed to establish verified proxy tunnel on {}:{} within timeout. Check Aether credentials and server status.",
+                aether_host, aether_port
             );
-            self.logger.log("ERROR", "Aether", &err);
+            self.aether.lock().stop(&self.logger);
+            self.set_error(err.clone());
             return Err(err);
         }
 
-        // Step 3: Test Aether SOCKS proxy connectivity via REAL Cloudflare trace query
-        self.set_state(ConnectionState::TestingAether);
-        self.logger.log(
-            "INFO",
-            "Aether",
-            "Validating SOCKS5 proxy internet connectivity via Cloudflare trace...",
-        );
-
-        match HealthProber::query_cloudflare_trace_via_socks5(
-            &settings.aether.host,
-            settings.aether.port,
-        )
-        .await
-        {
-            Ok(trace) => {
-                self.logger.log(
-                    "INFO",
-                    "Aether",
-                    format!(
-                        "Aether tunnel validated successfully (POP: {}, IP: {}, Latency: {} ms)",
-                        trace.colo, trace.ip, trace.latency_ms
-                    ),
-                );
-            }
-            Err(trace_err) => {
-                self.set_state(ConnectionState::Error);
-                let err = format!("Aether tunnel connectivity check failed: {}. SOCKS proxy is reachable but internet egress failed.", trace_err);
-                self.logger.log("ERROR", "Aether", &err);
-                return Err(err);
-            }
-        }
-
-        // Step 4: Start sing-box TUN router
+        // 3. Phase 3: Launch sing-box router
         self.set_state(ConnectionState::StartingRouter);
         {
-            let mut router = self.singbox_runner.lock();
-            if let Err(e) = router.start(&settings, &self.logger) {
-                self.set_state(ConnectionState::Error);
+            let mut sb_guard = self.singbox.lock();
+            if let Err(e) = sb_guard.start(settings, &self.logger) {
+                self.aether.lock().stop(&self.logger);
+                self.set_error(format!("Failed to start sing-box TUN router: {}", e));
                 return Err(e);
             }
         }
 
-        // Step 5: Test routing & verify sing-box and TUN interface
+        // 4. Phase 4: Bounded verification loop for sing-box process, TUN adapter, and direct system egress
         self.set_state(ConnectionState::TestingRouting);
+        let interface_name = &settings.sing_box.interface_name;
 
-        let mut router_healthy = false;
-        for _ in 0..10 {
-            sleep(Duration::from_millis(250)).await;
-            let mut router = self.singbox_runner.lock();
-            if router.is_running() {
-                router_healthy = true;
+        let mut tun_detected = false;
+        for attempt in 1..=24 {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+
+            if !self.singbox.lock().is_running() {
+                let err =
+                    "sing-box TUN router process exited unexpectedly during startup.".to_string();
+                self.singbox.lock().stop(&self.logger);
+                self.aether.lock().stop(&self.logger);
+                self.set_error(err.clone());
+                return Err(err);
+            }
+
+            if HealthProber::check_tun_interface_exists(interface_name) {
+                self.logger.log(
+                    "INFO",
+                    "sing-box",
+                    format!("TUN network interface '{}' detected active in Windows network stack on attempt {}", interface_name, attempt),
+                );
+                tun_detected = true;
                 break;
             }
         }
 
-        if !router_healthy {
-            self.set_state(ConnectionState::Error);
-            let err = "sing-box router process exited unexpectedly. Ensure the application is running with Administrator privileges to configure the TUN interface.".to_string();
-            self.logger.log("ERROR", "sing-box", &err);
+        if !tun_detected {
+            let err = format!(
+                "sing-box TUN interface '{}' failed to appear in Windows network stack within timeout. Ensure the application is running with Administrator elevation.",
+                interface_name
+            );
+            self.singbox.lock().stop(&self.logger);
+            self.aether.lock().stop(&self.logger);
+            self.set_error(err.clone());
             return Err(err);
         }
 
-        // Verify TUN interface presence in Windows network stack
-        let tun_name = &settings.sing_box.interface_name;
-        if !HealthProber::check_tun_interface_exists(tun_name) {
-            self.logger.log(
-                "WARN",
-                "sing-box",
-                format!(
-                    "Adapter '{}' not yet detected in network list, waiting...",
-                    tun_name
-                ),
-            );
-            sleep(Duration::from_millis(500)).await;
+        // 5. Phase 5: Real direct system egress verification through Windows TUN routing
+        self.logger.log(
+            "INFO",
+            "ROUTING",
+            "Verifying direct system egress routing through TUN adapter...",
+        );
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let mut system_egress_ok = false;
+        let mut last_egress_err = String::new();
+
+        for attempt in 1..=6 {
+            match HealthProber::query_direct_system_cloudflare_trace().await {
+                Ok(trace) => {
+                    self.logger.log(
+                        "INFO",
+                        "ROUTING",
+                        format!(
+                            "Direct system egress verified through TUN routing (POP: {}, IP: {}, Latency: {} ms)",
+                            trace.colo, trace.ip, trace.latency_ms
+                        ),
+                    );
+                    system_egress_ok = true;
+                    break;
+                }
+                Err(err) => {
+                    last_egress_err = err.clone();
+                    self.logger.log(
+                        "DEBUG",
+                        "ROUTING",
+                        format!("System egress test attempt {}/6: {}", attempt, err),
+                    );
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+            }
         }
 
-        // Step 6: Fully connected
+        if !system_egress_ok {
+            let err = format!(
+                "System egress routing verification failed through TUN adapter: {}. Stopping connection attempt.",
+                last_egress_err
+            );
+            self.singbox.lock().stop(&self.logger);
+            self.aether.lock().stop(&self.logger);
+            self.set_error(err.clone());
+            return Err(err);
+        }
+
         self.set_state(ConnectionState::Connected);
         self.logger.log(
             "INFO",
-            "Orchestrator",
-            "All networking components connected and verified successfully",
+            "STATE",
+            "Connection established and fully verified successfully.",
         );
         Ok(())
     }
 
     pub async fn disconnect(&self) -> Result<(), String> {
+        let current = *self.state.read();
+        if current == ConnectionState::Disconnected {
+            return Ok(());
+        }
+
         self.set_state(ConnectionState::Disconnecting);
 
-        // Stop sing-box first to restore default routing cleanly
-        {
-            let mut router = self.singbox_runner.lock();
-            router.stop(&self.logger);
-        }
-
-        // Stop Aether if managed by this app
-        {
-            let mut aether = self.aether_runner.lock();
-            aether.stop(&self.logger);
-        }
+        self.singbox.lock().stop(&self.logger);
+        self.aether.lock().stop(&self.logger);
 
         self.set_state(ConnectionState::Disconnected);
         self.logger.log(
             "INFO",
-            "Orchestrator",
-            "Disconnected cleanly. System routing restored.",
+            "STATE",
+            "All VPN components stopped and disconnected.",
         );
         Ok(())
     }
 
     pub async fn apply_live_settings(&self, settings: &AppSettings) -> Result<(), String> {
-        let is_connected = *self.connection_state.read() == ConnectionState::Connected;
-        if is_connected {
-            let mut router = self.singbox_runner.lock();
-            router.restart_transparently(settings, &self.logger)?;
+        let current = *self.state.read();
+        if current == ConnectionState::Connected {
+            self.logger.log(
+                "INFO",
+                "ROUTING",
+                "Applying live settings to running sing-box router...",
+            );
+            let mut sb_guard = self.singbox.lock();
+            sb_guard.restart_transparently(settings, &self.logger)
+        } else {
+            Ok(())
         }
-        Ok(())
     }
 
-    pub fn shutdown(&self) {
-        let mut router = self.singbox_runner.lock();
-        router.stop(&self.logger);
-        let mut aether = self.aether_runner.lock();
-        aether.stop(&self.logger);
+    pub async fn check_health(&self, settings: &AppSettings) -> HealthStatus {
+        let aether_running = self.aether.lock().is_running();
+        let singbox_running = self.singbox.lock().is_running();
+        let is_conn = *self.state.read() == ConnectionState::Connected;
+
+        HealthProber::evaluate_health(
+            &settings.aether.host,
+            settings.aether.port,
+            &settings.secondary_proxy.host,
+            settings.secondary_proxy.port,
+            settings.secondary_proxy.enabled,
+            &settings.sing_box.interface_name,
+            aether_running,
+            singbox_running,
+            is_conn,
+        )
+        .await
     }
 }

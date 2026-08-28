@@ -81,6 +81,64 @@ impl HealthProber {
         })
     }
 
+    /// Performs direct system Cloudflare trace probe (without SOCKS proxy) through Windows network stack/TUN adapter
+    pub async fn query_direct_system_cloudflare_trace() -> Result<CloudflareTrace, String> {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .map_err(|e| format!("Failed to build HTTP client for system egress test: {}", e))?;
+
+        let start = Instant::now();
+        let resp = client
+            .get("https://www.cloudflare.com/cdn-cgi/trace")
+            .send()
+            .await
+            .map_err(|e| format!("Direct system trace request failed: {}", e))?;
+
+        let latency_ms = start.elapsed().as_millis() as u64;
+
+        if !resp.status().is_success() {
+            return Err(format!(
+                "Direct trace returned HTTP status {}",
+                resp.status()
+            ));
+        }
+
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| format!("Failed to read trace response body: {}", e))?;
+
+        let mut ip = String::new();
+        let mut warp = String::new();
+        let mut colo = String::new();
+        let mut loc = String::new();
+
+        for line in body.lines() {
+            if let Some((k, v)) = line.split_once('=') {
+                match k.trim() {
+                    "ip" => ip = v.trim().to_string(),
+                    "warp" => warp = v.trim().to_string(),
+                    "colo" => colo = v.trim().to_string(),
+                    "loc" => loc = v.trim().to_string(),
+                    _ => {}
+                }
+            }
+        }
+
+        if ip.is_empty() {
+            return Err("Invalid direct trace response: missing IP address".to_string());
+        }
+
+        Ok(CloudflareTrace {
+            ip,
+            warp,
+            colo,
+            loc,
+            latency_ms,
+        })
+    }
+
     /// Verifies if the singbox-tun adapter interface exists in the Windows network stack
     pub fn check_tun_interface_exists(interface_name: &str) -> bool {
         let networks = Networks::new_with_refreshed_list();

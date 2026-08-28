@@ -58,6 +58,14 @@ export const api = {
     return invoke<string | null>("pick_executable_file");
   },
 
+  async validateAetherPath(path: string): Promise<string> {
+    return invoke<string>("validate_aether_path", { path });
+  },
+
+  async validateSingboxPath(path: string): Promise<string> {
+    return invoke<string>("validate_singbox_path", { path });
+  },
+
   // Dependencies Management
   async checkDependencies(): Promise<DependencyStatus> {
     return invoke<DependencyStatus>("check_dependencies");

@@ -2,11 +2,17 @@ use super::github::GithubClient;
 use crate::settings::SettingsStorage;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
+use uuid::Uuid;
+
+const MAX_ARCHIVE_BYTES: u64 = 104_857_600; // 100 MB max allowed archive size
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -42,45 +48,190 @@ impl DependencyManager {
             .unwrap_or_else(|| PathBuf::from("./dependencies"))
     }
 
+    pub fn get_staging_dir() -> PathBuf {
+        Self::get_base_dependencies_dir().join(".staging")
+    }
+
+    fn run_command_with_timeout(mut cmd: Command, timeout: Duration) -> Result<Output, String> {
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("Failed to spawn command: {}", e))?;
+        let start = Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(_status)) => {
+                    return child.wait_with_output().map_err(|e| e.to_string());
+                }
+                Ok(None) => {
+                    if start.elapsed() > timeout {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(format!("Command execution timed out after {:?}", timeout));
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                Err(e) => return Err(e.to_string()),
+            }
+        }
+    }
+
+    /// Validates an aether.exe executable by checking name, running --version with timeout and parsing the output
+    pub fn validate_aether_binary(exe_path: &Path) -> Result<String, String> {
+        if !exe_path.exists() {
+            return Err(format!("Aether binary not found at {:?}", exe_path));
+        }
+
+        // Verify filename
+        let name_lower = exe_path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_lowercase();
+        if !name_lower.starts_with("aether") || !name_lower.ends_with(".exe") {
+            return Err("Executable must be named aether.exe".to_string());
+        }
+
+        let mut cmd = Command::new(exe_path);
+        cmd.arg("--version")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        let output = Self::run_command_with_timeout(cmd, Duration::from_secs(4))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!(
+                "aether --version exited with error: {}",
+                stderr.trim()
+            ));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let first_line = stdout.lines().next().unwrap_or("").trim();
+        if first_line.is_empty() {
+            return Err("aether --version produced empty output".to_string());
+        }
+
+        Ok(first_line.to_string())
+    }
+
+    /// Validates a sing-box.exe executable by checking name, version and running a test config check
+    pub fn validate_singbox_binary(exe_path: &Path) -> Result<String, String> {
+        if !exe_path.exists() {
+            return Err(format!("sing-box binary not found at {:?}", exe_path));
+        }
+
+        // Verify filename
+        let name_lower = exe_path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_lowercase();
+        if !name_lower.starts_with("sing-box") || !name_lower.ends_with(".exe") {
+            return Err("Executable must be named sing-box.exe".to_string());
+        }
+
+        // 1. Check version output with timeout
+        let mut cmd = Command::new(exe_path);
+        cmd.arg("version")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        let output = Self::run_command_with_timeout(cmd, Duration::from_secs(4))?;
+
+        if !output.status.success() {
+            return Err("sing-box version command failed".to_string());
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let first_line = stdout.lines().next().unwrap_or("").trim();
+        if !first_line.to_lowercase().contains("sing-box") {
+            return Err("Executable output does not match expected sing-box identity".to_string());
+        }
+
+        // 2. Perform minimal configuration check test
+        let temp_test_config =
+            std::env::temp_dir().join(format!("singbox-check-test-{}.json", Uuid::new_v4()));
+        let test_config_json = r#"{
+  "log": { "level": "panic" },
+  "inbounds": [],
+  "outbounds": [{ "type": "direct", "tag": "direct" }],
+  "route": { "rules": [], "final": "direct" }
+}"#;
+        std::fs::write(&temp_test_config, test_config_json)
+            .map_err(|e| format!("Failed to write temporary test config: {}", e))?;
+
+        let mut check_cmd = Command::new(exe_path);
+        check_cmd
+            .arg("check")
+            .arg("-c")
+            .arg(&temp_test_config)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            check_cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        let check_output = Self::run_command_with_timeout(check_cmd, Duration::from_secs(4));
+        let _ = std::fs::remove_file(&temp_test_config);
+
+        let check_res = check_output
+            .map_err(|e| format!("Failed to run sing-box check on test config: {}", e))?;
+
+        if !check_res.status.success() {
+            let err = String::from_utf8_lossy(&check_res.stderr);
+            return Err(format!(
+                "sing-box check failed validation test: {}",
+                err.trim()
+            ));
+        }
+
+        Ok(first_line.to_string())
+    }
+
     pub fn check_status() -> DependencyStatus {
         let settings = SettingsStorage::load();
 
         let aether_path = settings.aether.executable_path.clone();
-        let aether_exists = !aether_path.is_empty() && Path::new(&aether_path).exists();
-        let aether_version = if aether_exists {
-            Some("Ready".to_string())
+        let (aether_installed, aether_version) = if !aether_path.is_empty() {
+            match Self::validate_aether_binary(Path::new(&aether_path)) {
+                Ok(ver) => (true, Some(ver)),
+                Err(_) => (false, None),
+            }
         } else {
-            None
+            (false, None)
         };
 
         let singbox_path = settings.sing_box.executable_path.clone();
-        let singbox_exists = !singbox_path.is_empty() && Path::new(&singbox_path).exists();
-        let singbox_version = if singbox_exists {
-            // Try querying sing-box version
-            let mut cmd = Command::new(&singbox_path);
-            cmd.arg("version")
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped());
-            #[cfg(windows)]
-            {
-                use std::os::windows::process::CommandExt;
-                cmd.creation_flags(0x08000000);
-            }
-            if let Ok(output) = cmd.output() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                stdout.lines().next().map(|l| l.to_string())
-            } else {
-                Some("Ready".to_string())
+        let (singbox_installed, singbox_version) = if !singbox_path.is_empty() {
+            match Self::validate_singbox_binary(Path::new(&singbox_path)) {
+                Ok(ver) => (true, Some(ver)),
+                Err(_) => (false, None),
             }
         } else {
-            None
+            (false, None)
         };
 
         DependencyStatus {
-            aether_installed: aether_exists,
+            aether_installed,
             aether_path,
             aether_version,
-            singbox_installed: singbox_exists,
+            singbox_installed,
             singbox_path,
             singbox_version,
         }
@@ -97,61 +248,131 @@ impl DependencyManager {
         );
 
         let release = GithubClient::fetch_latest_release("CluvexStudio/Aether").await?;
-        let asset = GithubClient::find_asset(&release, "aether-windows-x86_64.zip")
-            .or_else(|| GithubClient::find_asset(&release, "windows-x86_64.zip"))
-            .or_else(|| GithubClient::find_asset(&release, ".zip"))
-            .ok_or_else(|| {
-                format!(
-                    "No compatible Windows x86_64 zip asset found in Aether release {}",
-                    release.tag_name
-                )
-            })?;
+        let asset = GithubClient::find_aether_asset(&release)?;
 
-        let base_dir = Self::get_base_dependencies_dir()
-            .join("aether")
-            .join(&release.tag_name);
-        if !base_dir.exists() {
-            std::fs::create_dir_all(&base_dir)
-                .map_err(|e| format!("Failed to create dependency folder {:?}: {}", base_dir, e))?;
+        if asset.size > MAX_ARCHIVE_BYTES {
+            return Err(format!(
+                "Asset size ({} MB) exceeds maximum safety limit of 100 MB",
+                asset.size / 1_048_576
+            ));
         }
 
-        // Stream download
-        let temp_archive_path = base_dir.join("aether-download.tmp.zip");
-        Self::download_file_with_progress(
+        let install_id = Uuid::new_v4().to_string();
+        let staging_dir = Self::get_staging_dir().join(&install_id);
+        std::fs::create_dir_all(&staging_dir)
+            .map_err(|e| format!("Failed to create staging dir {:?}: {}", staging_dir, e))?;
+
+        let temp_archive_path = staging_dir.join("aether-download.tmp.zip");
+
+        let sha256_result = Self::download_file_with_progress(
             app,
             "aether",
             &asset.browser_download_url,
             &temp_archive_path,
             asset.size,
         )
-        .await?;
+        .await;
 
-        // Extract with zip-slip safety
+        if let Err(e) = sha256_result {
+            let _ = std::fs::remove_dir_all(&staging_dir);
+            return Err(e);
+        }
+        let calculated_hash = sha256_result.unwrap();
+
+        if let Some(chk_asset) = GithubClient::find_companion_checksum_asset(&release, &asset.name)
+        {
+            if let Ok(chk_text) =
+                GithubClient::fetch_checksum_text(&chk_asset.browser_download_url).await
+            {
+                if let Some(expected_hash) =
+                    Self::extract_hash_from_checksum_file(&chk_text, &asset.name)
+                {
+                    if !calculated_hash.eq_ignore_ascii_case(&expected_hash) {
+                        let _ = std::fs::remove_dir_all(&staging_dir);
+                        return Err(format!(
+                            "SHA-256 checksum mismatch! Expected: {}, Calculated: {}",
+                            expected_hash, calculated_hash
+                        ));
+                    }
+                }
+            }
+        }
+
         Self::emit_progress(
             app,
             "aether",
-            "Extracting files securely...",
+            "Extracting files in isolated staging...",
             90,
             asset.size,
             asset.size,
         );
-        Self::extract_zip_safely(&temp_archive_path, &base_dir)?;
+        let extracted_dir = staging_dir.join("extracted");
+        std::fs::create_dir_all(&extracted_dir)
+            .map_err(|e| format!("Failed to create extracted dir: {}", e))?;
+
+        if let Err(e) = Self::extract_zip_safely(&temp_archive_path, &extracted_dir) {
+            let _ = std::fs::remove_dir_all(&staging_dir);
+            return Err(e);
+        }
         let _ = std::fs::remove_file(&temp_archive_path);
 
-        // Find aether.exe in extracted folder
         Self::emit_progress(
             app,
             "aether",
-            "Locating and verifying executable...",
-            98,
+            "Validating executable execution...",
+            95,
             asset.size,
             asset.size,
         );
-        let found_exe = Self::find_executable_in_dir(&base_dir, "aether.exe")
-            .ok_or_else(|| format!("aether.exe not found after extracting {:?}", base_dir))?;
+        let found_exe = match Self::find_executable_in_dir(&extracted_dir, "aether.exe") {
+            Some(p) => p,
+            None => {
+                let _ = std::fs::remove_dir_all(&staging_dir);
+                return Err(format!(
+                    "aether.exe not found after extracting {:?}",
+                    extracted_dir
+                ));
+            }
+        };
 
-        // Update settings
-        let exe_str = found_exe.to_string_lossy().to_string();
+        let version_str = match Self::validate_aether_binary(&found_exe) {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&staging_dir);
+                return Err(format!("Aether executable failed validation test: {}", e));
+            }
+        };
+
+        let final_dir = Self::get_base_dependencies_dir()
+            .join("aether")
+            .join(&release.tag_name);
+        if final_dir.exists() {
+            let _ = std::fs::remove_dir_all(&final_dir);
+        }
+        if let Some(parent) = final_dir.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        if let Err(_e) = std::fs::rename(&extracted_dir, &final_dir) {
+            if let Err(copy_err) = Self::copy_dir_recursive(&extracted_dir, &final_dir) {
+                let _ = std::fs::remove_dir_all(&staging_dir);
+                return Err(format!(
+                    "Failed to promote Aether installation: {}",
+                    copy_err
+                ));
+            }
+        }
+        let _ = std::fs::remove_dir_all(&staging_dir);
+
+        let final_exe = final_dir.join("aether.exe");
+        let exe_str = if final_exe.exists() {
+            final_exe.to_string_lossy().to_string()
+        } else {
+            Self::find_executable_in_dir(&final_dir, "aether.exe")
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| final_exe.to_string_lossy().to_string())
+        };
+
         let mut settings = SettingsStorage::load();
         settings.aether.executable_path = exe_str.clone();
         SettingsStorage::save(&settings)?;
@@ -159,7 +380,7 @@ impl DependencyManager {
         Self::emit_progress(
             app,
             "aether",
-            "Installation complete",
+            &format!("Installation verified ({})", version_str),
             100,
             asset.size,
             asset.size,
@@ -178,77 +399,134 @@ impl DependencyManager {
         );
 
         let release = GithubClient::fetch_latest_release("SagerNet/sing-box").await?;
-        let asset = GithubClient::find_asset(&release, "windows-amd64.zip")
-            .or_else(|| GithubClient::find_asset(&release, "windows-x86_64.zip"))
-            .ok_or_else(|| {
-                format!(
-                    "No compatible Windows amd64 zip asset found in sing-box release {}",
-                    release.tag_name
-                )
-            })?;
+        let asset = GithubClient::find_singbox_asset(&release)?;
 
-        let base_dir = Self::get_base_dependencies_dir()
-            .join("sing-box")
-            .join(&release.tag_name);
-        if !base_dir.exists() {
-            std::fs::create_dir_all(&base_dir)
-                .map_err(|e| format!("Failed to create dependency folder {:?}: {}", base_dir, e))?;
+        if asset.size > MAX_ARCHIVE_BYTES {
+            return Err(format!(
+                "Asset size ({} MB) exceeds maximum safety limit of 100 MB",
+                asset.size / 1_048_576
+            ));
         }
 
-        // Stream download
-        let temp_archive_path = base_dir.join("sing-box-download.tmp.zip");
-        Self::download_file_with_progress(
+        let install_id = Uuid::new_v4().to_string();
+        let staging_dir = Self::get_staging_dir().join(&install_id);
+        std::fs::create_dir_all(&staging_dir)
+            .map_err(|e| format!("Failed to create staging dir {:?}: {}", staging_dir, e))?;
+
+        let temp_archive_path = staging_dir.join("sing-box-download.tmp.zip");
+
+        let sha256_result = Self::download_file_with_progress(
             app,
             "sing-box",
             &asset.browser_download_url,
             &temp_archive_path,
             asset.size,
         )
-        .await?;
+        .await;
 
-        // Extract with zip-slip safety
+        if let Err(e) = sha256_result {
+            let _ = std::fs::remove_dir_all(&staging_dir);
+            return Err(e);
+        }
+        let calculated_hash = sha256_result.unwrap();
+
+        if let Some(chk_asset) = GithubClient::find_companion_checksum_asset(&release, &asset.name)
+        {
+            if let Ok(chk_text) =
+                GithubClient::fetch_checksum_text(&chk_asset.browser_download_url).await
+            {
+                if let Some(expected_hash) =
+                    Self::extract_hash_from_checksum_file(&chk_text, &asset.name)
+                {
+                    if !calculated_hash.eq_ignore_ascii_case(&expected_hash) {
+                        let _ = std::fs::remove_dir_all(&staging_dir);
+                        return Err(format!(
+                            "SHA-256 checksum mismatch! Expected: {}, Calculated: {}",
+                            expected_hash, calculated_hash
+                        ));
+                    }
+                }
+            }
+        }
+
         Self::emit_progress(
             app,
             "sing-box",
-            "Extracting files securely...",
+            "Extracting files in isolated staging...",
             90,
             asset.size,
             asset.size,
         );
-        Self::extract_zip_safely(&temp_archive_path, &base_dir)?;
+        let extracted_dir = staging_dir.join("extracted");
+        std::fs::create_dir_all(&extracted_dir)
+            .map_err(|e| format!("Failed to create extracted dir: {}", e))?;
+
+        if let Err(e) = Self::extract_zip_safely(&temp_archive_path, &extracted_dir) {
+            let _ = std::fs::remove_dir_all(&staging_dir);
+            return Err(e);
+        }
         let _ = std::fs::remove_file(&temp_archive_path);
 
-        // Find sing-box.exe in extracted folder
         Self::emit_progress(
             app,
             "sing-box",
-            "Locating and verifying executable...",
-            98,
+            "Validating sing-box execution and config check...",
+            95,
             asset.size,
             asset.size,
         );
-        let found_exe = Self::find_executable_in_dir(&base_dir, "sing-box.exe")
-            .ok_or_else(|| format!("sing-box.exe not found after extracting {:?}", base_dir))?;
+        let found_exe = match Self::find_executable_in_dir(&extracted_dir, "sing-box.exe") {
+            Some(p) => p,
+            None => {
+                let _ = std::fs::remove_dir_all(&staging_dir);
+                return Err(format!(
+                    "sing-box.exe not found after extracting {:?}",
+                    extracted_dir
+                ));
+            }
+        };
 
-        // Validate sing-box execution
-        let mut cmd = Command::new(&found_exe);
-        cmd.arg("version")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x08000000);
+        let version_str = match Self::validate_singbox_binary(&found_exe) {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&staging_dir);
+                return Err(format!(
+                    "sing-box executable failed validation tests: {}",
+                    e
+                ));
+            }
+        };
+
+        let final_dir = Self::get_base_dependencies_dir()
+            .join("sing-box")
+            .join(&release.tag_name);
+        if final_dir.exists() {
+            let _ = std::fs::remove_dir_all(&final_dir);
         }
-        let output = cmd
-            .output()
-            .map_err(|e| format!("Failed to run sing-box version check: {}", e))?;
-        if !output.status.success() {
-            return Err("sing-box binary verification failed on execution test".to_string());
+        if let Some(parent) = final_dir.parent() {
+            let _ = std::fs::create_dir_all(parent);
         }
 
-        // Update settings
-        let exe_str = found_exe.to_string_lossy().to_string();
+        if let Err(_e) = std::fs::rename(&extracted_dir, &final_dir) {
+            if let Err(copy_err) = Self::copy_dir_recursive(&extracted_dir, &final_dir) {
+                let _ = std::fs::remove_dir_all(&staging_dir);
+                return Err(format!(
+                    "Failed to promote sing-box installation: {}",
+                    copy_err
+                ));
+            }
+        }
+        let _ = std::fs::remove_dir_all(&staging_dir);
+
+        let final_exe = final_dir.join("sing-box.exe");
+        let exe_str = if final_exe.exists() {
+            final_exe.to_string_lossy().to_string()
+        } else {
+            Self::find_executable_in_dir(&final_dir, "sing-box.exe")
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| final_exe.to_string_lossy().to_string())
+        };
+
         let mut settings = SettingsStorage::load();
         settings.sing_box.executable_path = exe_str.clone();
         SettingsStorage::save(&settings)?;
@@ -256,7 +534,7 @@ impl DependencyManager {
         Self::emit_progress(
             app,
             "sing-box",
-            "Installation complete",
+            &format!("Installation verified ({})", version_str),
             100,
             asset.size,
             asset.size,
@@ -270,7 +548,7 @@ impl DependencyManager {
         url: &str,
         dest_path: &Path,
         expected_size: u64,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
         let client = reqwest::Client::builder()
             .user_agent("AetherDesktop/0.1.0 (Windows NT 10.0; Win64; x64)")
             .build()
@@ -290,6 +568,13 @@ impl DependencyManager {
         }
 
         let total_size = resp.content_length().unwrap_or(expected_size);
+        if total_size > MAX_ARCHIVE_BYTES {
+            return Err(format!(
+                "Total size {} exceeds maximum 100 MB limit",
+                total_size
+            ));
+        }
+
         let mut file = File::create(dest_path).map_err(|e| {
             format!(
                 "Failed to create temporary download file {:?}: {}",
@@ -297,14 +582,22 @@ impl DependencyManager {
             )
         })?;
 
+        let mut hasher = Sha256::new();
         let mut stream = resp.bytes_stream();
         let mut downloaded: u64 = 0;
 
         while let Some(chunk_result) = stream.next().await {
             let chunk = chunk_result.map_err(|e| format!("Error downloading chunk: {}", e))?;
+            downloaded += chunk.len() as u64;
+
+            if downloaded > MAX_ARCHIVE_BYTES {
+                let _ = std::fs::remove_file(dest_path);
+                return Err("Download aborted: exceeded maximum safety size of 100 MB".to_string());
+            }
+
+            hasher.update(&chunk);
             file.write_all(&chunk)
                 .map_err(|e| format!("Failed to write chunk to file: {}", e))?;
-            downloaded += chunk.len() as u64;
 
             let percent = if total_size > 0 {
                 ((downloaded as f64 / total_size as f64) * 85.0) as u8
@@ -326,7 +619,39 @@ impl DependencyManager {
             );
         }
 
-        Ok(())
+        file.sync_all()
+            .map_err(|e| format!("Failed to flush downloaded file: {}", e))?;
+        drop(file);
+
+        if expected_size > 0 && downloaded != expected_size {
+            let _ = std::fs::remove_file(dest_path);
+            return Err(format!(
+                "Download truncated! Expected {} bytes, received {} bytes",
+                expected_size, downloaded
+            ));
+        }
+
+        let hash_bytes = hasher.finalize();
+        Ok(format!("{:x}", hash_bytes))
+    }
+
+    fn extract_hash_from_checksum_file(
+        checksum_content: &str,
+        target_filename: &str,
+    ) -> Option<String> {
+        for line in checksum_content.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 {
+                let hash = parts[0].trim();
+                let file = parts[1].trim().trim_start_matches('*');
+                if file.eq_ignore_ascii_case(target_filename) {
+                    return Some(hash.to_string());
+                }
+            } else if parts.len() == 1 && parts[0].len() == 64 {
+                return Some(parts[0].to_string());
+            }
+        }
+        None
     }
 
     fn extract_zip_safely(archive_path: &Path, dest_dir: &Path) -> Result<(), String> {
@@ -340,7 +665,6 @@ impl DependencyManager {
                 .by_index(i)
                 .map_err(|e| format!("Failed to read zip entry #{}: {}", i, e))?;
 
-            // Zip-slip security protection: enclosed_name prevents directory traversal attacks
             let outpath = match file.enclosed_name() {
                 Some(path) => dest_dir.join(path),
                 None => continue,
@@ -390,6 +714,27 @@ impl DependencyManager {
             }
         }
         None
+    }
+
+    fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+        std::fs::create_dir_all(dst)
+            .map_err(|e| format!("Failed to create destination dir {:?}: {}", dst, e))?;
+
+        for entry in std::fs::read_dir(src).map_err(|e| e.to_string())?.flatten() {
+            let src_path = entry.path();
+            let dst_path = dst.join(entry.file_name());
+            if src_path.is_dir() {
+                Self::copy_dir_recursive(&src_path, &dst_path)?;
+            } else {
+                std::fs::copy(&src_path, &dst_path).map_err(|e| {
+                    format!(
+                        "Failed to copy file {:?} to {:?}: {}",
+                        src_path, dst_path, e
+                    )
+                })?;
+            }
+        }
+        Ok(())
     }
 
     fn emit_progress(

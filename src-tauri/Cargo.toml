@@ -29,6 +29,7 @@ regex = "1.11"
 parking_lot = "0.12"
 reqwest = { version = "0.12", default-features = false, features = ["socks", "rustls-tls", "stream", "json"] }
 futures-util = "0.3"
+sha2 = "0.10"
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 base64 = "0.22"

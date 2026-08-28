@@ -32,6 +32,7 @@ struct OPENFILENAMEW {
 #[cfg(windows)]
 extern "system" {
     fn GetOpenFileNameW(lpofn: *mut OPENFILENAMEW) -> i32;
+    fn GetForegroundWindow() -> *mut std::ffi::c_void;
 }
 
 pub fn pick_windows_executable() -> Option<String> {
@@ -47,9 +48,12 @@ pub fn pick_windows_executable() -> Option<String> {
         let title: Vec<u16> = "Select Application Executable\0".encode_utf16().collect();
         let def_ext: Vec<u16> = "exe\0".encode_utf16().collect();
 
+        // Own dialog to current foreground window so it stays modal on top of Aether Desktop
+        let owner_hwnd = GetForegroundWindow();
+
         let mut ofn = OPENFILENAMEW {
             lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
-            hwndOwner: std::ptr::null_mut(),
+            hwndOwner: owner_hwnd,
             hInstance: std::ptr::null_mut(),
             lpstrFilter: filter.as_ptr(),
             lpstrCustomFilter: std::ptr::null_mut(),
@@ -61,7 +65,8 @@ pub fn pick_windows_executable() -> Option<String> {
             nMaxFileTitle: 0,
             lpstrInitialDir: std::ptr::null_mut(),
             lpstrTitle: title.as_ptr(),
-            Flags: 0x00000800 | 0x00001000 | 0x00080000, // OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_EXPLORER
+            // OFN_PATHMUSTEXIST (0x800) | OFN_FILEMUSTEXIST (0x1000) | OFN_EXPLORER (0x80000)
+            Flags: 0x00000800 | 0x00001000 | 0x00080000,
             nFileOffset: 0,
             nFileExtension: 0,
             lpstrDefExt: def_ext.as_ptr(),

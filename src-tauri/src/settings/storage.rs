@@ -1,6 +1,7 @@
 use crate::models::AppSettings;
 use directories::ProjectDirs;
-use std::fs;
+use std::fs::{self, File};
+use std::io::Write;
 use std::path::PathBuf;
 
 pub struct SettingsStorage;
@@ -46,7 +47,7 @@ impl SettingsStorage {
         default_settings
     }
 
-    /// Saves settings to disk atomically
+    /// Saves settings to disk atomically (write to temp file, sync to disk, atomic rename)
     pub fn save(settings: &AppSettings) -> Result<(), String> {
         let dir = Self::get_app_data_dir();
         if !dir.exists() {
@@ -56,7 +57,27 @@ impl SettingsStorage {
         let json = serde_json::to_string_pretty(settings)
             .map_err(|e| format!("Failed to serialize settings: {}", e))?;
         let path = Self::get_config_path();
-        fs::write(&path, json).map_err(|e| format!("Failed to write config file: {}", e))?;
+        let temp_path = path.with_extension("tmp.json");
+
+        // 1. Write to temp file and flush
+        let mut file = File::create(&temp_path)
+            .map_err(|e| format!("Failed to create temp settings file: {}", e))?;
+        file.write_all(json.as_bytes())
+            .map_err(|e| format!("Failed to write temp settings: {}", e))?;
+        file.sync_all()
+            .map_err(|e| format!("Failed to flush temp settings to disk: {}", e))?;
+        drop(file);
+
+        // 2. Atomic rename/replace
+        if let Err(e) = fs::rename(&temp_path, &path) {
+            // Fallback for Windows file locking / cross-device rename
+            if fs::copy(&temp_path, &path).is_err() {
+                let _ = fs::remove_file(&temp_path);
+                return Err(format!("Failed to atomically replace settings file: {}", e));
+            }
+            let _ = fs::remove_file(&temp_path);
+        }
+
         Ok(())
     }
 

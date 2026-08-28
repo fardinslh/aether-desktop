@@ -21,8 +21,8 @@ pub fn run() {
 
     let connection_state = Arc::new(RwLock::new(ConnectionState::Disconnected));
     let orchestrator = Arc::new(ConnectionOrchestrator::new(
-        logger.clone(),
         connection_state.clone(),
+        logger.clone(),
     ));
 
     let app_state = AppState {
@@ -47,6 +47,8 @@ pub fn run() {
             commands::get_running_applications,
             commands::inspect_executable_file,
             commands::pick_executable_file,
+            commands::validate_aether_path,
+            commands::validate_singbox_path,
             commands::generate_singbox_config_preview,
             commands::test_secondary_proxy,
             commands::test_aether_proxy,
@@ -61,7 +63,8 @@ pub fn run() {
         .expect("error while building aether desktop application")
         .run(move |_app_handle, event| {
             if let tauri::RunEvent::Exit = event {
-                orchestrator_exit.shutdown();
+                let _ = tokio::runtime::Runtime::new()
+                    .map(|rt| rt.block_on(orchestrator_exit.disconnect()));
             }
         });
 }
