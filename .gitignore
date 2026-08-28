@@ -1,0 +1,51 @@
+# Rust / Cargo
+target/
+src-tauri/target/
+**/*.rs.bk
+Cargo.lock.bk
+
+# Node / Frontend
+node_modules/
+dist/
+dist-ssr/
+*.local
+.npm
+.eslintcache
+.vite/
+
+# Tauri build artifacts
+src-tauri/target/
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.tmp
+*.temp
+
+# IDE / Editor Files
+.vscode/*
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/settings.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Binaries & Executables (User-supplied external dependencies)
+*.exe
+*.dll
+*.so
+*.dylib
+*.msi
+*.zip
+*.tar.gz
+
+# Local Logs & Runtime Configs
+*.log
+logs/
+config.json
+sing-box-config.json
