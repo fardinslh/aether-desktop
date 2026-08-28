@@ -137,31 +137,41 @@ fn test_reference_config_match() {
     }
 
     let rules = &config.route.rules;
-    assert_eq!(rules.len(), 6);
+    assert_eq!(rules.len(), 8);
+
+    // Rule 0 & 1: DNS Hijack Infrastructure rules
+    assert_eq!(
+        rules[0].protocol.as_ref().unwrap(),
+        &vec!["dns".to_string()]
+    );
+    assert_eq!(rules[0].action.as_deref(), Some("hijack-dns"));
+
+    assert_eq!(rules[1].port.as_ref().unwrap(), &vec![53]);
+    assert_eq!(rules[1].action.as_deref(), Some("hijack-dns"));
 
     assert_eq!(
-        rules[0].process_name.as_ref().unwrap(),
+        rules[2].process_name.as_ref().unwrap(),
         &vec!["xray.exe", "v2ray.exe", "v2rayN.exe", "aether.exe"]
     );
-    assert_eq!(rules[0].outbound, "direct");
-
-    assert_eq!(
-        rules[1].process_name.as_ref().unwrap(),
-        &vec!["Discord.exe"]
-    );
-    assert_eq!(rules[1].outbound, "v2ray");
-
-    assert_eq!(rules[2].port.as_ref().unwrap(), &vec![3478, 5349]);
-    assert_eq!(rules[2].outbound, "direct");
+    assert_eq!(rules[2].outbound.as_deref(), Some("direct"));
 
     assert_eq!(
         rules[3].process_name.as_ref().unwrap(),
-        &vec!["dota2.exe", "RustClient.exe", "Rust.exe"]
+        &vec!["Discord.exe"]
     );
-    assert_eq!(rules[3].outbound, "direct");
+    assert_eq!(rules[3].outbound.as_deref(), Some("v2ray"));
+
+    assert_eq!(rules[4].port.as_ref().unwrap(), &vec![3478, 5349]);
+    assert_eq!(rules[4].outbound.as_deref(), Some("direct"));
 
     assert_eq!(
-        rules[4].process_name.as_ref().unwrap(),
+        rules[5].process_name.as_ref().unwrap(),
+        &vec!["dota2.exe", "RustClient.exe", "Rust.exe"]
+    );
+    assert_eq!(rules[5].outbound.as_deref(), Some("direct"));
+
+    assert_eq!(
+        rules[6].process_name.as_ref().unwrap(),
         &vec![
             "chrome.exe",
             "Code.exe",
@@ -171,12 +181,17 @@ fn test_reference_config_match() {
             "language_server.exe"
         ]
     );
-    assert_eq!(rules[4].outbound, "v2ray");
+    assert_eq!(rules[6].outbound.as_deref(), Some("v2ray"));
 
-    assert_eq!(rules[5].ip_is_private, Some(true));
-    assert_eq!(rules[5].outbound, "direct");
+    assert_eq!(rules[7].ip_is_private, Some(true));
+    assert_eq!(rules[7].outbound.as_deref(), Some("direct"));
 
     assert_eq!(config.route.final_outbound, "aether");
+    assert_eq!(
+        config.route.default_domain_resolver.as_deref(),
+        Some("remote-dns")
+    );
+    assert!(config.dns.is_some());
 }
 
 #[test]
@@ -309,13 +324,21 @@ fn test_scenario_8_private_lan() {
     );
     assert_eq!(outbound_172, "direct");
 
-    let outbound_pub = SingBoxConfigGenerator::resolve_route_with_ip(
+    let outbound_pub_web = SingBoxConfigGenerator::resolve_route_with_ip(
+        &config,
+        Some("browser.exe"),
+        Some(443),
+        Some("8.8.8.8"),
+    );
+    assert_eq!(outbound_pub_web, "aether");
+
+    let outbound_pub_dns = SingBoxConfigGenerator::resolve_route_with_ip(
         &config,
         Some("browser.exe"),
         Some(53),
         Some("8.8.8.8"),
     );
-    assert_eq!(outbound_pub, "aether");
+    assert_eq!(outbound_pub_dns, "dns-hijack");
 }
 
 #[test]
@@ -644,4 +667,77 @@ fn test_n_process_elevation_token_check() {
         "  [Info] Runtime token elevation check: is_elevated = {}",
         elevated
     );
+}
+
+#[test]
+fn test_o_dns_hijack_infrastructure_overrides_private_lan_rule() {
+    let settings = AppSettings::default();
+    let config = SingBoxConfigGenerator::generate(&settings);
+
+    // 1. DNS query destined to LAN Gateway (192.168.1.1:53) -> intercepted by hijack-dns
+    let dns_lan_route =
+        SingBoxConfigGenerator::resolve_route_with_ip(&config, None, Some(53), Some("192.168.1.1"));
+    assert_eq!(
+        dns_lan_route, "dns-hijack",
+        "Windows system DNS queries to LAN router (192.168.1.1:53) must be intercepted by hijack-dns infrastructure rule rather than leaking via direct"
+    );
+
+    // 2. DNS query destined to public DNS (8.8.8.8:53) -> intercepted by hijack-dns
+    let dns_pub_route =
+        SingBoxConfigGenerator::resolve_route_with_ip(&config, None, Some(53), Some("8.8.8.8"));
+    assert_eq!(
+        dns_pub_route, "dns-hijack",
+        "Public DNS queries (8.8.8.8:53) must be intercepted by hijack-dns"
+    );
+
+    // 3. Normal private LAN web traffic (192.168.1.50:443) -> bypasses proxy via direct
+    let lan_web_route = SingBoxConfigGenerator::resolve_route_with_ip(
+        &config,
+        None,
+        Some(443),
+        Some("192.168.1.50"),
+    );
+    assert_eq!(
+        lan_web_route, "direct",
+        "Normal LAN HTTPS traffic (192.168.1.50:443) must bypass proxy and route via direct"
+    );
+
+    // 4. Normal private LAN router admin page (192.168.1.1:80) -> bypasses proxy via direct
+    let lan_admin_route =
+        SingBoxConfigGenerator::resolve_route_with_ip(&config, None, Some(80), Some("192.168.1.1"));
+    assert_eq!(
+        lan_admin_route, "direct",
+        "Normal LAN HTTP traffic (192.168.1.1:80) must bypass proxy and route via direct"
+    );
+
+    // 5. Discord High-priority traffic (Discord.exe on port 3478) -> v2ray
+    let discord_route =
+        SingBoxConfigGenerator::resolve_route(&config, Some("Discord.exe"), Some(3478), false);
+    assert_eq!(discord_route, "v2ray");
+}
+
+#[test]
+fn test_p_staged_egress_and_dns_probe_methods() {
+    use aether_desktop_lib::health::HealthProber;
+
+    // 1. Trace body parsing verification
+    let sample_body = "ip=104.28.19.42\nwarp=off\ngateway=off\nrbi=off\nkex=none\nuag=Mozilla\ncolo=FRA\nsliver=none\nloc=DE\nts=1700000000\nfl=32f12\nh=www.cloudflare.com\nipclass=regular\nproto=h2\nwarp=off\n";
+    let parsed =
+        HealthProber::parse_trace_body(sample_body, 45).expect("Should parse valid trace body");
+    assert_eq!(parsed.ip, "104.28.19.42");
+    assert_eq!(parsed.colo, "FRA");
+    assert_eq!(parsed.loc, "DE");
+    assert_eq!(parsed.latency_ms, 45);
+
+    // 2. Reqwest error formatter verification
+    let client = reqwest::Client::builder().build().unwrap();
+    let err = client
+        .get("http://invalid.domain.that.does.not.exist.xyz123")
+        .send();
+    let tokio_rt = tokio::runtime::Runtime::new().unwrap();
+    if let Err(e) = tokio_rt.block_on(err) {
+        let formatted = HealthProber::format_reqwest_error("Test request failed", &e);
+        assert!(!formatted.is_empty());
+        assert!(formatted.contains("Test request failed"));
+    }
 }

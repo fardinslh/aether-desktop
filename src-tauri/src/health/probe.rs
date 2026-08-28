@@ -91,34 +91,49 @@ impl HealthProber {
         })
     }
 
-    /// Performs direct system Cloudflare trace probe (without SOCKS proxy) through Windows network stack/TUN adapter
-    pub async fn query_direct_system_cloudflare_trace() -> Result<CloudflareTrace, String> {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(5))
-            .build()
-            .map_err(|e| format!("Failed to build HTTP client for system egress test: {}", e))?;
-
-        let start = Instant::now();
-        let resp = client
-            .get("https://www.cloudflare.com/cdn-cgi/trace")
-            .send()
-            .await
-            .map_err(|e| format!("Direct system trace request failed: {}", e))?;
-
-        let latency_ms = start.elapsed().as_millis() as u64;
-
-        if !resp.status().is_success() {
-            return Err(format!(
-                "Direct trace returned HTTP status {}",
-                resp.status()
-            ));
+    /// Formats a detailed reqwest error breakdown including connection/timeout flags and underlying source error chain
+    /// Formats a detailed reqwest error breakdown including connection/timeout flags and underlying source error chain
+    pub fn format_reqwest_error(prefix: &str, err: &reqwest::Error) -> String {
+        use std::error::Error;
+        let mut flags: Vec<String> = Vec::new();
+        if err.is_connect() {
+            flags.push("is_connect: true".to_string());
         }
+        if err.is_timeout() {
+            flags.push("is_timeout: true".to_string());
+        }
+        if err.is_request() {
+            flags.push("is_request: true".to_string());
+        }
+        if err.is_builder() {
+            flags.push("is_builder: true".to_string());
+        }
+        if let Some(status) = err.status() {
+            flags.push(format!("status: {}", status));
+        }
+        let flags_str = if flags.is_empty() {
+            String::new()
+        } else {
+            format!(" [{}]", flags.join(", "))
+        };
 
-        let body = resp
-            .text()
-            .await
-            .map_err(|e| format!("Failed to read trace response body: {}", e))?;
+        let mut chain = Vec::new();
+        let mut curr: Option<&(dyn Error + 'static)> = err.source();
+        while let Some(src) = curr {
+            chain.push(src.to_string());
+            curr = src.source();
+        }
+        let chain_str = if chain.is_empty() {
+            String::new()
+        } else {
+            format!(" (Source chain: {})", chain.join(" -> "))
+        };
 
+        format!("{}{}{}: {}", prefix, flags_str, chain_str, err)
+    }
+
+    /// Parses raw key=value lines from Cloudflare trace body
+    pub fn parse_trace_body(body: &str, latency_ms: u64) -> Result<CloudflareTrace, String> {
         let mut ip = String::new();
         let mut warp = String::new();
         let mut colo = String::new();
@@ -137,7 +152,7 @@ impl HealthProber {
         }
 
         if ip.is_empty() {
-            return Err("Invalid direct trace response: missing IP address".to_string());
+            return Err("Invalid Cloudflare trace response: missing IP address".to_string());
         }
 
         Ok(CloudflareTrace {
@@ -147,6 +162,133 @@ impl HealthProber {
             loc,
             latency_ms,
         })
+    }
+
+    /// Stage 1: DNS-independent system egress test using IP literal (1.1.1.1 or 1.0.0.1)
+    /// Validates raw TUN transport, routing, and egress consistency without relying on Windows DNS.
+    pub async fn query_direct_system_cloudflare_trace_ip_literal() -> Result<CloudflareTrace, String>
+    {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .map_err(|e| {
+                Self::format_reqwest_error(
+                    "Failed to build HTTP client for IP-literal egress test",
+                    &e,
+                )
+            })?;
+
+        let endpoints = [
+            "https://1.1.1.1/cdn-cgi/trace",
+            "https://1.0.0.1/cdn-cgi/trace",
+        ];
+        let mut last_err = String::new();
+
+        for url in endpoints {
+            let start = Instant::now();
+            match client.get(url).send().await {
+                Ok(resp) => {
+                    let latency_ms = start.elapsed().as_millis() as u64;
+                    if !resp.status().is_success() {
+                        last_err =
+                            format!("Endpoint '{}' returned HTTP status {}", url, resp.status());
+                        continue;
+                    }
+                    match resp.text().await {
+                        Ok(body) => match Self::parse_trace_body(&body, latency_ms) {
+                            Ok(trace) => return Ok(trace),
+                            Err(e) => {
+                                last_err =
+                                    format!("Failed to parse trace body from '{}': {}", url, e);
+                            }
+                        },
+                        Err(e) => {
+                            last_err = Self::format_reqwest_error(
+                                &format!("Failed to read trace response body from '{}'", url),
+                                &e,
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    last_err = Self::format_reqwest_error(
+                        &format!("IP-literal trace request to '{}' failed", url),
+                        &e,
+                    );
+                }
+            }
+        }
+
+        Err(last_err)
+    }
+
+    /// Stage 2: Explicit Windows system DNS resolution test
+    /// Validates that Windows system DNS queries succeed through the TUN interface.
+    pub async fn test_system_dns_resolution(domain: &str) -> Result<Vec<std::net::IpAddr>, String> {
+        let addr_str = format!("{}:443", domain);
+        let res = tokio::net::lookup_host(addr_str).await;
+        match res {
+            Ok(addrs) => {
+                let mut ips: Vec<std::net::IpAddr> = addrs.map(|sa| sa.ip()).collect();
+                ips.dedup();
+                if ips.is_empty() {
+                    Err(format!(
+                        "System DNS resolver returned 0 addresses for '{}'",
+                        domain
+                    ))
+                } else {
+                    Ok(ips)
+                }
+            }
+            Err(e) => Err(format!(
+                "Windows system DNS lookup failed for '{}': {}",
+                domain, e
+            )),
+        }
+    }
+
+    /// Stage 3: Full system egress test with domain name resolution
+    pub async fn query_direct_system_cloudflare_trace_hostname() -> Result<CloudflareTrace, String>
+    {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .map_err(|e| {
+                Self::format_reqwest_error(
+                    "Failed to build HTTP client for hostname egress test",
+                    &e,
+                )
+            })?;
+
+        let start = Instant::now();
+        let resp = client
+            .get("https://www.cloudflare.com/cdn-cgi/trace")
+            .send()
+            .await
+            .map_err(|e| Self::format_reqwest_error("Direct hostname trace request failed", &e))?;
+
+        let latency_ms = start.elapsed().as_millis() as u64;
+
+        if !resp.status().is_success() {
+            return Err(format!(
+                "Direct hostname trace returned HTTP status {}",
+                resp.status()
+            ));
+        }
+
+        let body = resp.text().await.map_err(|e| {
+            Self::format_reqwest_error("Failed to read hostname trace response body", &e)
+        })?;
+
+        Self::parse_trace_body(&body, latency_ms)
+    }
+
+    /// Performs direct system Cloudflare trace probe through Windows network stack/TUN adapter
+    pub async fn query_direct_system_cloudflare_trace() -> Result<CloudflareTrace, String> {
+        match Self::query_direct_system_cloudflare_trace_hostname().await {
+            Ok(t) => Ok(t),
+            Err(_) => Self::query_direct_system_cloudflare_trace_ip_literal().await,
+        }
     }
 
     /// Enumerates Windows adapters using native GetAdaptersAddresses IP Helper API

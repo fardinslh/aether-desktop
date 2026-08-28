@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SingBoxConfig {
     pub log: LogConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dns: Option<DnsConfig>,
     pub inbounds: Vec<InboundConfig>,
     pub outbounds: Vec<OutboundConfig>,
     pub route: RouteConfig,
@@ -12,6 +14,37 @@ pub struct SingBoxConfig {
 pub struct LogConfig {
     pub level: String,
     pub timestamp: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DnsConfig {
+    pub servers: Vec<DnsServer>,
+    pub strategy: String,
+    pub independent_cache: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type")]
+pub enum DnsServer {
+    #[serde(rename = "https")]
+    Https(HttpsDnsServer),
+    #[serde(rename = "local")]
+    Local(LocalDnsServer),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HttpsDnsServer {
+    pub tag: String,
+    pub server: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detour: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LocalDnsServer {
+    pub tag: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detour: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -57,6 +90,8 @@ pub struct DirectOutbound {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RouteConfig {
     pub auto_detect_interface: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_domain_resolver: Option<String>,
     pub rules: Vec<RouteRule>,
     #[serde(rename = "final")]
     pub final_outbound: String,
@@ -64,6 +99,9 @@ pub struct RouteConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct RouteRule {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<Vec<String>>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub process_name: Option<Vec<String>>,
 
@@ -76,6 +114,9 @@ pub struct RouteRule {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ip_is_private: Option<bool>,
 
-    pub action: String,
-    pub outbound: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outbound: Option<String>,
 }

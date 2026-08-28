@@ -1,7 +1,7 @@
 use crate::models::settings::{CompatibilityScope, NetworkProtocol};
 use crate::models::singbox::{
-    DirectOutbound, InboundConfig, LogConfig, OutboundConfig, RouteConfig, RouteRule,
-    SingBoxConfig, SocksOutbound, TunInbound,
+    DirectOutbound, DnsConfig, DnsServer, HttpsDnsServer, InboundConfig, LocalDnsServer, LogConfig,
+    OutboundConfig, RouteConfig, RouteRule, SingBoxConfig, SocksOutbound, TunInbound,
 };
 use crate::models::{AppSettings, RouteDestination, RulePriority};
 use crate::routing::presets::{GENERALS_STUN_TURN_PORTS, LOOP_PREVENTION_PROCESSES};
@@ -12,6 +12,7 @@ impl SingBoxConfigGenerator {
     /// Generates a complete sing-box configuration from AppSettings following verified strict precedence rules.
     ///
     /// PRECEDENCE HIERARCHY:
+    /// 0. DNS INFRASTRUCTURE HIJACK: DNS protocol & port 53 -> hijack-dns (intercepted into sing-box DNS engine)
     /// 1. CORE LOOP PREVENTION: Proxy binaries (aether.exe, xray.exe, v2ray.exe, v2rayN.exe) -> DIRECT
     /// 2. APP-SCOPED COMPATIBILITY: Specific overrides requiring (Process + Ports/Protocol) -> Destination
     /// 3. HIGH-PRIORITY APPLICATION OVERRIDES: (e.g. Discord.exe -> v2ray)
@@ -20,7 +21,7 @@ impl SingBoxConfigGenerator {
     ///    - Normal Direct apps (dota2.exe, Rust.exe, etc.) -> DIRECT
     ///    - Normal Secondary Proxy apps (chrome.exe, Code.exe, Antigravity.exe, agy.exe, Spotify.exe, etc.) -> v2ray
     ///    - Normal Aether apps -> aether
-    /// 6. PRIVATE NETWORK / LAN: ip_is_private: true -> DIRECT
+    /// 6. PRIVATE NETWORK / LAN: ip_is_private: true -> DIRECT (Non-DNS private traffic bypasses proxy)
     /// 7. FINAL FALLBACK: All other traffic -> aether
     pub fn generate(settings: &AppSettings) -> SingBoxConfig {
         // 1. Log configuration
@@ -29,7 +30,24 @@ impl SingBoxConfigGenerator {
             timestamp: true,
         };
 
-        // 2. TUN Inbound
+        // 2. DNS configuration (Remote DoH over Aether, Local fallback over Direct)
+        let dns = Some(DnsConfig {
+            servers: vec![
+                DnsServer::Https(HttpsDnsServer {
+                    tag: "remote-dns".to_string(),
+                    server: "1.1.1.1".to_string(),
+                    detour: Some("aether".to_string()),
+                }),
+                DnsServer::Local(LocalDnsServer {
+                    tag: "local-dns".to_string(),
+                    detour: Some("direct".to_string()),
+                }),
+            ],
+            strategy: "prefer_ipv4".to_string(),
+            independent_cache: true,
+        });
+
+        // 3. TUN Inbound
         let inbounds = vec![InboundConfig::Tun(TunInbound {
             tag: "tun-in".to_string(),
             interface_name: settings.sing_box.interface_name.clone(),
@@ -40,7 +58,7 @@ impl SingBoxConfigGenerator {
             stack: "system".to_string(),
         })];
 
-        // 3. Outbounds: Aether (primary socks), V2Ray (secondary socks), and Direct
+        // 4. Outbounds: Aether (primary socks), V2Ray (secondary socks), and Direct
         let outbounds = vec![
             OutboundConfig::Socks(SocksOutbound {
                 tag: "aether".to_string(),
@@ -59,24 +77,45 @@ impl SingBoxConfigGenerator {
             }),
         ];
 
-        // 4. Build routing rules with strict precedence:
+        // 5. Build routing rules with strict precedence:
         let mut rules: Vec<RouteRule> = Vec::new();
 
-        // 4.1 Priority 1: Core Process Loop Prevention -> DIRECT (Always top priority)
+        // 5.0 Priority 0: DNS Infrastructure Hijack -> hijack-dns (Intercepts DNS queries before private IP rule)
+        rules.push(RouteRule {
+            protocol: Some(vec!["dns".to_string()]),
+            process_name: None,
+            port: None,
+            network: None,
+            ip_is_private: None,
+            action: Some("hijack-dns".to_string()),
+            outbound: None,
+        });
+        rules.push(RouteRule {
+            protocol: None,
+            process_name: None,
+            port: Some(vec![53]),
+            network: None,
+            ip_is_private: None,
+            action: Some("hijack-dns".to_string()),
+            outbound: None,
+        });
+
+        // 5.1 Priority 1: Core Process Loop Prevention -> DIRECT (Always top priority)
         let loop_processes: Vec<String> = LOOP_PREVENTION_PROCESSES
             .iter()
             .map(|s| s.to_string())
             .collect();
         rules.push(RouteRule {
+            protocol: None,
             process_name: Some(loop_processes),
             port: None,
             network: None,
             ip_is_private: None,
-            action: "route".to_string(),
-            outbound: "direct".to_string(),
+            action: Some("route".to_string()),
+            outbound: Some("direct".to_string()),
         });
 
-        // 4.2 Priority 2: App-Scoped Compatibility Overrides
+        // 5.2 Priority 2: App-Scoped Compatibility Overrides
         for compat_rule in &settings.compatibility.custom_compatibility_rules {
             if !compat_rule.enabled || compat_rule.scope != CompatibilityScope::AppScoped {
                 continue;
@@ -89,12 +128,15 @@ impl SingBoxConfigGenerator {
                         _ => None,
                     };
                     rules.push(RouteRule {
+                        protocol: None,
                         process_name: Some(procs.clone()),
                         port: compat_rule.ports.clone(),
                         network: network_str,
                         ip_is_private: None,
-                        action: "route".to_string(),
-                        outbound: Self::outbound_tag_for_destination(&compat_rule.destination),
+                        action: Some("route".to_string()),
+                        outbound: Some(Self::outbound_tag_for_destination(
+                            &compat_rule.destination,
+                        )),
                     });
                 }
             }
@@ -176,40 +218,43 @@ impl SingBoxConfigGenerator {
             }
         }
 
-        // 4.3 Priority 3: HIGH-PRIORITY Application Overrides (e.g. Discord.exe -> v2ray)
+        // 5.3 Priority 3: HIGH-PRIORITY Application Overrides (e.g. Discord.exe -> v2ray)
         if !high_direct_apps.is_empty() {
             rules.push(RouteRule {
+                protocol: None,
                 process_name: Some(high_direct_apps),
                 port: None,
                 network: None,
                 ip_is_private: None,
-                action: "route".to_string(),
-                outbound: "direct".to_string(),
+                action: Some("route".to_string()),
+                outbound: Some("direct".to_string()),
             });
         }
         if !high_v2ray_apps.is_empty() {
             rules.push(RouteRule {
+                protocol: None,
                 process_name: Some(high_v2ray_apps),
                 port: None,
                 network: None,
                 ip_is_private: None,
-                action: "route".to_string(),
-                outbound: "v2ray".to_string(),
+                action: Some("route".to_string()),
+                outbound: Some("v2ray".to_string()),
             });
         }
         if !high_aether_apps.is_empty() {
             rules.push(RouteRule {
+                protocol: None,
                 process_name: Some(high_aether_apps),
                 port: None,
                 network: None,
                 ip_is_private: None,
-                action: "route".to_string(),
-                outbound: "aether".to_string(),
+                action: Some("route".to_string()),
+                outbound: Some("aether".to_string()),
             });
         }
 
-        // 4.4 Priority 4: Generic Compatibility Fallback Rules (Generals Online STUN/TURN fallback)
-        // 4.4.1 Custom Global Fallback rules
+        // 5.4 Priority 4: Generic Compatibility Fallback Rules (Generals Online STUN/TURN fallback)
+        // 5.4.1 Custom Global Fallback rules
         for compat_rule in &settings.compatibility.custom_compatibility_rules {
             if !compat_rule.enabled || compat_rule.scope != CompatibilityScope::GlobalFallback {
                 continue;
@@ -220,85 +265,93 @@ impl SingBoxConfigGenerator {
                 _ => None,
             };
             rules.push(RouteRule {
+                protocol: None,
                 process_name: compat_rule.process_names.clone(),
                 port: compat_rule.ports.clone(),
                 network: network_str,
                 ip_is_private: None,
-                action: "route".to_string(),
-                outbound: Self::outbound_tag_for_destination(&compat_rule.destination),
+                action: Some("route".to_string()),
+                outbound: Some(Self::outbound_tag_for_destination(&compat_rule.destination)),
             });
         }
 
-        // 4.4.2 Generals Online STUN/TURN fallback: ports 3478, 5349 -> DIRECT
+        // 5.4.2 Generals Online STUN/TURN fallback: ports 3478, 5349 -> DIRECT
         if settings.compatibility.generals_stun_turn_fallback {
             rules.push(RouteRule {
+                protocol: None,
                 process_name: None,
                 port: Some(GENERALS_STUN_TURN_PORTS.to_vec()),
                 network: None,
                 ip_is_private: None,
-                action: "route".to_string(),
-                outbound: "direct".to_string(),
+                action: Some("route".to_string()),
+                outbound: Some("direct".to_string()),
             });
         }
 
-        // 4.5 Priority 5: NORMAL-PRIORITY Application Routing
-        // 4.5.1 NORMAL DIRECT applications (dota2.exe, Rust.exe, etc.)
+        // 5.5 Priority 5: NORMAL-PRIORITY Application Routing
+        // 5.5.1 NORMAL DIRECT applications (dota2.exe, Rust.exe, etc.)
         if !normal_direct_apps.is_empty() {
             rules.push(RouteRule {
+                protocol: None,
                 process_name: Some(normal_direct_apps),
                 port: None,
                 network: None,
                 ip_is_private: None,
-                action: "route".to_string(),
-                outbound: "direct".to_string(),
+                action: Some("route".to_string()),
+                outbound: Some("direct".to_string()),
             });
         }
 
-        // 4.5.2 NORMAL SECONDARY PROXY applications (chrome.exe, Code.exe, Antigravity.exe, agy.exe, Spotify.exe, etc.)
+        // 5.5.2 NORMAL SECONDARY PROXY applications (chrome.exe, Code.exe, Antigravity.exe, agy.exe, Spotify.exe, etc.)
         if !normal_v2ray_apps.is_empty() {
             rules.push(RouteRule {
+                protocol: None,
                 process_name: Some(normal_v2ray_apps),
                 port: None,
                 network: None,
                 ip_is_private: None,
-                action: "route".to_string(),
-                outbound: "v2ray".to_string(),
+                action: Some("route".to_string()),
+                outbound: Some("v2ray".to_string()),
             });
         }
 
-        // 4.5.3 NORMAL AETHER explicit applications
+        // 5.5.3 NORMAL AETHER explicit applications
         if !normal_aether_apps.is_empty() {
             rules.push(RouteRule {
+                protocol: None,
                 process_name: Some(normal_aether_apps),
                 port: None,
                 network: None,
                 ip_is_private: None,
-                action: "route".to_string(),
-                outbound: "aether".to_string(),
+                action: Some("route".to_string()),
+                outbound: Some("aether".to_string()),
             });
         }
 
-        // 4.6 Priority 6: Private IP network bypass -> DIRECT
+        // 5.6 Priority 6: Private IP network bypass -> DIRECT
         if settings.compatibility.private_ip_bypass {
             rules.push(RouteRule {
+                protocol: None,
                 process_name: None,
                 port: None,
                 network: None,
                 ip_is_private: Some(true),
-                action: "route".to_string(),
-                outbound: "direct".to_string(),
+                action: Some("route".to_string()),
+                outbound: Some("direct".to_string()),
             });
         }
 
-        // 5. Final route configuration
+        // 6. Final route configuration
         let route = RouteConfig {
             auto_detect_interface: true,
+            default_domain_resolver: Some("remote-dns".to_string()),
             rules,
             final_outbound: "aether".to_string(),
         };
 
         SingBoxConfig {
             log,
+            dns,
             inbounds,
             outbounds,
             route,
@@ -326,10 +379,25 @@ impl SingBoxConfigGenerator {
         is_private: bool,
     ) -> &'a str {
         for rule in &config.route.rules {
+            // Check hijack-dns infrastructure rule
+            if rule.action.as_deref() == Some("hijack-dns") {
+                let port_matches = match rule.port {
+                    Some(ref ports) => port.map(|p| ports.contains(&p)).unwrap_or(false),
+                    None => false,
+                };
+                if port_matches {
+                    return "dns-hijack";
+                }
+                continue;
+            }
+
             // Check IP private match
             if let Some(true) = rule.ip_is_private {
                 if is_private {
-                    return &rule.outbound;
+                    return rule
+                        .outbound
+                        .as_deref()
+                        .unwrap_or(&config.route.final_outbound);
                 } else {
                     continue;
                 }
@@ -350,7 +418,10 @@ impl SingBoxConfigGenerator {
             };
 
             if proc_matches && port_matches {
-                return &rule.outbound;
+                return rule
+                    .outbound
+                    .as_deref()
+                    .unwrap_or(&config.route.final_outbound);
             }
         }
 
