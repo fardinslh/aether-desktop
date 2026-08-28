@@ -1,0 +1,150 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" fill="none">
+  <defs>
+    <!-- Background Shield Gradient -->
+    <linearGradient id="shieldBg" x1="512" y1="100" x2="512" y2="920" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0F172A" />
+      <stop offset="50%" stop-color="#0A0E1A" />
+      <stop offset="100%" stop-color="#050811" />
+    </linearGradient>
+
+    <!-- Shield Border Gradient -->
+    <linearGradient id="shieldBorder" x1="180" y1="120" x2="844" y2="910" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#6366F1" />
+      <stop offset="50%" stop-color="#3B82F6" />
+      <stop offset="100%" stop-color="#06B6D4" />
+    </linearGradient>
+
+    <!-- Inbound / Indigo Route Gradient -->
+    <linearGradient id="indigoRoute" x1="220" y1="320" x2="800" y2="400" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#818CF8" />
+      <stop offset="50%" stop-color="#6366F1" />
+      <stop offset="100%" stop-color="#A855F7" />
+    </linearGradient>
+
+    <!-- Outbound / Cyan Route Gradient -->
+    <linearGradient id="cyanRoute" x1="780" y1="460" x2="280" y2="760" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#38BDF8" />
+      <stop offset="60%" stop-color="#06B6D4" />
+      <stop offset="100%" stop-color="#0EA5E9" />
+    </linearGradient>
+
+    <!-- Secondary Node Flow Gradient -->
+    <linearGradient id="secondaryRoute" x1="512" y1="512" x2="720" y2="720" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#06B6D4" />
+      <stop offset="100%" stop-color="#3B82F6" />
+    </linearGradient>
+
+    <!-- Core Nexus Radial Glow -->
+    <radialGradient id="coreGlow" cx="512" cy="512" r="120" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#E0F2FE" />
+      <stop offset="35%" stop-color="#38BDF8" />
+      <stop offset="70%" stop-color="#4F46E5" />
+      <stop offset="100%" stop-color="#0B1120" />
+    </radialGradient>
+
+    <!-- Subtle Inner Shadow Filter for Shield -->
+    <filter id="subtleGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="16" stdDeviation="24" flood-color="#06B6D4" flood-opacity="0.2" />
+      <feDropShadow dx="0" dy="8" stdDeviation="16" flood-color="#6366F1" flood-opacity="0.3" />
+    </filter>
+  </defs>
+
+  <!-- Outer Protective Shield Silhouette -->
+  <path
+    d="M 512 112
+       C 648 112, 792 180, 836 244
+       C 848 420, 810 656, 512 912
+       C 214 656, 176 420, 188 244
+       C 232 180, 376 112, 512 112 Z"
+    fill="url(#shieldBg)"
+    stroke="url(#shieldBorder)"
+    stroke-width="28"
+    stroke-linejoin="round"
+    filter="url(#subtleGlow)"
+  />
+
+  <!-- Inner Shield Accent Inset Rim -->
+  <path
+    d="M 512 152
+       C 630 152, 756 210, 796 266
+       C 806 418, 772 626, 512 856
+       C 252 626, 218 418, 228 266
+       C 268 210, 394 152, 512 152 Z"
+    fill="none"
+    stroke="#1E293B"
+    stroke-width="8"
+    opacity="0.8"
+  />
+
+  <!-- Primary Routing Tunnel Paths -->
+  <!-- 1. Upper Indigo Ingress Flow -->
+  <path
+    d="M 280 340
+       C 380 300, 440 420, 512 512
+       C 584 604, 644 420, 744 340"
+    fill="none"
+    stroke="url(#indigoRoute)"
+    stroke-width="48"
+    stroke-linecap="round"
+  />
+
+  <!-- 2. Lower Cyan Egress & Tunnel Flow -->
+  <path
+    d="M 744 480
+       C 640 480, 580 512, 512 512
+       C 430 512, 380 620, 340 700"
+    fill="none"
+    stroke="url(#cyanRoute)"
+    stroke-width="48"
+    stroke-linecap="round"
+  />
+
+  <!-- 3. Secondary Routing Branch -->
+  <path
+    d="M 512 512
+       C 580 580, 640 640, 684 700"
+    fill="none"
+    stroke="url(#secondaryRoute)"
+    stroke-width="36"
+    stroke-linecap="round"
+  />
+
+  <!-- Central Nexus Core (Shield Kernel Hub) -->
+  <!-- Outer Core Ring -->
+  <circle
+    cx="512"
+    cy="512"
+    r="96"
+    fill="#080D1A"
+    stroke="#06B6D4"
+    stroke-width="20"
+  />
+
+  <!-- Inner Core Radiant Orb -->
+  <circle
+    cx="512"
+    cy="512"
+    r="64"
+    fill="url(#coreGlow)"
+  />
+
+  <!-- Center Highlight Point -->
+  <circle
+    cx="512"
+    cy="512"
+    r="24"
+    fill="#FFFFFF"
+  />
+
+  <!-- Waypoint Routing Nodes -->
+  <!-- Node 1: Left Ingress -->
+  <circle cx="280" cy="340" r="28" fill="#818CF8" stroke="#0F172A" stroke-width="8" />
+  <!-- Node 2: Right Top Egress -->
+  <circle cx="744" cy="340" r="28" fill="#A855F7" stroke="#0F172A" stroke-width="8" />
+  <!-- Node 3: Right Mid Inbound -->
+  <circle cx="744" cy="480" r="28" fill="#38BDF8" stroke="#0F172A" stroke-width="8" />
+  <!-- Node 4: Lower Left Primary TUN Egress -->
+  <circle cx="340" cy="700" r="28" fill="#06B6D4" stroke="#0F172A" stroke-width="8" />
+  <!-- Node 5: Lower Right Secondary SOCKS Egress -->
+  <circle cx="684" cy="700" r="24" fill="#3B82F6" stroke="#0F172A" stroke-width="8" />
+</svg>
