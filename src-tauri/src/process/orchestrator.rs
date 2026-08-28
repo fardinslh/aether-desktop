@@ -252,6 +252,18 @@ impl ConnectionOrchestrator {
             }
         }
 
+        // Check Windows administrator elevation before launching TUN
+        if !HealthProber::is_process_elevated() {
+            let err = "Administrator privileges are required to create the Windows TUN adapter."
+                .to_string();
+            self.logger.log("ERROR", "UAC", &err);
+            if self.is_aether_managed.load(Ordering::SeqCst) {
+                self.aether.lock().await.stop(&self.logger);
+            }
+            self.set_error(err.clone());
+            return Err(err);
+        }
+
         // 2. Launch sing-box router
         self.set_state(ConnectionState::StartingRouter);
         {
@@ -268,14 +280,17 @@ impl ConnectionOrchestrator {
         // 3. Bounded routing and system egress verification matching Aether IP
         self.set_state(ConnectionState::TestingRouting);
         let interface_name = &settings.sing_box.interface_name;
+        let tun_address = &settings.sing_box.tun_address;
         let expected_aether_ip = self.active_aether_ip.read().clone();
 
         let mut sb_guard = self.singbox.lock().await;
         if let Err(verify_err) = sb_guard
             .verify_router_and_egress(
                 interface_name,
+                Some(tun_address),
                 Duration::from_secs(6),
                 expected_aether_ip.as_deref(),
+                &self.logger,
             )
             .await
         {
@@ -365,6 +380,7 @@ impl ConnectionOrchestrator {
             settings.secondary_proxy.port,
             settings.secondary_proxy.enabled,
             &settings.sing_box.interface_name,
+            Some(&settings.sing_box.tun_address),
             aether_running,
             singbox_running,
             is_conn,

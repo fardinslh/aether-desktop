@@ -133,7 +133,9 @@ impl AetherRunner {
         }
 
         let aether_config_path = SettingsStorage::get_aether_config_path();
-        let cli_args = settings.aether.build_cli_arguments(Some(&aether_config_path));
+        let cli_args = settings
+            .aether
+            .build_cli_arguments(Some(&aether_config_path));
 
         logger.log(
             "INFO",
@@ -449,33 +451,90 @@ impl SingBoxRunner {
     /// Complete health and routing egress verification helper.
     /// Verifies process liveness, TUN interface presence, and checks that direct system egress
     /// matches the expected Aether public IP (preventing false positive on native ISP egress).
+    /// Complete health and routing egress verification helper.
+    /// Verifies process liveness, native TUN interface presence (name and/or IP), and checks that direct system egress
+    /// matches the expected Aether public IP (preventing false positive on native ISP egress).
     pub async fn verify_router_and_egress(
         &mut self,
         interface_name: &str,
+        tun_address: Option<&str>,
         max_duration: Duration,
         expected_aether_ip: Option<&str>,
+        logger: &RingBufferLogger,
     ) -> Result<(), String> {
         let start = std::time::Instant::now();
         let mut tun_detected = false;
+        let mut matched_adapter_name = String::new();
+        let mut last_detected_adapters = Vec::new();
 
         while start.elapsed() < max_duration {
             if !self.is_running() {
                 return Err("sing-box process exited unexpectedly during verification".to_string());
             }
 
-            if HealthProber::check_tun_interface_exists(interface_name) {
+            let (found, matched_info, all_adapters) =
+                HealthProber::check_tun_interface_exists(interface_name, tun_address);
+            last_detected_adapters = all_adapters;
+            if found {
                 tun_detected = true;
+                if let Some(info) = matched_info {
+                    matched_adapter_name = format!(
+                        "'{}' (Description: '{}', Index: {}, IP: {:?})",
+                        info.friendly_name, info.description, info.if_index, info.ip_addresses
+                    );
+                } else {
+                    matched_adapter_name = interface_name.to_string();
+                }
                 break;
             }
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
 
         if !tun_detected {
+            let mut detected_summary = Vec::new();
+            for a in &last_detected_adapters {
+                let ips = if a.ip_addresses.is_empty() {
+                    "none".to_string()
+                } else {
+                    a.ip_addresses.join(", ")
+                };
+                detected_summary.push(format!(
+                    "  - '{}' ({}) [Index: {}, Up: {}, IPs: {}]",
+                    a.friendly_name, a.description, a.if_index, a.is_up, ips
+                ));
+            }
+            let summary_str = if detected_summary.is_empty() {
+                "  (No network adapters reported by IP Helper API)".to_string()
+            } else {
+                detected_summary.join("\n")
+            };
+
+            logger.log(
+                "WARN",
+                "sing-box",
+                format!(
+                    "TUN network adapter not detected. Expected: name='{}', IP='{}'. Detected adapters in network stack:\n{}",
+                    interface_name,
+                    tun_address.unwrap_or("none"),
+                    summary_str
+                ),
+            );
+
             return Err(format!(
-                "TUN network adapter '{}' not detected in network stack",
-                interface_name
+                "TUN network adapter '{}' (IP: '{}') not detected in network stack",
+                interface_name,
+                tun_address.unwrap_or("none")
             ));
         }
+
+        logger.log(
+            "INFO",
+            "sing-box",
+            format!(
+                "Verified TUN network adapter presence: {}",
+                matched_adapter_name
+            ),
+        );
 
         // Direct system egress test through TUN adapter
         let mut system_trace_opt = None;
@@ -537,6 +596,7 @@ impl SingBoxRunner {
 
         let candidate_exe = settings.sing_box.executable_path.clone();
         let candidate_interface = settings.sing_box.interface_name.clone();
+        let candidate_tun_address = settings.sing_box.tun_address.clone();
         let candidate_config = SingBoxConfigGenerator::generate(settings);
 
         let config_path = self.config_path.clone();
@@ -606,6 +666,7 @@ impl SingBoxRunner {
                     &old_exe,
                     &backup_path,
                     &old_interface,
+                    Some(&candidate_tun_address),
                     expected_aether_ip,
                     logger,
                     &start_err,
@@ -617,8 +678,10 @@ impl SingBoxRunner {
         if let Err(verify_err) = self
             .verify_router_and_egress(
                 &candidate_interface,
-                Duration::from_secs(5),
+                Some(&candidate_tun_address),
+                Duration::from_secs(6),
                 expected_aether_ip,
+                logger,
             )
             .await
         {
@@ -635,6 +698,7 @@ impl SingBoxRunner {
                     &old_exe,
                     &backup_path,
                     &old_interface,
+                    Some(&candidate_tun_address),
                     expected_aether_ip,
                     logger,
                     &verify_err,
@@ -659,6 +723,7 @@ impl SingBoxRunner {
         old_exe: &str,
         backup_path: &Path,
         old_interface: &str,
+        tun_address: Option<&str>,
         expected_aether_ip: Option<&str>,
         logger: &RingBufferLogger,
         reason: &str,
@@ -692,7 +757,13 @@ impl SingBoxRunner {
 
         // Verify rollback instance health using OLD INTERFACE
         if let Err(rb_health_err) = self
-            .verify_router_and_egress(old_interface, Duration::from_secs(5), expected_aether_ip)
+            .verify_router_and_egress(
+                old_interface,
+                tun_address,
+                Duration::from_secs(6),
+                expected_aether_ip,
+                logger,
+            )
             .await
         {
             logger.log(

@@ -90,7 +90,9 @@ fn main() {
     println!("✓ TEST M [UNIT / MOCKED INTEGRATION]: Native Windows IP Helper adapter discovery by FriendlyName and configured TUN IP (PASSED)");
 
     test_n_process_elevation_token_check();
-    println!("✓ TEST N [UNIT / MOCKED INTEGRATION]: Windows process token elevation check (PASSED)");
+    println!(
+        "✓ TEST N [UNIT / MOCKED INTEGRATION]: Windows process token elevation check (PASSED)"
+    );
 
     println!("\n==================================================================");
     println!("ALL 24 VERIFICATION & RELIABILITY TESTS PASSED!");
@@ -552,7 +554,9 @@ fn test_j_download_size_and_truncation_guards() {
 
 fn test_k_aether_noninteractive_launch_arguments() {
     let settings = AppSettings::default();
-    let config_path = std::path::PathBuf::from("C:\\Users\\User\\AppData\\Local\\AetherDesktop\\aether\\aether.toml");
+    let config_path = std::path::PathBuf::from(
+        "C:\\Users\\User\\AppData\\Local\\AetherDesktop\\aether\\aether.toml",
+    );
     let args = settings.aether.build_cli_arguments(Some(&config_path));
 
     assert_eq!(
@@ -574,20 +578,42 @@ fn test_k_aether_noninteractive_launch_arguments() {
 fn test_l_aether_scan_mode_startup_deadlines() {
     use aether_desktop_lib::models::settings::{aether_startup_timeout, AetherScanMode};
 
-    assert_eq!(aether_startup_timeout(&AetherScanMode::Turbo), Duration::from_secs(45));
-    assert_eq!(aether_startup_timeout(&AetherScanMode::Balanced), Duration::from_secs(100));
-    assert_eq!(aether_startup_timeout(&AetherScanMode::Thorough), Duration::from_secs(285));
-    assert_eq!(aether_startup_timeout(&AetherScanMode::Stealth), Duration::from_secs(180));
-    assert_eq!(aether_startup_timeout(&AetherScanMode::Ironclad), Duration::from_secs(210));
+    assert_eq!(
+        aether_startup_timeout(&AetherScanMode::Turbo),
+        Duration::from_secs(45)
+    );
+    assert_eq!(
+        aether_startup_timeout(&AetherScanMode::Balanced),
+        Duration::from_secs(100)
+    );
+    assert_eq!(
+        aether_startup_timeout(&AetherScanMode::Thorough),
+        Duration::from_secs(285)
+    );
+    assert_eq!(
+        aether_startup_timeout(&AetherScanMode::Stealth),
+        Duration::from_secs(180)
+    );
+    assert_eq!(
+        aether_startup_timeout(&AetherScanMode::Ironclad),
+        Duration::from_secs(210)
+    );
 }
 
 fn test_m_native_windows_tun_detection_by_ip_and_name() {
     use aether_desktop_lib::health::HealthProber;
 
     // 1. Non-existent interface & non-existent IP must return false
-    let (found, _, all) = HealthProber::check_tun_interface_exists("non-existent-tun-xyz", Some("172.99.99.99/30"));
-    assert!(!found, "Non-existent TUN interface name and IP must not be found");
-    assert!(!all.is_empty(), "Native adapter enumeration should return system adapters");
+    let (found, _, all) =
+        HealthProber::check_tun_interface_exists("non-existent-tun-xyz", Some("172.99.99.99/30"));
+    assert!(
+        !found,
+        "Non-existent TUN interface name and IP must not be found"
+    );
+    assert!(
+        !all.is_empty(),
+        "Native adapter enumeration should return system adapters"
+    );
 
     // 2. Fallback matching test by IP
     let _ = HealthProber::check_tun_interface_exists("singbox-tun", Some("172.19.0.1/30"));
@@ -598,5 +624,8 @@ fn test_n_process_elevation_token_check() {
 
     // Must execute cleanly without crashing
     let elevated = HealthProber::is_process_elevated();
-    println!("  [Info] Runtime token elevation check: is_elevated = {}", elevated);
+    println!(
+        "  [Info] Runtime token elevation check: is_elevated = {}",
+        elevated
+    );
 }
