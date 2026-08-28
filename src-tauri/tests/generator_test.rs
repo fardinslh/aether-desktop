@@ -356,13 +356,22 @@ fn test_a_candidate_validation_failure_preserves_old_state() {
     );
 }
 
+use aether_desktop_lib::logging::RingBufferLogger;
+
 #[test]
 fn test_b_missing_tun_triggers_verified_rollback() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
         let mut runner = SingBoxRunner::new();
+        let logger = RingBufferLogger::new(100);
         let res = runner
-            .verify_router_and_egress("non-existent-tun-adapter", Duration::from_millis(400), None)
+            .verify_router_and_egress(
+                "non-existent-tun-adapter",
+                Some("172.19.99.1/30"),
+                Duration::from_millis(400),
+                None,
+                &logger,
+            )
             .await;
         assert!(
             res.is_err(),
@@ -381,8 +390,15 @@ fn test_c_failed_egress_ip_mismatch_triggers_rollback() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
         let mut runner = SingBoxRunner::new();
+        let logger = RingBufferLogger::new(100);
         let res = runner
-            .verify_router_and_egress("singbox-tun", Duration::from_millis(400), Some("1.2.3.4"))
+            .verify_router_and_egress(
+                "singbox-tun",
+                Some("172.19.0.1/30"),
+                Duration::from_millis(400),
+                Some("1.2.3.4"),
+                &logger,
+            )
             .await;
         assert!(
             res.is_err(),
@@ -579,4 +595,26 @@ fn test_l_aether_scan_mode_startup_deadlines() {
     assert_eq!(aether_startup_timeout(&AetherScanMode::Thorough), Duration::from_secs(285));
     assert_eq!(aether_startup_timeout(&AetherScanMode::Stealth), Duration::from_secs(180));
     assert_eq!(aether_startup_timeout(&AetherScanMode::Ironclad), Duration::from_secs(210));
+}
+
+#[test]
+fn test_m_native_windows_tun_detection_by_ip_and_name() {
+    use aether_desktop_lib::health::HealthProber;
+
+    // 1. Non-existent interface & non-existent IP must return false
+    let (found, _, all) = HealthProber::check_tun_interface_exists("non-existent-tun-xyz", Some("172.99.99.99/30"));
+    assert!(!found, "Non-existent TUN interface name and IP must not be found");
+    assert!(!all.is_empty(), "Native adapter enumeration should return system adapters");
+
+    // 2. Fallback matching test by IP
+    let _ = HealthProber::check_tun_interface_exists("singbox-tun", Some("172.19.0.1/30"));
+}
+
+#[test]
+fn test_n_process_elevation_token_check() {
+    use aether_desktop_lib::health::HealthProber;
+
+    // Must execute cleanly without crashing
+    let elevated = HealthProber::is_process_elevated();
+    println!("  [Info] Runtime token elevation check: is_elevated = {}", elevated);
 }
