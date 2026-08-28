@@ -19,10 +19,41 @@ use std::os::windows::process::CommandExt;
 
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
+fn classify_log_level(line: &str, is_stderr: bool) -> &'static str {
+    let upper = line.to_uppercase();
+    if upper.contains("ERROR")
+        || upper.contains("[ERR")
+        || upper.contains("FATAL")
+        || upper.contains("PANIC")
+    {
+        "ERROR"
+    } else if upper.contains("WARN") || upper.contains("[WRN") {
+        "WARN"
+    } else if upper.contains("DEBUG") || upper.contains("[DBG") || upper.contains("TRACE") {
+        "DEBUG"
+    } else if upper.contains("INFO")
+        || upper.contains("[INF")
+        || upper.contains("AETHER V")
+        || upper.contains("WIREGUARD")
+        || upper.contains("MASQUE")
+        || upper.contains("SCAN")
+        || upper.contains("CONNECTED")
+        || upper.contains("SOCKS")
+    {
+        "INFO"
+    } else if is_stderr {
+        // Standard libraries write normal logs to stderr; default to INFO unless explicitly an error
+        "INFO"
+    } else {
+        "INFO"
+    }
+}
+
 pub struct ProcessHandle {
     name: String,
     child: Option<Child>,
     stop_flag: Arc<AtomicBool>,
+    interactive_prompt_detected: Arc<AtomicBool>,
 }
 
 impl ProcessHandle {
@@ -39,6 +70,10 @@ impl ProcessHandle {
         } else {
             false
         }
+    }
+
+    pub fn is_interactive_prompt_detected(&self) -> bool {
+        self.interactive_prompt_detected.load(Ordering::SeqCst)
     }
 
     pub fn kill(&mut self, logger: &RingBufferLogger) {
@@ -73,6 +108,14 @@ impl AetherRunner {
         }
     }
 
+    pub fn is_interactive_prompt_detected(&self) -> bool {
+        if let Some(ref h) = self.handle {
+            h.is_interactive_prompt_detected()
+        } else {
+            false
+        }
+    }
+
     pub fn start(
         &mut self,
         settings: &AppSettings,
@@ -83,14 +126,27 @@ impl AetherRunner {
             return Err(format!("Aether executable not found at: {}", exe_path));
         }
 
+        // Dedicated managed AppData directory for Aether configuration & keys
+        let aether_data_dir = SettingsStorage::get_aether_data_dir();
+        if !aether_data_dir.exists() {
+            let _ = std::fs::create_dir_all(&aether_data_dir);
+        }
+
+        let cli_args = settings.aether.build_cli_arguments(None);
+
         logger.log(
             "INFO",
             "Aether",
-            format!("Launching Aether from {}", exe_path),
+            format!(
+                "Launching Aether (Non-interactive Profile) from {} with args: {:?}",
+                exe_path, cli_args
+            ),
         );
 
         let mut cmd = Command::new(exe_path);
-        cmd.args(&settings.aether.launch_arguments)
+        cmd.args(&cli_args)
+            .current_dir(&aether_data_dir)
+            .stdin(Stdio::null()) // Run headless without terminal stdin
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
@@ -108,10 +164,12 @@ impl AetherRunner {
         );
 
         let stop_flag = Arc::new(AtomicBool::new(false));
+        let interactive_prompt_detected = Arc::new(AtomicBool::new(false));
 
         if let Some(stdout) = child.stdout.take() {
             let log_clone = logger.clone();
             let stop_clone = stop_flag.clone();
+            let interactive_clone = interactive_prompt_detected.clone();
             thread::spawn(move || {
                 let reader = BufReader::new(stdout);
                 for line in reader.lines() {
@@ -120,7 +178,19 @@ impl AetherRunner {
                     }
                     if let Ok(l) = line {
                         if !l.trim().is_empty() {
-                            log_clone.log("DEBUG", "Aether", l);
+                            let lower = l.to_lowercase();
+                            if lower.contains("protocol:")
+                                || lower.contains("[1] masque")
+                                || lower.contains("[2] wireguard")
+                                || lower.contains("scan mode:")
+                                || lower.contains("ip version:")
+                            {
+                                interactive_clone.store(true, Ordering::SeqCst);
+                                log_clone.log("ERROR", "Aether", format!("Interactive prompt detected: '{}'. Managed launch arguments were incomplete.", l.trim()));
+                            } else {
+                                let lvl = classify_log_level(&l, false);
+                                log_clone.log(lvl, "Aether", l);
+                            }
                         }
                     }
                 }
@@ -130,6 +200,7 @@ impl AetherRunner {
         if let Some(stderr) = child.stderr.take() {
             let log_clone = logger.clone();
             let stop_clone = stop_flag.clone();
+            let interactive_clone = interactive_prompt_detected.clone();
             thread::spawn(move || {
                 let reader = BufReader::new(stderr);
                 for line in reader.lines() {
@@ -138,7 +209,19 @@ impl AetherRunner {
                     }
                     if let Ok(l) = line {
                         if !l.trim().is_empty() {
-                            log_clone.log("WARN", "Aether", l);
+                            let lower = l.to_lowercase();
+                            if lower.contains("protocol:")
+                                || lower.contains("[1] masque")
+                                || lower.contains("[2] wireguard")
+                                || lower.contains("scan mode:")
+                                || lower.contains("ip version:")
+                            {
+                                interactive_clone.store(true, Ordering::SeqCst);
+                                log_clone.log("ERROR", "Aether", format!("Interactive prompt detected: '{}'. Managed launch arguments were incomplete.", l.trim()));
+                            } else {
+                                let lvl = classify_log_level(&l, true);
+                                log_clone.log(lvl, "Aether", l);
+                            }
                         }
                     }
                 }
@@ -149,6 +232,7 @@ impl AetherRunner {
             name: "Aether".to_string(),
             child: Some(child),
             stop_flag,
+            interactive_prompt_detected,
         });
 
         Ok(())
@@ -274,6 +358,7 @@ impl SingBoxRunner {
         cmd.arg("run")
             .arg("-c")
             .arg(config_path)
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
@@ -291,6 +376,7 @@ impl SingBoxRunner {
         );
 
         let stop_flag = Arc::new(AtomicBool::new(false));
+        let interactive_prompt_detected = Arc::new(AtomicBool::new(false));
 
         if let Some(stdout) = child.stdout.take() {
             let log_clone = logger.clone();
@@ -303,7 +389,8 @@ impl SingBoxRunner {
                     }
                     if let Ok(l) = line {
                         if !l.trim().is_empty() {
-                            log_clone.log("INFO", "sing-box", l);
+                            let lvl = classify_log_level(&l, false);
+                            log_clone.log(lvl, "sing-box", l);
                         }
                     }
                 }
@@ -321,7 +408,8 @@ impl SingBoxRunner {
                     }
                     if let Ok(l) = line {
                         if !l.trim().is_empty() {
-                            log_clone.log("WARN", "sing-box", l);
+                            let lvl = classify_log_level(&l, true);
+                            log_clone.log(lvl, "sing-box", l);
                         }
                     }
                 }
@@ -332,6 +420,7 @@ impl SingBoxRunner {
             name: "sing-box".to_string(),
             child: Some(child),
             stop_flag,
+            interactive_prompt_detected,
         });
 
         Ok(())

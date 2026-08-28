@@ -8,6 +8,8 @@ import {
   Save,
   CheckCircle2,
   HelpCircle,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import { AppSettings, CloudflareTrace } from "../../types";
 import { api } from "../../services/api";
@@ -27,6 +29,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, onSave, on
   const [testLoading, setTestLoading] = useState<boolean>(false);
   const [testError, setTestError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState<boolean>(false);
+  const [showAdvancedAether, setShowAdvancedAether] = useState<boolean>(false);
 
   const handleTestSecondaryProxy = async () => {
     setTestLoading(true);
@@ -61,14 +64,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, onSave, on
         <div className="flex items-center gap-2">
           <button
             onClick={onReset}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 text-xs font-medium transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 text-xs font-medium transition-colors cursor-pointer"
           >
             <RotateCcw className="w-3.5 h-3.5" />
             <span>Reset Defaults</span>
           </button>
           <button
             onClick={handleSave}
-            className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold shadow-md shadow-brand-900/30 transition-all active:scale-95"
+            className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold shadow-md shadow-brand-900/30 transition-all active:scale-95 cursor-pointer"
           >
             {saveSuccess ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-300" /> : <Save className="w-3.5 h-3.5" />}
             <span>{saveSuccess ? "Saved!" : "Save Changes"}</span>
@@ -90,7 +93,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, onSave, on
             <button
               key={t.id}
               onClick={() => setActiveTab(t.id as any)}
-              className={`flex items-center gap-1.5 pb-2.5 border-b-2 transition-all ${
+              className={`flex items-center gap-1.5 pb-2.5 border-b-2 transition-all cursor-pointer ${
                 isActive
                   ? "border-brand-500 text-brand-400 font-semibold"
                   : "border-transparent text-zinc-400 hover:text-zinc-300"
@@ -195,7 +198,84 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, onSave, on
                 }
                 className="w-full px-3 py-1.5 bg-zinc-950 border border-zinc-800 rounded-lg text-xs text-zinc-200 font-mono focus:outline-none focus:border-brand-500"
               />
-              <p className="text-[11px] text-zinc-500 mt-1">Default development path: C:\Aether\aether.exe</p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-zinc-300 mb-1">Protocol Profile</label>
+                <select
+                  value={localSettings.aether.protocol || "wireguard"}
+                  onChange={(e) =>
+                    setLocalSettings({
+                      ...localSettings,
+                      aether: { ...localSettings.aether, protocol: e.target.value as any },
+                    })
+                  }
+                  className="w-full px-3 py-1.5 bg-zinc-950 border border-zinc-800 rounded-lg text-xs text-zinc-200 font-medium focus:outline-none focus:border-brand-500"
+                >
+                  <option value="wireguard">WireGuard (--wg) [Recommended]</option>
+                  <option value="masque">MASQUE (--masque)</option>
+                  <option value="warp_in_warp">WARP-in-WARP / Gool (--gool)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-zinc-300 mb-1">IP Routing Mode</label>
+                <select
+                  value={localSettings.aether.ipMode || "ipv4"}
+                  onChange={(e) =>
+                    setLocalSettings({
+                      ...localSettings,
+                      aether: { ...localSettings.aether, ipMode: e.target.value as any },
+                    })
+                  }
+                  className="w-full px-3 py-1.5 bg-zinc-950 border border-zinc-800 rounded-lg text-xs text-zinc-200 font-medium focus:outline-none focus:border-brand-500"
+                >
+                  <option value="ipv4">IPv4 (-4) [Recommended]</option>
+                  <option value="ipv6">IPv6 (-6)</option>
+                  <option value="dual">Dual Stack (--dual)</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-zinc-300 mb-1">Endpoint Scan Mode</label>
+                <select
+                  value={localSettings.aether.scanMode || "thorough"}
+                  onChange={(e) =>
+                    setLocalSettings({
+                      ...localSettings,
+                      aether: { ...localSettings.aether, scanMode: e.target.value as any },
+                    })
+                  }
+                  className="w-full px-3 py-1.5 bg-zinc-950 border border-zinc-800 rounded-lg text-xs text-zinc-200 font-medium focus:outline-none focus:border-brand-500"
+                >
+                  <option value="thorough">Thorough (--thorough) [Recommended]</option>
+                  <option value="balanced">Balanced (--balanced)</option>
+                  <option value="turbo">Turbo (--turbo)</option>
+                  <option value="stealth">Stealth (--stealth)</option>
+                  <option value="ironclad">Ironclad (--ironclad)</option>
+                </select>
+              </div>
+
+              <div className="flex items-center justify-between p-2.5 rounded-lg bg-zinc-900/60 border border-zinc-800 self-end">
+                <div>
+                  <div className="text-xs font-semibold text-zinc-200">Quick Reconnect</div>
+                  <div className="text-[10px] text-zinc-400">Fast tunnel resumption (--quick-reconnect)</div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={localSettings.aether.quickReconnect ?? true}
+                  onChange={(e) =>
+                    setLocalSettings({
+                      ...localSettings,
+                      aether: { ...localSettings.aether, quickReconnect: e.target.checked },
+                    })
+                  }
+                  className="w-4 h-4 rounded text-brand-500 focus:ring-brand-500 bg-zinc-950 border-zinc-700 cursor-pointer"
+                />
+              </div>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
@@ -227,6 +307,39 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, onSave, on
                   className="w-full px-3 py-1.5 bg-zinc-950 border border-zinc-800 rounded-lg text-xs text-zinc-200 font-mono focus:outline-none focus:border-brand-500"
                 />
               </div>
+            </div>
+
+            {/* Advanced developer parameters */}
+            <div className="border border-zinc-800/80 rounded-lg p-3 bg-zinc-950/40">
+              <button
+                onClick={() => setShowAdvancedAether(!showAdvancedAether)}
+                className="flex items-center justify-between w-full text-xs font-semibold text-zinc-400 hover:text-zinc-200 cursor-pointer"
+              >
+                <span>Advanced Developer Flags</span>
+                {showAdvancedAether ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+              </button>
+              {showAdvancedAether && (
+                <div className="mt-3 pt-3 border-t border-zinc-800 space-y-2">
+                  <label className="block text-[11px] text-zinc-400">
+                    Additional CLI Arguments (space-separated)
+                  </label>
+                  <input
+                    type="text"
+                    value={(localSettings.aether.additionalArguments || []).join(" ")}
+                    onChange={(e) =>
+                      setLocalSettings({
+                        ...localSettings,
+                        aether: {
+                          ...localSettings.aether,
+                          additionalArguments: e.target.value.split(" ").filter((s) => s.trim().length > 0),
+                        },
+                      })
+                    }
+                    placeholder="e.g. --verbose"
+                    className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded-lg text-xs text-zinc-200 font-mono focus:outline-none focus:border-brand-500"
+                  />
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -288,7 +401,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, onSave, on
                 <button
                   onClick={handleTestSecondaryProxy}
                   disabled={testLoading}
-                  className="px-3 py-1 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-zinc-200 text-xs font-medium rounded-md transition-colors"
+                  className="px-3 py-1 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-zinc-200 text-xs font-medium rounded-md transition-colors cursor-pointer"
                 >
                   {testLoading ? "Testing..." : "Test Connection"}
                 </button>

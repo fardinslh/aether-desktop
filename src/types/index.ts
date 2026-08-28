@@ -32,11 +32,20 @@ export interface ApplicationRule {
   isPreset?: boolean;
 }
 
+export type AetherProtocol = "wireguard" | "masque" | "warp_in_warp";
+export type AetherIpMode = "ipv4" | "ipv6" | "dual";
+export type AetherScanMode = "turbo" | "balanced" | "thorough" | "stealth" | "ironclad";
+
 export interface AetherSettings {
   executablePath: string;
   host: string;
   port: number;
-  launchArguments: string[];
+  protocol: AetherProtocol;
+  ipMode: AetherIpMode;
+  scanMode: AetherScanMode;
+  quickReconnect: boolean;
+  additionalArguments: string[];
+  launchArguments?: string[];
 }
 
 export interface SecondaryProxySettings {

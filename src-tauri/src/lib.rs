@@ -31,11 +31,16 @@ pub fn run() {
         orchestrator: orchestrator.clone(),
     };
 
+    let orchestrator_setup = orchestrator.clone();
     let orchestrator_exit = orchestrator.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(app_state)
+        .setup(move |app| {
+            orchestrator_setup.set_app_handle(app.handle().clone());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::get_settings,
             commands::save_settings,

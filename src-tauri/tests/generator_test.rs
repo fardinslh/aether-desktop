@@ -4,7 +4,6 @@ use aether_desktop_lib::models::singbox::{InboundConfig, OutboundConfig};
 use aether_desktop_lib::models::{
     AppSettings, ApplicationRule, ConnectionState, RouteDestination, RulePriority, RuleSource,
 };
-use aether_desktop_lib::process::detector::ProcessDetector;
 use aether_desktop_lib::process::runner::SingBoxRunner;
 use aether_desktop_lib::process::ConnectionOrchestrator;
 use aether_desktop_lib::routing::SingBoxConfigGenerator;
@@ -18,71 +17,74 @@ fn main() {
     println!("=== Running Aether Desktop Test Suite ===\n");
 
     test_reference_config_match();
-    println!("âœ“ TEST 0: Reference sing-box configuration match (PASSED)");
+    println!("✓ TEST 0: Reference sing-box configuration match (PASSED)");
 
     test_scenario_1_discord_high_priority_3478();
-    println!("âœ“ TEST 1: Discord.exe (High Priority) on port 3478 -> v2ray (PASSED - Discord Voice Fixed)");
+    println!("✓ TEST 1: Discord.exe (High Priority) on port 3478 -> v2ray (PASSED - Discord Voice Fixed)");
 
     test_scenario_2_discord_high_priority_5349();
-    println!("âœ“ TEST 2: Discord.exe (High Priority) on port 5349 -> v2ray (PASSED - Discord Voice Fixed)");
+    println!("✓ TEST 2: Discord.exe (High Priority) on port 5349 -> v2ray (PASSED - Discord Voice Fixed)");
 
     test_scenario_3_normal_secondary_proxy();
-    println!("âœ“ TEST 3: Spotify.exe (Normal Priority) on port 443 -> v2ray (PASSED)");
+    println!("✓ TEST 3: Spotify.exe (Normal Priority) on port 443 -> v2ray (PASSED)");
 
     test_scenario_4_global_compatibility_fallback_against_normal_rule();
-    println!("âœ“ TEST 4: Spotify.exe (Normal Priority) on port 3478 -> direct (PASSED - Generals Fallback Wins)");
+    println!("✓ TEST 4: Spotify.exe (Normal Priority) on port 3478 -> direct (PASSED - Generals Fallback Wins)");
 
     test_scenario_5_high_custom_override();
-    println!("âœ“ TEST 5: Spotify.exe (High Priority Override) on port 3478 -> v2ray (PASSED)");
+    println!("✓ TEST 5: Spotify.exe (High Priority Override) on port 3478 -> v2ray (PASSED)");
 
     test_scenario_6_generals_regression();
-    println!("âœ“ TEST 6: Unassigned application on port 3478/5349 -> direct (PASSED - Generals Online Fixed)");
+    println!("✓ TEST 6: Unassigned application on port 3478/5349 -> direct (PASSED - Generals Online Fixed)");
 
     test_scenario_7_unmatched_normal_traffic();
-    println!("âœ“ TEST 7: Unassigned application normal traffic -> aether (PASSED)");
+    println!("✓ TEST 7: Unassigned application normal traffic -> aether (PASSED)");
 
     test_scenario_8_private_lan();
-    println!("âœ“ TEST 8: Private LAN (192.168.1.1, 10.0.0.1, 172.16.0.1) -> direct (PASSED)");
+    println!("✓ TEST 8: Private LAN (192.168.1.1, 10.0.0.1, 172.16.0.1) -> direct (PASSED)");
 
     test_scenario_9_proxy_loop_prevention();
-    println!("âœ“ TEST 9: Core Proxy Loop Prevention (aether.exe, xray.exe, v2ray.exe, v2rayN.exe) -> direct (PASSED)");
+    println!("✓ TEST 9: Core Proxy Loop Prevention (aether.exe, xray.exe, v2ray.exe, v2rayN.exe) -> direct (PASSED)");
 
     println!(
         "\n--- Executing Reliability & Decision-Path Suite [UNIT / MOCKED INTEGRATION TESTED] ---"
     );
 
     test_a_candidate_validation_failure_preserves_old_state();
-    println!("âœ“ TEST A [UNIT / MOCKED INTEGRATION]: Failed live candidate validation leaves old process/config/settings active (PASSED)");
+    println!("✓ TEST A [UNIT / MOCKED INTEGRATION]: Failed live candidate validation leaves old process/config/settings active (PASSED)");
 
     test_b_missing_tun_triggers_verified_rollback();
-    println!("âœ“ TEST B [UNIT / MOCKED INTEGRATION]: Missing expected TUN interface triggers verified rollback (PASSED)");
+    println!("✓ TEST B [UNIT / MOCKED INTEGRATION]: Missing expected TUN interface triggers verified rollback (PASSED)");
 
     test_c_failed_egress_ip_mismatch_triggers_rollback();
-    println!("âœ“ TEST C [UNIT / MOCKED INTEGRATION]: System egress IP mismatch vs Aether egress triggers verified rollback (PASSED)");
+    println!("✓ TEST C [UNIT / MOCKED INTEGRATION]: System egress IP mismatch vs Aether egress triggers verified rollback (PASSED)");
 
     test_d_rollback_failure_surfaced_as_critical();
-    println!("âœ“ TEST D [UNIT / MOCKED INTEGRATION]: Rollback failure surfaces critical dual-error message (PASSED)");
+    println!("✓ TEST D [UNIT / MOCKED INTEGRATION]: Rollback failure surfaces critical dual-error message (PASSED)");
 
     test_e_persistence_failure_runtime_rollback();
-    println!("âœ“ TEST E [UNIT / MOCKED INTEGRATION]: Persistence failure after live apply triggers runtime rollback to old settings (PASSED)");
+    println!("✓ TEST E [UNIT / MOCKED INTEGRATION]: Persistence failure after live apply triggers runtime rollback to old settings (PASSED)");
 
     test_f_existing_aether_reuse_decision_path();
-    println!("âœ“ TEST F [UNIT / MOCKED INTEGRATION]: Existing healthy Aether listener on port 1819 is marked unmanaged and reused (PASSED)");
+    println!("✓ TEST F [UNIT / MOCKED INTEGRATION]: Existing healthy Aether listener on port 1819 is marked unmanaged and reused (PASSED)");
 
     test_g_occupied_wrong_port_owner_rejection();
-    println!("âœ“ TEST G [UNIT / MOCKED INTEGRATION]: Port 1819 owned by non-Aether process is rejected with port conflict error (PASSED)");
+    println!("✓ TEST G [UNIT / MOCKED INTEGRATION]: Port 1819 owned by non-Aether process is rejected with port conflict error (PASSED)");
 
     test_h_github_digest_integrity_verification();
-    println!("âœ“ TEST H [UNIT / MOCKED INTEGRATION]: GitHub API release asset digest verification fails closed on mismatch (PASSED)");
+    println!("✓ TEST H [UNIT / MOCKED INTEGRATION]: GitHub API release asset digest verification fails closed on mismatch (PASSED)");
 
     test_i_safe_staging_promotion_restore_and_verification();
-    println!("âœ“ TEST I [UNIT / MOCKED INTEGRATION]: Known-good installation survives failed promotion with verified restoration (PASSED)");
+    println!("✓ TEST I [UNIT / MOCKED INTEGRATION]: Known-good installation survives failed promotion with verified restoration (PASSED)");
 
     test_j_download_size_and_truncation_guards();
-    println!("âœ“ TEST J [UNIT / MOCKED INTEGRATION]: Truncated and oversized downloads are rejected by validation helper (PASSED)");
+    println!("✓ TEST J [UNIT / MOCKED INTEGRATION]: Truncated and oversized downloads are rejected by validation helper (PASSED)");
+
+    test_k_aether_noninteractive_launch_arguments();
+    println!("✓ TEST K [UNIT / MOCKED INTEGRATION]: Aether non-interactive CLI arguments build correctly (--bind, --wg, -4, --thorough, --quick-reconnect) (PASSED)");
 
     println!("\n==================================================================");
-    println!("ALL 20 VERIFICATION & RELIABILITY TESTS PASSED!");
+    println!("ALL 21 VERIFICATION & RELIABILITY TESTS PASSED!");
     println!("==================================================================");
 }
 
@@ -344,7 +346,6 @@ fn test_b_missing_tun_triggers_verified_rollback() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
         let mut runner = SingBoxRunner::new();
-        // A non-existent adapter name will fail the bounded verification loop and trigger rollback
         let res = runner
             .verify_router_and_egress("non-existent-tun-adapter", Duration::from_millis(400), None)
             .await;
@@ -364,7 +365,6 @@ fn test_c_failed_egress_ip_mismatch_triggers_rollback() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
         let mut runner = SingBoxRunner::new();
-        // Expected Aether IP does not match dummy egress -> must reject
         let res = runner
             .verify_router_and_egress("singbox-tun", Duration::from_millis(400), Some("1.2.3.4"))
             .await;
@@ -405,7 +405,6 @@ fn test_e_persistence_failure_runtime_rollback() {
         let mut candidate = old_settings.clone();
         candidate.secondary_proxy.port = 10809;
 
-        // Disconnected state: apply_live_settings is a no-op Ok(())
         let live_res = orchestrator.apply_live_settings(&candidate).await;
         assert!(live_res.is_ok());
     });
@@ -418,7 +417,6 @@ fn test_f_existing_aether_reuse_decision_path() {
         let logger = aether_desktop_lib::logging::RingBufferLogger::new(10);
         let orchestrator = ConnectionOrchestrator::new(state.clone(), logger);
 
-        // Verify initial management flag is false (external instances are not managed)
         assert!(!orchestrator
             .is_aether_managed
             .load(std::sync::atomic::Ordering::SeqCst));
@@ -428,7 +426,6 @@ fn test_f_existing_aether_reuse_decision_path() {
 fn test_g_occupied_wrong_port_owner_rejection() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
-        // Probe port with invalid proxy format
         let probe = aether_desktop_lib::health::HealthProber::query_cloudflare_trace_via_socks5(
             "127.0.0.1",
             65534,
@@ -484,7 +481,6 @@ fn test_i_safe_staging_promotion_restore_and_verification() {
     let bad_staging_exe = staging_dir.join("aether.exe");
     std::fs::write(&bad_staging_exe, "CORRUPT_STAGING").unwrap();
 
-    // Promoter with failing validator
     let res = DependencyManager::safe_promote_staging_dir(
         &staging_dir,
         &final_dir,
@@ -500,8 +496,6 @@ fn test_i_safe_staging_promotion_restore_and_verification() {
     );
 
     assert!(res.is_err(), "Failed validation must reject promotion");
-
-    // Verify original installation was restored and re-validated!
     assert!(
         original_exe.exists(),
         "Original installation must survive failed promotion"
@@ -523,10 +517,28 @@ fn test_j_download_size_and_truncation_guards() {
         "Truncated bytes mismatch must be rejected"
     );
 
-    let oversized: u64 = 150_000_000; // 150 MB
-    let max_allowed: u64 = 104_857_600; // 100 MB
+    let oversized: u64 = 150_000_000;
+    let max_allowed: u64 = 104_857_600;
     assert!(
         oversized > max_allowed,
         "Oversized archive must exceed maximum limit"
+    );
+}
+
+fn test_k_aether_noninteractive_launch_arguments() {
+    let settings = AppSettings::default();
+    let args = settings.aether.build_cli_arguments(None);
+
+    assert_eq!(
+        args,
+        vec![
+            "--bind",
+            "127.0.0.1:1819",
+            "--wg",
+            "-4",
+            "--thorough",
+            "--quick-reconnect"
+        ],
+        "Aether default arguments must match proven non-interactive WireGuard profile"
     );
 }

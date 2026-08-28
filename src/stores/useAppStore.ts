@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { AppSettings, ApplicationRule, ConnectionState, HealthStatus, LogEntry, RouteDestination } from "../types";
 import { api } from "../services/api";
+import { listen } from "@tauri-apps/api/event";
 
 export function useAppStore() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -10,6 +11,9 @@ export function useAppStore() {
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isApplyingRouting, setIsApplyingRouting] = useState<boolean>(false);
   const [errorDetails, setErrorDetails] = useState<string | null>(null);
+
+  const stateRef = useRef<ConnectionState>(connectionState);
+  stateRef.current = connectionState;
 
   // Fetch initial state
   const refreshAll = useCallback(async () => {
@@ -34,7 +38,22 @@ export function useAppStore() {
 
   useEffect(() => {
     refreshAll();
-    const interval = setInterval(async () => {
+
+    // 1. Event-driven connection state updates
+    let unlistenFn: (() => void) | null = null;
+    listen<ConnectionState>("connection-state-changed", (event) => {
+      if (event.payload) {
+        setConnectionState(event.payload);
+      }
+    }).then((unlisten) => {
+      unlistenFn = unlisten;
+    }).catch((err) => {
+      console.warn("Failed to attach Tauri event listener:", err);
+    });
+
+    // 2. Adaptive polling reconciliation
+    let timeoutId: ReturnType<typeof setTimeout>;
+    const poll = async () => {
       try {
         const [st, hl, lg] = await Promise.all([
           api.getConnectionState(),
@@ -47,9 +66,21 @@ export function useAppStore() {
       } catch {
         // network polling error
       }
-    }, 1500);
 
-    return () => clearInterval(interval);
+      const isTransitioning =
+        stateRef.current !== "CONNECTED" &&
+        stateRef.current !== "DISCONNECTED" &&
+        stateRef.current !== "ERROR";
+
+      timeoutId = setTimeout(poll, isTransitioning ? 250 : 2000);
+    };
+
+    timeoutId = setTimeout(poll, 1000);
+
+    return () => {
+      if (unlistenFn) unlistenFn();
+      clearTimeout(timeoutId);
+    };
   }, [refreshAll]);
 
   const updateSettings = async (newSettings: AppSettings) => {
@@ -124,9 +155,11 @@ export function useAppStore() {
     await updateSettings(updated);
   };
 
-  // State Transition & Connection Triggers
+  // Immediate State Transition Triggers
   const triggerConnect = async () => {
     setErrorDetails(null);
+    // Instant 0ms visual feedback on click
+    setConnectionState("STARTING_AETHER");
     try {
       await api.connect();
       const [st, h] = await Promise.all([api.getConnectionState(), api.getHealthStatus()]);
@@ -139,6 +172,8 @@ export function useAppStore() {
   };
 
   const triggerDisconnect = async () => {
+    // Instant 0ms visual feedback on click
+    setConnectionState("DISCONNECTING");
     try {
       await api.disconnect();
       const st = await api.getConnectionState();

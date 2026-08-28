@@ -68,6 +68,12 @@ impl SettingsStorage {
             .unwrap_or_else(|| PathBuf::from("./config"))
     }
 
+    pub fn get_aether_data_dir() -> PathBuf {
+        directories::BaseDirs::new()
+            .map(|b| b.data_local_dir().join("AetherDesktop").join("aether"))
+            .unwrap_or_else(|| PathBuf::from("./aether_data"))
+    }
+
     pub fn get_config_file_path() -> PathBuf {
         Self::get_config_dir().join("config.json")
     }
@@ -81,7 +87,31 @@ impl SettingsStorage {
         if path.exists() {
             match std::fs::read_to_string(&path) {
                 Ok(content) => match serde_json::from_str::<AppSettings>(&content) {
-                    Ok(settings) => settings,
+                    Ok(mut settings) => {
+                        let mut needs_migration = false;
+
+                        // Migrate legacy launchArguments or empty profile
+                        if !settings.aether.launch_arguments.is_empty() {
+                            settings.aether.launch_arguments.clear();
+                            needs_migration = true;
+                        }
+
+                        // Ensure proper non-interactive defaults
+                        if settings.aether.host.is_empty() {
+                            settings.aether.host = "127.0.0.1".to_string();
+                            needs_migration = true;
+                        }
+                        if settings.aether.port == 0 {
+                            settings.aether.port = 1819;
+                            needs_migration = true;
+                        }
+
+                        if needs_migration {
+                            let _ = Self::save(&settings);
+                        }
+
+                        settings
+                    }
                     Err(e) => {
                         eprintln!("Failed to parse settings JSON: {}. Using defaults.", e);
                         AppSettings::default()

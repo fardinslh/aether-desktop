@@ -8,6 +8,7 @@ use parking_lot::RwLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use tauri::Emitter;
 use tokio::sync::Mutex;
 
 pub struct ConnectionOrchestrator {
@@ -18,6 +19,7 @@ pub struct ConnectionOrchestrator {
     pub state: Arc<RwLock<ConnectionState>>,
     pub logger: RingBufferLogger,
     pub last_error: Arc<RwLock<Option<String>>>,
+    pub app_handle: Arc<RwLock<Option<tauri::AppHandle>>>,
 }
 
 impl ConnectionOrchestrator {
@@ -30,7 +32,12 @@ impl ConnectionOrchestrator {
             state,
             logger,
             last_error: Arc::new(RwLock::new(None)),
+            app_handle: Arc::new(RwLock::new(None)),
         }
+    }
+
+    pub fn set_app_handle(&self, handle: tauri::AppHandle) {
+        *self.app_handle.write() = Some(handle);
     }
 
     fn set_state(&self, new_state: ConnectionState) {
@@ -40,6 +47,9 @@ impl ConnectionOrchestrator {
             "STATE",
             format!("State changed to: {:?}", new_state),
         );
+        if let Some(ref handle) = *self.app_handle.read() {
+            let _ = handle.emit("connection-state-changed", new_state);
+        }
     }
 
     fn set_error(&self, err_msg: String) {
@@ -104,7 +114,7 @@ impl ConnectionOrchestrator {
                         }
                         Err(e) => {
                             let err = format!(
-                                "Port {}:{} is owned by an existing Aether process (PID: {}), but SOCKS5 validation failed: {}. Ensure Aether is logged in and connected.",
+                                "Port {}:{} is owned by an existing Aether process (PID: {}), but SOCKS5 validation failed: {}. Ensure Aether is connected.",
                                 aether_host, aether_port, pid, e
                             );
                             self.set_error(err.clone());
@@ -155,8 +165,28 @@ impl ConnectionOrchestrator {
             // Probe managed Aether until ready
             self.set_state(ConnectionState::TestingAether);
             let mut aether_ready = false;
-            for attempt in 1..=20 {
-                tokio::time::sleep(Duration::from_millis(500)).await;
+            for attempt in 1..=25 {
+                tokio::time::sleep(Duration::from_millis(400)).await;
+
+                // Immediate interactive prompt abort check
+                {
+                    let mut aether_guard = self.aether.lock().await;
+                    if aether_guard.is_interactive_prompt_detected() {
+                        let err = "Aether entered interactive mode. Managed launch arguments are incomplete.".to_string();
+                        aether_guard.stop(&self.logger);
+                        self.set_error(err.clone());
+                        return Err(err);
+                    }
+                    if !aether_guard.is_running() {
+                        let err =
+                            "Aether process stopped unexpectedly. View Diagnostics for details."
+                                .to_string();
+                        aether_guard.stop(&self.logger);
+                        self.set_error(err.clone());
+                        return Err(err);
+                    }
+                }
+
                 if HealthProber::check_port_open(aether_host, aether_port, 300).await {
                     match HealthProber::query_cloudflare_trace_via_socks5(aether_host, aether_port)
                         .await
@@ -178,7 +208,7 @@ impl ConnectionOrchestrator {
                             self.logger.log(
                                 "DEBUG",
                                 "Aether",
-                                format!("Trace probe attempt {}/20 pending: {}", attempt, err),
+                                format!("Trace probe attempt {}/25 pending: {}", attempt, err),
                             );
                         }
                     }
@@ -187,7 +217,7 @@ impl ConnectionOrchestrator {
 
             if !aether_ready {
                 let err = format!(
-                    "Aether failed to establish verified proxy tunnel on {}:{} within timeout. Check Aether credentials and server status.",
+                    "Aether started, but local proxy on {}:{} did not become ready within timeout. View Diagnostics for details.",
                     aether_host, aether_port
                 );
                 self.aether.lock().await.stop(&self.logger);

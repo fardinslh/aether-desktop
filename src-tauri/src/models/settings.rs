@@ -1,5 +1,6 @@
 use super::app_rule::{ApplicationRule, RouteDestination};
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -13,13 +14,113 @@ pub struct AppSettings {
     pub first_run_completed: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AetherProtocol {
+    Wireguard,
+    Masque,
+    WarpInWarp,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AetherIpMode {
+    Ipv4,
+    Ipv6,
+    Dual,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AetherScanMode {
+    Turbo,
+    Balanced,
+    Thorough,
+    Stealth,
+    Ironclad,
+}
+
+fn default_protocol() -> AetherProtocol {
+    AetherProtocol::Wireguard
+}
+
+fn default_ip_mode() -> AetherIpMode {
+    AetherIpMode::Ipv4
+}
+
+fn default_scan_mode() -> AetherScanMode {
+    AetherScanMode::Thorough
+}
+
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AetherSettings {
     pub executable_path: String,
     pub host: String,
     pub port: u16,
+    #[serde(default = "default_protocol")]
+    pub protocol: AetherProtocol,
+    #[serde(default = "default_ip_mode")]
+    pub ip_mode: AetherIpMode,
+    #[serde(default = "default_scan_mode")]
+    pub scan_mode: AetherScanMode,
+    #[serde(default = "default_true")]
+    pub quick_reconnect: bool,
+    #[serde(default)]
+    pub additional_arguments: Vec<String>,
+    #[serde(default)]
     pub launch_arguments: Vec<String>,
+}
+
+impl AetherSettings {
+    pub fn build_cli_arguments(&self, _aether_config_path: Option<&Path>) -> Vec<String> {
+        let mut args = Vec::new();
+
+        // 1. Explicit SOCKS bind
+        args.push("--bind".to_string());
+        args.push(format!("{}:{}", self.host, self.port));
+
+        // 2. Protocol
+        match self.protocol {
+            AetherProtocol::Wireguard => args.push("--wg".to_string()),
+            AetherProtocol::Masque => args.push("--masque".to_string()),
+            AetherProtocol::WarpInWarp => args.push("--gool".to_string()),
+        }
+
+        // 3. IP Mode
+        match self.ip_mode {
+            AetherIpMode::Ipv4 => args.push("-4".to_string()),
+            AetherIpMode::Ipv6 => args.push("-6".to_string()),
+            AetherIpMode::Dual => args.push("--dual".to_string()),
+        }
+
+        // 4. Scan Mode
+        match self.scan_mode {
+            AetherScanMode::Turbo => args.push("--turbo".to_string()),
+            AetherScanMode::Balanced => args.push("--balanced".to_string()),
+            AetherScanMode::Thorough => args.push("--thorough".to_string()),
+            AetherScanMode::Stealth => args.push("--stealth".to_string()),
+            AetherScanMode::Ironclad => args.push("--ironclad".to_string()),
+        }
+
+        // 5. Quick Reconnect
+        if self.quick_reconnect {
+            args.push("--quick-reconnect".to_string());
+        }
+
+        // 6. Additional developer arguments
+        for arg in &self.additional_arguments {
+            if !arg.trim().is_empty() {
+                args.push(arg.clone());
+            }
+        }
+
+        args
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -73,11 +174,8 @@ pub struct CompatibilityRule {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct CompatibilitySettings {
-    /// Generals Online STUN/TURN fallback: ports 3478, 5349 -> Direct (fallback only, evaluated after explicit application rules)
     pub generals_stun_turn_fallback: bool,
-    /// Private LAN IP bypass (RFC 1918) -> Direct
     pub private_ip_bypass: bool,
-    /// Custom app-scoped or global fallback compatibility rules
     pub custom_compatibility_rules: Vec<CompatibilityRule>,
 }
 
@@ -98,6 +196,11 @@ impl Default for AppSettings {
                 executable_path: "C:\\Aether\\aether.exe".to_string(),
                 host: "127.0.0.1".to_string(),
                 port: 1819,
+                protocol: AetherProtocol::Wireguard,
+                ip_mode: AetherIpMode::Ipv4,
+                scan_mode: AetherScanMode::Thorough,
+                quick_reconnect: true,
+                additional_arguments: vec![],
                 launch_arguments: vec![],
             },
             secondary_proxy: SecondaryProxySettings {
