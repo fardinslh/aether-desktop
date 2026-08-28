@@ -44,20 +44,37 @@ pub fn get_settings() -> Result<AppSettings, String> {
     Ok(SettingsStorage::load())
 }
 
-/// Transactional save_settings:
-/// - If Connected: live candidate settings must succeed on the network BEFORE saving to disk.
-/// - If Disconnected: saves to disk atomically.
+/// Fully Transactional save_settings:
+/// - In Connected Mode: applies candidate settings live on runtime.
+///   If disk persistence subsequently fails, rolls runtime back to previous configuration.
+/// - In Disconnected Mode: saves to disk atomically.
 #[tauri::command]
 pub async fn save_settings(
     settings: AppSettings,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let old_settings = SettingsStorage::load();
     let is_connected = *state.connection_state.read() == ConnectionState::Connected;
+
     if is_connected {
-        // 1. In connected mode, apply candidate settings live first. If this fails, error is returned
-        // and disk storage is NOT mutated.
+        // 1. Live apply candidate settings to running router first
         state.orchestrator.apply_live_settings(&settings).await?;
-        SettingsStorage::save(&settings)?;
+
+        // 2. Persist candidate settings atomically
+        if let Err(save_err) = SettingsStorage::save(&settings) {
+            state.logger.log(
+                "ERROR",
+                "Settings",
+                format!(
+                    "Disk save failed ({}). Rolling back runtime routing...",
+                    save_err
+                ),
+            );
+            // Roll back runtime router to old_settings
+            let _ = state.orchestrator.apply_live_settings(&old_settings).await;
+            return Err(format!("Settings persistence failed: {}. Runtime routing rolled back to previous configuration.", save_err));
+        }
+
         state.logger.log(
             "INFO",
             "Settings",

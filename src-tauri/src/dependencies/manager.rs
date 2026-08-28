@@ -75,22 +75,27 @@ impl DependencyManager {
         }
     }
 
-    /// Validates an aether.exe executable by checking name, running --version with timeout and parsing the output
+    /// Validates an aether.exe executable by checking exact name, running --version with timeout,
+    /// and requiring that the output strictly begins with "aether " and contains a valid version.
     pub fn validate_aether_binary(exe_path: &Path) -> Result<String, String> {
         if !exe_path.exists() {
             return Err(format!("Aether binary not found at {:?}", exe_path));
         }
 
-        // Verify filename
+        // 1. Verify exact filename is aether.exe
         let name_lower = exe_path
             .file_name()
             .unwrap_or_default()
             .to_string_lossy()
             .to_lowercase();
-        if !name_lower.starts_with("aether") || !name_lower.ends_with(".exe") {
-            return Err("Executable must be named aether.exe".to_string());
+        if name_lower != "aether.exe" {
+            return Err(format!(
+                "Executable name must be 'aether.exe' (got '{}')",
+                name_lower
+            ));
         }
 
+        // 2. Execute --version
         let mut cmd = Command::new(exe_path);
         cmd.arg("--version")
             .stdout(Stdio::piped())
@@ -107,34 +112,47 @@ impl DependencyManager {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(format!(
-                "aether --version exited with error: {}",
+                "aether --version exited with error code: {}",
                 stderr.trim()
             ));
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let first_line = stdout.lines().next().unwrap_or("").trim();
-        if first_line.is_empty() {
-            return Err("aether --version produced empty output".to_string());
+
+        // 3. Strict format validation: must start with "aether "
+        if !first_line.to_lowercase().starts_with("aether ") {
+            return Err(format!(
+                "Invalid Aether identity: expected output starting with 'aether <version>', received: '{}'",
+                first_line
+            ));
+        }
+
+        // Extract version portion after "aether "
+        let version_part = first_line["aether ".len()..].trim();
+        if version_part.is_empty() {
+            return Err("aether --version output contained no version identifier".to_string());
         }
 
         Ok(first_line.to_string())
     }
 
-    /// Validates a sing-box.exe executable by checking name, version and running a test config check
+    /// Validates a sing-box.exe executable by checking exact name, version, and running a test config check
     pub fn validate_singbox_binary(exe_path: &Path) -> Result<String, String> {
         if !exe_path.exists() {
             return Err(format!("sing-box binary not found at {:?}", exe_path));
         }
 
-        // Verify filename
         let name_lower = exe_path
             .file_name()
             .unwrap_or_default()
             .to_string_lossy()
             .to_lowercase();
-        if !name_lower.starts_with("sing-box") || !name_lower.ends_with(".exe") {
-            return Err("Executable must be named sing-box.exe".to_string());
+        if name_lower != "sing-box.exe" {
+            return Err(format!(
+                "Executable name must be 'sing-box.exe' (got '{}')",
+                name_lower
+            ));
         }
 
         // 1. Check version output with timeout
@@ -158,7 +176,10 @@ impl DependencyManager {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let first_line = stdout.lines().next().unwrap_or("").trim();
         if !first_line.to_lowercase().contains("sing-box") {
-            return Err("Executable output does not match expected sing-box identity".to_string());
+            return Err(format!(
+                "Executable output does not match expected sing-box identity: '{}'",
+                first_line
+            ));
         }
 
         // 2. Perform minimal configuration check test
@@ -264,6 +285,7 @@ impl DependencyManager {
 
         let temp_archive_path = staging_dir.join("aether-download.tmp.zip");
 
+        // Download with SHA-256 computation
         let sha256_result = Self::download_file_with_progress(
             app,
             "aether",
@@ -279,25 +301,69 @@ impl DependencyManager {
         }
         let calculated_hash = sha256_result.unwrap();
 
-        if let Some(chk_asset) = GithubClient::find_companion_checksum_asset(&release, &asset.name)
-        {
-            if let Ok(chk_text) =
-                GithubClient::fetch_checksum_text(&chk_asset.browser_download_url).await
-            {
-                if let Some(expected_hash) =
-                    Self::extract_hash_from_checksum_file(&chk_text, &asset.name)
-                {
-                    if !calculated_hash.eq_ignore_ascii_case(&expected_hash) {
-                        let _ = std::fs::remove_dir_all(&staging_dir);
-                        return Err(format!(
-                            "SHA-256 checksum mismatch! Expected: {}, Calculated: {}",
-                            expected_hash, calculated_hash
-                        ));
-                    }
-                }
+        // 1. Primary verification: GitHub API release asset digest
+        let expected_hash_opt = asset.parse_sha256_digest()?;
+        if let Some(expected_hash) = expected_hash_opt {
+            if !calculated_hash.eq_ignore_ascii_case(&expected_hash) {
+                let _ = std::fs::remove_dir_all(&staging_dir);
+                return Err(format!(
+                    "GitHub API SHA-256 digest mismatch! Expected: {}, Calculated: {}",
+                    expected_hash, calculated_hash
+                ));
             }
+            Self::emit_progress(
+                app,
+                "aether",
+                "SHA-256 digest verified (Official GitHub Metadata)",
+                85,
+                asset.size,
+                asset.size,
+            );
+        } else if let Some(chk_asset) =
+            GithubClient::find_companion_checksum_asset(&release, &asset.name)
+        {
+            // 2. Secondary fallback: companion checksum file
+            let chk_text = GithubClient::fetch_checksum_text(&chk_asset.browser_download_url)
+                .await
+                .map_err(|e| {
+                    let _ = std::fs::remove_dir_all(&staging_dir);
+                    format!("Failed to fetch companion checksum: {}", e)
+                })?;
+            let comp_hash = Self::extract_hash_from_checksum_file(&chk_text, &asset.name)
+                .ok_or_else(|| {
+                    let _ = std::fs::remove_dir_all(&staging_dir);
+                    format!(
+                        "Failed to parse SHA-256 for {} in companion checksum file",
+                        asset.name
+                    )
+                })?;
+            if !calculated_hash.eq_ignore_ascii_case(&comp_hash) {
+                let _ = std::fs::remove_dir_all(&staging_dir);
+                return Err(format!(
+                    "Companion SHA-256 mismatch! Expected: {}, Calculated: {}",
+                    comp_hash, calculated_hash
+                ));
+            }
+            Self::emit_progress(
+                app,
+                "aether",
+                "SHA-256 checksum verified (Companion Asset)",
+                85,
+                asset.size,
+                asset.size,
+            );
+        } else {
+            Self::emit_progress(
+                app,
+                "aether",
+                "Official release asset (Cryptographic digest unavailable)",
+                85,
+                asset.size,
+                asset.size,
+            );
         }
 
+        // Extract safely into staging
         Self::emit_progress(
             app,
             "aether",
@@ -316,6 +382,7 @@ impl DependencyManager {
         }
         let _ = std::fs::remove_file(&temp_archive_path);
 
+        // Locate and validate executable in staging
         Self::emit_progress(
             app,
             "aether",
@@ -324,7 +391,7 @@ impl DependencyManager {
             asset.size,
             asset.size,
         );
-        let found_exe = match Self::find_executable_in_dir(&extracted_dir, "aether.exe") {
+        let staging_exe = match Self::find_executable_in_dir(&extracted_dir, "aether.exe") {
             Some(p) => p,
             None => {
                 let _ = std::fs::remove_dir_all(&staging_dir);
@@ -335,7 +402,7 @@ impl DependencyManager {
             }
         };
 
-        let version_str = match Self::validate_aether_binary(&found_exe) {
+        let version_str = match Self::validate_aether_binary(&staging_exe) {
             Ok(v) => v,
             Err(e) => {
                 let _ = std::fs::remove_dir_all(&staging_dir);
@@ -343,35 +410,19 @@ impl DependencyManager {
             }
         };
 
+        // Safe promotion: never destroy existing installation before promotion succeeds
         let final_dir = Self::get_base_dependencies_dir()
             .join("aether")
             .join(&release.tag_name);
-        if final_dir.exists() {
-            let _ = std::fs::remove_dir_all(&final_dir);
-        }
-        if let Some(parent) = final_dir.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-
-        if let Err(_e) = std::fs::rename(&extracted_dir, &final_dir) {
-            if let Err(copy_err) = Self::copy_dir_recursive(&extracted_dir, &final_dir) {
-                let _ = std::fs::remove_dir_all(&staging_dir);
-                return Err(format!(
-                    "Failed to promote Aether installation: {}",
-                    copy_err
-                ));
-            }
-        }
+        let final_exe = Self::safe_promote_staging_dir(
+            &extracted_dir,
+            &final_dir,
+            "aether.exe",
+            Self::validate_aether_binary,
+        )?;
         let _ = std::fs::remove_dir_all(&staging_dir);
 
-        let final_exe = final_dir.join("aether.exe");
-        let exe_str = if final_exe.exists() {
-            final_exe.to_string_lossy().to_string()
-        } else {
-            Self::find_executable_in_dir(&final_dir, "aether.exe")
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|| final_exe.to_string_lossy().to_string())
-        };
+        let exe_str = final_exe.to_string_lossy().to_string();
 
         let mut settings = SettingsStorage::load();
         settings.aether.executable_path = exe_str.clone();
@@ -430,23 +481,66 @@ impl DependencyManager {
         }
         let calculated_hash = sha256_result.unwrap();
 
-        if let Some(chk_asset) = GithubClient::find_companion_checksum_asset(&release, &asset.name)
-        {
-            if let Ok(chk_text) =
-                GithubClient::fetch_checksum_text(&chk_asset.browser_download_url).await
-            {
-                if let Some(expected_hash) =
-                    Self::extract_hash_from_checksum_file(&chk_text, &asset.name)
-                {
-                    if !calculated_hash.eq_ignore_ascii_case(&expected_hash) {
-                        let _ = std::fs::remove_dir_all(&staging_dir);
-                        return Err(format!(
-                            "SHA-256 checksum mismatch! Expected: {}, Calculated: {}",
-                            expected_hash, calculated_hash
-                        ));
-                    }
-                }
+        // 1. Primary verification: GitHub API release asset digest
+        let expected_hash_opt = asset.parse_sha256_digest()?;
+        if let Some(expected_hash) = expected_hash_opt {
+            if !calculated_hash.eq_ignore_ascii_case(&expected_hash) {
+                let _ = std::fs::remove_dir_all(&staging_dir);
+                return Err(format!(
+                    "GitHub API SHA-256 digest mismatch! Expected: {}, Calculated: {}",
+                    expected_hash, calculated_hash
+                ));
             }
+            Self::emit_progress(
+                app,
+                "sing-box",
+                "SHA-256 digest verified (Official GitHub Metadata)",
+                85,
+                asset.size,
+                asset.size,
+            );
+        } else if let Some(chk_asset) =
+            GithubClient::find_companion_checksum_asset(&release, &asset.name)
+        {
+            // 2. Secondary fallback: companion checksum file
+            let chk_text = GithubClient::fetch_checksum_text(&chk_asset.browser_download_url)
+                .await
+                .map_err(|e| {
+                    let _ = std::fs::remove_dir_all(&staging_dir);
+                    format!("Failed to fetch companion checksum: {}", e)
+                })?;
+            let comp_hash = Self::extract_hash_from_checksum_file(&chk_text, &asset.name)
+                .ok_or_else(|| {
+                    let _ = std::fs::remove_dir_all(&staging_dir);
+                    format!(
+                        "Failed to parse SHA-256 for {} in companion checksum file",
+                        asset.name
+                    )
+                })?;
+            if !calculated_hash.eq_ignore_ascii_case(&comp_hash) {
+                let _ = std::fs::remove_dir_all(&staging_dir);
+                return Err(format!(
+                    "Companion SHA-256 mismatch! Expected: {}, Calculated: {}",
+                    comp_hash, calculated_hash
+                ));
+            }
+            Self::emit_progress(
+                app,
+                "sing-box",
+                "SHA-256 checksum verified (Companion Asset)",
+                85,
+                asset.size,
+                asset.size,
+            );
+        } else {
+            Self::emit_progress(
+                app,
+                "sing-box",
+                "Official release asset (Cryptographic digest unavailable)",
+                85,
+                asset.size,
+                asset.size,
+            );
         }
 
         Self::emit_progress(
@@ -475,7 +569,7 @@ impl DependencyManager {
             asset.size,
             asset.size,
         );
-        let found_exe = match Self::find_executable_in_dir(&extracted_dir, "sing-box.exe") {
+        let staging_exe = match Self::find_executable_in_dir(&extracted_dir, "sing-box.exe") {
             Some(p) => p,
             None => {
                 let _ = std::fs::remove_dir_all(&staging_dir);
@@ -486,7 +580,7 @@ impl DependencyManager {
             }
         };
 
-        let version_str = match Self::validate_singbox_binary(&found_exe) {
+        let version_str = match Self::validate_singbox_binary(&staging_exe) {
             Ok(v) => v,
             Err(e) => {
                 let _ = std::fs::remove_dir_all(&staging_dir);
@@ -497,35 +591,19 @@ impl DependencyManager {
             }
         };
 
+        // Safe promotion
         let final_dir = Self::get_base_dependencies_dir()
             .join("sing-box")
             .join(&release.tag_name);
-        if final_dir.exists() {
-            let _ = std::fs::remove_dir_all(&final_dir);
-        }
-        if let Some(parent) = final_dir.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-
-        if let Err(_e) = std::fs::rename(&extracted_dir, &final_dir) {
-            if let Err(copy_err) = Self::copy_dir_recursive(&extracted_dir, &final_dir) {
-                let _ = std::fs::remove_dir_all(&staging_dir);
-                return Err(format!(
-                    "Failed to promote sing-box installation: {}",
-                    copy_err
-                ));
-            }
-        }
+        let final_exe = Self::safe_promote_staging_dir(
+            &extracted_dir,
+            &final_dir,
+            "sing-box.exe",
+            Self::validate_singbox_binary,
+        )?;
         let _ = std::fs::remove_dir_all(&staging_dir);
 
-        let final_exe = final_dir.join("sing-box.exe");
-        let exe_str = if final_exe.exists() {
-            final_exe.to_string_lossy().to_string()
-        } else {
-            Self::find_executable_in_dir(&final_dir, "sing-box.exe")
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|| final_exe.to_string_lossy().to_string())
-        };
+        let exe_str = final_exe.to_string_lossy().to_string();
 
         let mut settings = SettingsStorage::load();
         settings.sing_box.executable_path = exe_str.clone();
@@ -540,6 +618,88 @@ impl DependencyManager {
             asset.size,
         );
         Ok(exe_str)
+    }
+
+    /// Safely promotes a staging directory to final target directory without destroying the previous installation.
+    /// If target already exists, moves target to a backup location.
+    /// Moves staging to target, validates the promoted executable.
+    /// If promotion or validation fails, restores the backup.
+    pub fn safe_promote_staging_dir<F>(
+        staging_dir: &Path,
+        final_dir: &Path,
+        exe_name: &str,
+        validator: F,
+    ) -> Result<PathBuf, String>
+    where
+        F: Fn(&Path) -> Result<String, String>,
+    {
+        if let Some(parent) = final_dir.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        let backup_dir = final_dir.with_extension(format!("backup.{}", Uuid::new_v4()));
+
+        // 1. Move existing known-good install to backup (do NOT delete!)
+        if final_dir.exists() {
+            if let Err(e) = std::fs::rename(final_dir, &backup_dir) {
+                return Err(format!("Failed to backup existing installation: {}", e));
+            }
+        }
+
+        // 2. Promote staging to final_dir
+        if let Err(promote_err) = std::fs::rename(staging_dir, final_dir) {
+            // Fallback for cross-device moves
+            if let Err(copy_err) = Self::copy_dir_recursive(staging_dir, final_dir) {
+                // Restore backup
+                if backup_dir.exists() {
+                    let _ = std::fs::rename(&backup_dir, final_dir);
+                }
+                return Err(format!(
+                    "Failed to promote staging directory: {} (copy fallback: {})",
+                    promote_err, copy_err
+                ));
+            }
+        }
+
+        // 3. Locate promoted executable
+        let target_exe = if final_dir.join(exe_name).exists() {
+            final_dir.join(exe_name)
+        } else {
+            match Self::find_executable_in_dir(final_dir, exe_name) {
+                Some(p) => p,
+                None => {
+                    // Restore backup
+                    let _ = std::fs::remove_dir_all(final_dir);
+                    if backup_dir.exists() {
+                        let _ = std::fs::rename(&backup_dir, final_dir);
+                    }
+                    return Err(format!(
+                        "Executable '{}' missing in promoted installation",
+                        exe_name
+                    ));
+                }
+            }
+        };
+
+        // 4. Validate promoted executable
+        if let Err(val_err) = validator(&target_exe) {
+            // Failed validation: restore previous known-good installation!
+            let _ = std::fs::remove_dir_all(final_dir);
+            if backup_dir.exists() {
+                let _ = std::fs::rename(&backup_dir, final_dir);
+            }
+            return Err(format!(
+                "Promoted executable failed post-install validation: {}",
+                val_err
+            ));
+        }
+
+        // 5. Success: remove temporary backup
+        if backup_dir.exists() {
+            let _ = std::fs::remove_dir_all(&backup_dir);
+        }
+
+        Ok(target_exe)
     }
 
     async fn download_file_with_progress(

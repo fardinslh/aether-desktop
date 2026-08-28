@@ -1,3 +1,4 @@
+use crate::health::HealthProber;
 use crate::logging::RingBufferLogger;
 use crate::models::singbox::SingBoxConfig;
 use crate::models::AppSettings;
@@ -224,8 +225,6 @@ impl SingBoxRunner {
         Ok(())
     }
 
-    /// Spawns sing-box strictly using an already-validated configuration file on disk.
-    /// This function MUST NOT regenerate or overwrite the config file.
     pub fn spawn_with_config(
         &mut self,
         singbox_exe: &str,
@@ -330,21 +329,83 @@ impl SingBoxRunner {
         self.spawn_with_config(exe_path, &config_path, logger)
     }
 
-    pub fn restart_transparently(
+    /// Complete health and routing egress verification helper
+    pub async fn verify_router_and_egress(
+        &mut self,
+        interface_name: &str,
+        max_duration: Duration,
+    ) -> Result<(), String> {
+        let start = std::time::Instant::now();
+        let mut tun_detected = false;
+
+        while start.elapsed() < max_duration {
+            if !self.is_running() {
+                return Err("sing-box process exited unexpectedly during verification".to_string());
+            }
+
+            if HealthProber::check_tun_interface_exists(interface_name) {
+                tun_detected = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+
+        if !tun_detected {
+            return Err(format!(
+                "TUN network adapter '{}' not detected in network stack",
+                interface_name
+            ));
+        }
+
+        // Direct system egress test through TUN adapter
+        let mut egress_ok = false;
+        let mut last_err = String::new();
+        for _ in 1..=4 {
+            match HealthProber::query_direct_system_cloudflare_trace().await {
+                Ok(_) => {
+                    egress_ok = true;
+                    break;
+                }
+                Err(e) => {
+                    last_err = e;
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                }
+            }
+        }
+
+        if !egress_ok {
+            return Err(format!("Direct system egress failed: {}", last_err));
+        }
+
+        Ok(())
+    }
+
+    /// Transactional Live Apply with full health and system egress verification:
+    /// 1. Generates candidate config to temporary file.
+    /// 2. Pre-validates candidate config with sing-box check while old router remains active.
+    /// 3. Backs up the known-good config.
+    /// 4. Replaces active config and spawns sing-box without regenerating.
+    /// 5. Verifies new router process alive + TUN exists + direct system egress works.
+    /// 6. If ANY verification fails: restores backup config file, spawns rollback router,
+    ///    and verifies rollback instance health.
+    pub async fn restart_transparently(
         &mut self,
         settings: &AppSettings,
         logger: &RingBufferLogger,
     ) -> Result<(), String> {
-        let exe_path = &settings.sing_box.executable_path;
+        let exe_path = settings.sing_box.executable_path.clone();
+        let interface_name = settings.sing_box.interface_name.clone();
         let candidate_config = SingBoxConfigGenerator::generate(settings);
 
         let config_path = self.config_path.clone();
         let candidate_path = config_path.with_extension("candidate.json");
         let backup_path = config_path.with_extension("backup.json");
 
+        // 1. Write candidate config
         self.write_config_to_path(&candidate_config, &candidate_path)?;
 
-        if let Err(err) = self.validate_config_file(exe_path, &candidate_path) {
+        // 2. Validate candidate config file (old router still running!)
+        if let Err(err) = self.validate_config_file(&exe_path, &candidate_path) {
             let _ = std::fs::remove_file(&candidate_path);
             logger.log(
                 "ERROR",
@@ -360,10 +421,12 @@ impl SingBoxRunner {
             ));
         }
 
+        // 3. Backup currently active known-good config
         if config_path.exists() {
             let _ = std::fs::copy(&config_path, &backup_path);
         }
 
+        // 4. Atomically replace active config with candidate config
         if let Err(e) = std::fs::rename(&candidate_path, &config_path) {
             if std::fs::copy(&candidate_path, &config_path).is_err() {
                 let _ = std::fs::remove_file(&candidate_path);
@@ -372,54 +435,75 @@ impl SingBoxRunner {
             let _ = std::fs::remove_file(&candidate_path);
         }
 
+        // 5. Stop existing router
         logger.log(
             "INFO",
             "sing-box",
             "Applying validated candidate routing configuration...",
         );
         self.stop(logger);
-        thread::sleep(Duration::from_millis(150));
+        tokio::time::sleep(Duration::from_millis(150)).await;
 
-        if let Err(start_err) = self.spawn_with_config(exe_path, &config_path, logger) {
+        // 6. Spawn sing-box with the new config file (WITHOUT regenerating from settings)
+        if let Err(start_err) = self.spawn_with_config(&exe_path, &config_path, logger) {
             logger.log(
                 "ERROR",
                 "sing-box",
                 format!(
-                    "Failed to start router with candidate config: {}. Initiating rollback...",
+                    "Failed to spawn router with candidate config: {}. Initiating rollback...",
                     start_err
                 ),
             );
-            return self.perform_rollback(exe_path, &backup_path, logger, &start_err);
+            return self
+                .perform_verified_rollback(
+                    &exe_path,
+                    &backup_path,
+                    &interface_name,
+                    logger,
+                    &start_err,
+                )
+                .await;
         }
 
-        thread::sleep(Duration::from_millis(400));
-        if !self.is_running() {
+        // 7. Full live apply health verification: process alive + TUN interface + direct system egress
+        if let Err(verify_err) = self
+            .verify_router_and_egress(&interface_name, Duration::from_secs(5))
+            .await
+        {
             logger.log(
                 "ERROR",
                 "sing-box",
-                "New router process exited unexpectedly on launch. Initiating rollback...",
+                format!(
+                    "New routing candidate failed health verification ({}). Initiating rollback...",
+                    verify_err
+                ),
             );
-            return self.perform_rollback(
-                exe_path,
-                &backup_path,
-                logger,
-                "Process exited unexpectedly",
-            );
+            return self
+                .perform_verified_rollback(
+                    &exe_path,
+                    &backup_path,
+                    &interface_name,
+                    logger,
+                    &verify_err,
+                )
+                .await;
         }
 
+        // Succeeded: clean up backup
         let _ = std::fs::remove_file(&backup_path);
         logger.log(
             "INFO",
             "sing-box",
-            "Updated routing configuration applied and active successfully",
+            "Updated routing configuration applied and fully verified successfully",
         );
         Ok(())
     }
 
-    fn perform_rollback(
+    async fn perform_verified_rollback(
         &mut self,
         exe_path: &str,
         backup_path: &Path,
+        interface_name: &str,
         logger: &RingBufferLogger,
         reason: &str,
     ) -> Result<(), String> {
@@ -428,10 +512,7 @@ impl SingBoxRunner {
         let config_path = self.config_path.clone();
 
         if !backup_path.exists() {
-            return Err(format!(
-                "Failed to start new router ({}) and no backup config existed for rollback.",
-                reason
-            ));
+            return Err(format!("CRITICAL: Failed to start new router ({}) and no backup config existed for rollback.", reason));
         }
 
         logger.log(
@@ -446,29 +527,36 @@ impl SingBoxRunner {
             ));
         }
 
+        // Spawn rollback instance FROM RESTORED CONFIG FILE
         if let Err(rb_err) = self.spawn_with_config(exe_path, &config_path, logger) {
             logger.log(
                 "ERROR",
                 "sing-box",
                 format!("CRITICAL: Rollback router launch failed: {}", rb_err),
             );
-            return Err(format!("CRITICAL: New routing configuration failed ({}) and automatic rollback also failed ({}).", reason, rb_err));
+            return Err(format!("CRITICAL: New routing configuration failed ({}) and automatic rollback launch also failed ({}).", reason, rb_err));
         }
 
-        thread::sleep(Duration::from_millis(400));
-        if !self.is_running() {
+        // Verify rollback instance health
+        if let Err(rb_health_err) = self
+            .verify_router_and_egress(interface_name, Duration::from_secs(5))
+            .await
+        {
             logger.log(
                 "ERROR",
                 "sing-box",
-                "CRITICAL: Rollback router exited unexpectedly",
+                format!(
+                    "CRITICAL: Rollback router failed health verification: {}",
+                    rb_health_err
+                ),
             );
-            return Err(format!("CRITICAL: New routing configuration failed ({}) and rollback router exited unexpectedly.", reason));
+            return Err(format!("CRITICAL: New routing configuration failed ({}) and rollback router health verification also failed ({}).", reason, rb_health_err));
         }
 
         logger.log(
             "INFO",
             "sing-box",
-            "Rollback to previous known-good routing configuration succeeded",
+            "Rollback to previous known-good routing configuration verified successfully",
         );
         Err(format!("New routing configuration failed ({}); rolled back to previous working configuration successfully.", reason))
     }

@@ -5,7 +5,38 @@ use std::time::Duration;
 pub struct ReleaseAsset {
     pub name: String,
     pub size: u64,
+    #[serde(rename = "browser_download_url")]
     pub browser_download_url: String,
+    /// GitHub Release Asset digest (e.g. "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945")
+    pub digest: Option<String>,
+}
+
+impl ReleaseAsset {
+    /// Extracts the raw SHA-256 hex string from the asset digest field if present
+    pub fn parse_sha256_digest(&self) -> Result<Option<String>, String> {
+        if let Some(ref d) = self.digest {
+            let trimmed = d.trim();
+            if let Some(hex) = trimmed.strip_prefix("sha256:") {
+                let hex_clean = hex.trim().to_lowercase();
+                if hex_clean.len() == 64 && hex_clean.chars().all(|c| c.is_ascii_hexdigit()) {
+                    return Ok(Some(hex_clean));
+                } else {
+                    return Err(format!(
+                        "Malformed sha256 digest in GitHub metadata: '{}'",
+                        d
+                    ));
+                }
+            } else if trimmed.len() == 64 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Ok(Some(trimmed.to_lowercase()));
+            } else {
+                return Err(format!(
+                    "Unsupported or malformed digest format in GitHub metadata: '{}'",
+                    d
+                ));
+            }
+        }
+        Ok(None)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,7 +82,6 @@ impl GithubClient {
     }
 
     /// Strict matching for Aether official release assets (Windows x86_64 only).
-    /// Does NOT fall back to arbitrary .zip files.
     pub fn find_aether_asset(release: &GithubRelease) -> Result<&ReleaseAsset, String> {
         release
             .assets
@@ -91,12 +121,10 @@ impl GithubClient {
             })
     }
 
-    /// Finds companion checksum asset if present in official release (e.g. *.sha256 or SHA256SUMS.txt)
     pub fn find_companion_checksum_asset<'a>(
         release: &'a GithubRelease,
         target_asset_name: &str,
     ) -> Option<&'a ReleaseAsset> {
-        // Direct .sha256 file
         let direct_name = format!("{}.sha256", target_asset_name);
         if let Some(asset) = release
             .assets
@@ -106,7 +134,6 @@ impl GithubClient {
             return Some(asset);
         }
 
-        // Common sha256 sums files
         release.assets.iter().find(|a| {
             let n = a.name.to_lowercase();
             n == "sha256sums.txt" || n == "checksums.txt" || n == "sha256sum.txt"
