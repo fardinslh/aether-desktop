@@ -162,13 +162,32 @@ impl ConnectionOrchestrator {
             }
             self.is_aether_managed.store(true, Ordering::SeqCst);
 
-            // Probe managed Aether until ready
-            self.set_state(ConnectionState::TestingAether);
-            let mut aether_ready = false;
-            for attempt in 1..=25 {
-                tokio::time::sleep(Duration::from_millis(400)).await;
+            // Probe managed Aether with scan-mode-aware startup deadline
+            self.set_state(ConnectionState::ScanningAether);
+            let startup_deadline =
+                crate::models::settings::aether_startup_timeout(&settings.aether.scan_mode);
+            let start_instant = std::time::Instant::now();
+            let check_interval = Duration::from_millis(400);
 
-                // Immediate interactive prompt abort check
+            self.logger.log(
+                "INFO",
+                "Aether",
+                format!(
+                    "Waiting for Aether SOCKS proxy on {}:{} (Scan Mode: {:?}, Deadline: {}s)...",
+                    aether_host,
+                    aether_port,
+                    settings.aether.scan_mode,
+                    startup_deadline.as_secs()
+                ),
+            );
+
+            let mut aether_ready = false;
+            let mut attempt: u64 = 0;
+            while start_instant.elapsed() < startup_deadline {
+                tokio::time::sleep(check_interval).await;
+                attempt += 1;
+
+                // 1. Immediate interactive prompt abort check & process liveness
                 {
                     let mut aether_guard = self.aether.lock().await;
                     if aether_guard.is_interactive_prompt_detected() {
@@ -187,7 +206,8 @@ impl ConnectionOrchestrator {
                     }
                 }
 
-                if HealthProber::check_port_open(aether_host, aether_port, 300).await {
+                // 2. SOCKS5 probe
+                if HealthProber::check_port_open(aether_host, aether_port, 250).await {
                     match HealthProber::query_cloudflare_trace_via_socks5(aether_host, aether_port)
                         .await
                     {
@@ -196,8 +216,8 @@ impl ConnectionOrchestrator {
                                 "INFO",
                                 "Aether",
                                 format!(
-                                    "Aether SOCKS5 tunnel confirmed online (POP: {}, IP: {}, Latency: {} ms)",
-                                    trace.colo, trace.ip, trace.latency_ms
+                                    "Aether SOCKS5 tunnel confirmed online (POP: {}, IP: {}, Latency: {} ms, Elapsed: {:.1}s)",
+                                    trace.colo, trace.ip, trace.latency_ms, start_instant.elapsed().as_secs_f32()
                                 ),
                             );
                             *self.active_aether_ip.write() = Some(trace.ip);
@@ -205,11 +225,17 @@ impl ConnectionOrchestrator {
                             break;
                         }
                         Err(err) => {
-                            self.logger.log(
-                                "DEBUG",
-                                "Aether",
-                                format!("Trace probe attempt {}/25 pending: {}", attempt, err),
-                            );
+                            if attempt % 15 == 0 {
+                                self.logger.log(
+                                    "DEBUG",
+                                    "Aether",
+                                    format!(
+                                        "Waiting for SOCKS5 proxy initialization ({:.1}s elapsed): {}",
+                                        start_instant.elapsed().as_secs_f32(),
+                                        err
+                                    ),
+                                );
+                            }
                         }
                     }
                 }
@@ -217,8 +243,8 @@ impl ConnectionOrchestrator {
 
             if !aether_ready {
                 let err = format!(
-                    "Aether started, but local proxy on {}:{} did not become ready within timeout. View Diagnostics for details.",
-                    aether_host, aether_port
+                    "Aether started, but local proxy on {}:{} did not become ready within {}s deadline (Scan Mode: {:?}). View Diagnostics for details.",
+                    aether_host, aether_port, startup_deadline.as_secs(), settings.aether.scan_mode
                 );
                 self.aether.lock().await.stop(&self.logger);
                 self.set_error(err.clone());

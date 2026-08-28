@@ -81,13 +81,17 @@ fn main() {
     println!("✓ TEST J [UNIT / MOCKED INTEGRATION]: Truncated and oversized downloads are rejected by validation helper (PASSED)");
 
     test_k_aether_noninteractive_launch_arguments();
-    println!("✓ TEST K [UNIT / MOCKED INTEGRATION]: Aether non-interactive CLI arguments build correctly (--bind, --wg, -4, --thorough, --quick-reconnect) (PASSED)");
+    println!("✓ TEST K [UNIT / MOCKED INTEGRATION]: Aether non-interactive CLI arguments build correctly (--config, --bind, --wg, -4, --thorough, --quick-reconnect) (PASSED)");
+
+    test_l_aether_scan_mode_startup_deadlines();
+    println!("✓ TEST L [UNIT / MOCKED INTEGRATION]: Aether startup budgets match official strategy deadlines (Turbo: 45s, Balanced: 100s, Thorough: 285s, Stealth: 180s, Ironclad: 210s) (PASSED)");
 
     println!("\n==================================================================");
-    println!("ALL 21 VERIFICATION & RELIABILITY TESTS PASSED!");
+    println!("ALL 22 VERIFICATION & RELIABILITY TESTS PASSED!");
     println!("==================================================================");
 }
 
+#[test]
 fn test_reference_config_match() {
     let settings = AppSettings::default();
     let config = SingBoxConfigGenerator::generate(&settings);
@@ -175,6 +179,7 @@ fn test_reference_config_match() {
     assert_eq!(config.route.final_outbound, "aether");
 }
 
+#[test]
 fn test_scenario_1_discord_high_priority_3478() {
     let settings = AppSettings::default();
     let config = SingBoxConfigGenerator::generate(&settings);
@@ -184,6 +189,7 @@ fn test_scenario_1_discord_high_priority_3478() {
     assert_eq!(outbound, "v2ray");
 }
 
+#[test]
 fn test_scenario_2_discord_high_priority_5349() {
     let settings = AppSettings::default();
     let config = SingBoxConfigGenerator::generate(&settings);
@@ -193,6 +199,7 @@ fn test_scenario_2_discord_high_priority_5349() {
     assert_eq!(outbound, "v2ray");
 }
 
+#[test]
 fn test_scenario_3_normal_secondary_proxy() {
     let mut settings = AppSettings::default();
     settings.application_rules.push(ApplicationRule::new(
@@ -211,6 +218,7 @@ fn test_scenario_3_normal_secondary_proxy() {
     assert_eq!(outbound, "v2ray");
 }
 
+#[test]
 fn test_scenario_4_global_compatibility_fallback_against_normal_rule() {
     let mut settings = AppSettings::default();
     settings.application_rules.push(ApplicationRule::new(
@@ -229,6 +237,7 @@ fn test_scenario_4_global_compatibility_fallback_against_normal_rule() {
     assert_eq!(outbound, "direct");
 }
 
+#[test]
 fn test_scenario_5_high_custom_override() {
     let mut settings = AppSettings::default();
     settings.application_rules.push(ApplicationRule::new(
@@ -247,6 +256,7 @@ fn test_scenario_5_high_custom_override() {
     assert_eq!(outbound, "v2ray");
 }
 
+#[test]
 fn test_scenario_6_generals_regression() {
     let settings = AppSettings::default();
     let config = SingBoxConfigGenerator::generate(&settings);
@@ -260,6 +270,7 @@ fn test_scenario_6_generals_regression() {
     assert_eq!(outbound_5349, "direct");
 }
 
+#[test]
 fn test_scenario_7_unmatched_normal_traffic() {
     let settings = AppSettings::default();
     let config = SingBoxConfigGenerator::generate(&settings);
@@ -269,6 +280,7 @@ fn test_scenario_7_unmatched_normal_traffic() {
     assert_eq!(outbound, "aether");
 }
 
+#[test]
 fn test_scenario_8_private_lan() {
     let settings = AppSettings::default();
     let config = SingBoxConfigGenerator::generate(&settings);
@@ -306,6 +318,7 @@ fn test_scenario_8_private_lan() {
     assert_eq!(outbound_pub, "aether");
 }
 
+#[test]
 fn test_scenario_9_proxy_loop_prevention() {
     let settings = AppSettings::default();
     let config = SingBoxConfigGenerator::generate(&settings);
@@ -321,6 +334,7 @@ fn test_scenario_9_proxy_loop_prevention() {
 // Reliability & Decision-Path Tests [UNIT / MOCKED INTEGRATION]
 // =========================================================================
 
+#[test]
 fn test_a_candidate_validation_failure_preserves_old_state() {
     let original = AppSettings::default();
     let _ = SettingsStorage::save(&original);
@@ -342,6 +356,7 @@ fn test_a_candidate_validation_failure_preserves_old_state() {
     );
 }
 
+#[test]
 fn test_b_missing_tun_triggers_verified_rollback() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
@@ -361,6 +376,7 @@ fn test_b_missing_tun_triggers_verified_rollback() {
     });
 }
 
+#[test]
 fn test_c_failed_egress_ip_mismatch_triggers_rollback() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
@@ -375,6 +391,7 @@ fn test_c_failed_egress_ip_mismatch_triggers_rollback() {
     });
 }
 
+#[test]
 fn test_d_rollback_failure_surfaced_as_critical() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
@@ -394,6 +411,7 @@ fn test_d_rollback_failure_surfaced_as_critical() {
     });
 }
 
+#[test]
 fn test_e_persistence_failure_runtime_rollback() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
@@ -410,6 +428,7 @@ fn test_e_persistence_failure_runtime_rollback() {
     });
 }
 
+#[test]
 fn test_f_existing_aether_reuse_decision_path() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
@@ -423,6 +442,7 @@ fn test_f_existing_aether_reuse_decision_path() {
     });
 }
 
+#[test]
 fn test_g_occupied_wrong_port_owner_rejection() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
@@ -438,6 +458,7 @@ fn test_g_occupied_wrong_port_owner_rejection() {
     });
 }
 
+#[test]
 fn test_h_github_digest_integrity_verification() {
     let asset = ReleaseAsset {
         name: "aether-windows-x86_64.zip".to_string(),
@@ -467,6 +488,7 @@ fn test_h_github_digest_integrity_verification() {
     );
 }
 
+#[test]
 fn test_i_safe_staging_promotion_restore_and_verification() {
     let temp_root = std::env::temp_dir().join(format!("aether-promote-test-{}", Uuid::new_v4()));
     let final_dir = temp_root.join("final");
@@ -509,6 +531,7 @@ fn test_i_safe_staging_promotion_restore_and_verification() {
     let _ = std::fs::remove_dir_all(&temp_root);
 }
 
+#[test]
 fn test_j_download_size_and_truncation_guards() {
     let expected: u64 = 15_000_000;
     let truncated: u64 = 10_000_000;
@@ -525,13 +548,17 @@ fn test_j_download_size_and_truncation_guards() {
     );
 }
 
+#[test]
 fn test_k_aether_noninteractive_launch_arguments() {
     let settings = AppSettings::default();
-    let args = settings.aether.build_cli_arguments(None);
+    let config_path = std::path::PathBuf::from("C:\\Users\\User\\AppData\\Local\\AetherDesktop\\aether\\aether.toml");
+    let args = settings.aether.build_cli_arguments(Some(&config_path));
 
     assert_eq!(
         args,
         vec![
+            "--config",
+            "C:\\Users\\User\\AppData\\Local\\AetherDesktop\\aether\\aether.toml",
             "--bind",
             "127.0.0.1:1819",
             "--wg",
@@ -539,6 +566,17 @@ fn test_k_aether_noninteractive_launch_arguments() {
             "--thorough",
             "--quick-reconnect"
         ],
-        "Aether default arguments must match proven non-interactive WireGuard profile"
+        "Aether default arguments must match proven non-interactive WireGuard profile with managed config path"
     );
+}
+
+#[test]
+fn test_l_aether_scan_mode_startup_deadlines() {
+    use aether_desktop_lib::models::settings::{aether_startup_timeout, AetherScanMode};
+
+    assert_eq!(aether_startup_timeout(&AetherScanMode::Turbo), Duration::from_secs(45));
+    assert_eq!(aether_startup_timeout(&AetherScanMode::Balanced), Duration::from_secs(100));
+    assert_eq!(aether_startup_timeout(&AetherScanMode::Thorough), Duration::from_secs(285));
+    assert_eq!(aether_startup_timeout(&AetherScanMode::Stealth), Duration::from_secs(180));
+    assert_eq!(aether_startup_timeout(&AetherScanMode::Ironclad), Duration::from_secs(210));
 }

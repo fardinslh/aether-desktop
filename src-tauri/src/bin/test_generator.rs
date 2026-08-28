@@ -81,10 +81,13 @@ fn main() {
     println!("✓ TEST J [UNIT / MOCKED INTEGRATION]: Truncated and oversized downloads are rejected by validation helper (PASSED)");
 
     test_k_aether_noninteractive_launch_arguments();
-    println!("✓ TEST K [UNIT / MOCKED INTEGRATION]: Aether non-interactive CLI arguments build correctly (--bind, --wg, -4, --thorough, --quick-reconnect) (PASSED)");
+    println!("✓ TEST K [UNIT / MOCKED INTEGRATION]: Aether non-interactive CLI arguments build correctly (--config, --bind, --wg, -4, --thorough, --quick-reconnect) (PASSED)");
+
+    test_l_aether_scan_mode_startup_deadlines();
+    println!("✓ TEST L [UNIT / MOCKED INTEGRATION]: Aether startup budgets match official strategy deadlines (Turbo: 45s, Balanced: 100s, Thorough: 285s, Stealth: 180s, Ironclad: 210s) (PASSED)");
 
     println!("\n==================================================================");
-    println!("ALL 21 VERIFICATION & RELIABILITY TESTS PASSED!");
+    println!("ALL 22 VERIFICATION & RELIABILITY TESTS PASSED!");
     println!("==================================================================");
 }
 
@@ -527,11 +530,14 @@ fn test_j_download_size_and_truncation_guards() {
 
 fn test_k_aether_noninteractive_launch_arguments() {
     let settings = AppSettings::default();
-    let args = settings.aether.build_cli_arguments(None);
+    let config_path = std::path::PathBuf::from("C:\\Users\\User\\AppData\\Local\\AetherDesktop\\aether\\aether.toml");
+    let args = settings.aether.build_cli_arguments(Some(&config_path));
 
     assert_eq!(
         args,
         vec![
+            "--config",
+            "C:\\Users\\User\\AppData\\Local\\AetherDesktop\\aether\\aether.toml",
             "--bind",
             "127.0.0.1:1819",
             "--wg",
@@ -539,6 +545,16 @@ fn test_k_aether_noninteractive_launch_arguments() {
             "--thorough",
             "--quick-reconnect"
         ],
-        "Aether default arguments must match proven non-interactive WireGuard profile"
+        "Aether default arguments must match proven non-interactive WireGuard profile with managed config path"
     );
+}
+
+fn test_l_aether_scan_mode_startup_deadlines() {
+    use aether_desktop_lib::models::settings::{aether_startup_timeout, AetherScanMode};
+
+    assert_eq!(aether_startup_timeout(&AetherScanMode::Turbo), Duration::from_secs(45));
+    assert_eq!(aether_startup_timeout(&AetherScanMode::Balanced), Duration::from_secs(100));
+    assert_eq!(aether_startup_timeout(&AetherScanMode::Thorough), Duration::from_secs(285));
+    assert_eq!(aether_startup_timeout(&AetherScanMode::Stealth), Duration::from_secs(180));
+    assert_eq!(aether_startup_timeout(&AetherScanMode::Ironclad), Duration::from_secs(210));
 }

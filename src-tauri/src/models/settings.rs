@@ -77,28 +77,34 @@ pub struct AetherSettings {
 }
 
 impl AetherSettings {
-    pub fn build_cli_arguments(&self, _aether_config_path: Option<&Path>) -> Vec<String> {
+    pub fn build_cli_arguments(&self, aether_config_path: Option<&Path>) -> Vec<String> {
         let mut args = Vec::new();
 
-        // 1. Explicit SOCKS bind
+        // 1. Explicit managed config path
+        if let Some(config_path) = aether_config_path {
+            args.push("--config".to_string());
+            args.push(config_path.to_string_lossy().to_string());
+        }
+
+        // 2. Explicit SOCKS bind
         args.push("--bind".to_string());
         args.push(format!("{}:{}", self.host, self.port));
 
-        // 2. Protocol
+        // 3. Protocol
         match self.protocol {
             AetherProtocol::Wireguard => args.push("--wg".to_string()),
             AetherProtocol::Masque => args.push("--masque".to_string()),
             AetherProtocol::WarpInWarp => args.push("--gool".to_string()),
         }
 
-        // 3. IP Mode
+        // 4. IP Mode
         match self.ip_mode {
             AetherIpMode::Ipv4 => args.push("-4".to_string()),
             AetherIpMode::Ipv6 => args.push("-6".to_string()),
             AetherIpMode::Dual => args.push("--dual".to_string()),
         }
 
-        // 4. Scan Mode
+        // 5. Scan Mode
         match self.scan_mode {
             AetherScanMode::Turbo => args.push("--turbo".to_string()),
             AetherScanMode::Balanced => args.push("--balanced".to_string()),
@@ -107,12 +113,12 @@ impl AetherSettings {
             AetherScanMode::Ironclad => args.push("--ironclad".to_string()),
         }
 
-        // 5. Quick Reconnect
+        // 6. Quick Reconnect
         if self.quick_reconnect {
             args.push("--quick-reconnect".to_string());
         }
 
-        // 6. Additional developer arguments
+        // 7. Additional developer arguments
         for arg in &self.additional_arguments {
             if !arg.trim().is_empty() {
                 args.push(arg.clone());
@@ -120,6 +126,22 @@ impl AetherSettings {
         }
 
         args
+    }
+}
+
+/// Returns the Aether startup and scan deadline budget based on official upstream Aether strategy budgets + margin:
+/// - Turbo: official scan budget = 30s -> desktop deadline = 45s
+/// - Balanced: official scan budget = 80s -> desktop deadline = 100s
+/// - Thorough: official scan budget = 250s -> desktop deadline = 285s
+/// - Stealth: official scan budget = 150s -> desktop deadline = 180s
+/// - Ironclad: official scan budget = 180s -> desktop deadline = 210s
+pub fn aether_startup_timeout(scan_mode: &AetherScanMode) -> std::time::Duration {
+    match scan_mode {
+        AetherScanMode::Turbo => std::time::Duration::from_secs(45),
+        AetherScanMode::Balanced => std::time::Duration::from_secs(100),
+        AetherScanMode::Thorough => std::time::Duration::from_secs(285),
+        AetherScanMode::Stealth => std::time::Duration::from_secs(180),
+        AetherScanMode::Ironclad => std::time::Duration::from_secs(210),
     }
 }
 

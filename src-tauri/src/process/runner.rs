@@ -132,7 +132,8 @@ impl AetherRunner {
             let _ = std::fs::create_dir_all(&aether_data_dir);
         }
 
-        let cli_args = settings.aether.build_cli_arguments(None);
+        let aether_config_path = SettingsStorage::get_aether_config_path();
+        let cli_args = settings.aether.build_cli_arguments(Some(&aether_config_path));
 
         logger.log(
             "INFO",

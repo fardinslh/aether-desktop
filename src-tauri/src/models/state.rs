@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub enum ConnectionState {
     Disconnected,
     StartingAether,
+    ScanningAether,
     WaitingForAether,
     TestingAether,
     StartingRouter,

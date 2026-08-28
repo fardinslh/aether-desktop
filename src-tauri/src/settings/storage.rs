@@ -74,6 +74,10 @@ impl SettingsStorage {
             .unwrap_or_else(|| PathBuf::from("./aether_data"))
     }
 
+    pub fn get_aether_config_path() -> PathBuf {
+        Self::get_aether_data_dir().join("aether.toml")
+    }
+
     pub fn get_config_file_path() -> PathBuf {
         Self::get_config_dir().join("config.json")
     }

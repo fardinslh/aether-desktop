@@ -1,5 +1,11 @@
 import React from "react";
-import { Power, Globe, CheckCircle2, ShieldCheck, AlertTriangle } from "lucide-react";
+import {
+  Power,
+  Globe,
+  CheckCircle2,
+  ShieldCheck,
+  AlertTriangle,
+} from "lucide-react";
 import { ConnectionState, HealthStatus } from "../../types";
 
 interface ConnectionHeroProps {
@@ -30,6 +36,8 @@ export const ConnectionHero: React.FC<ConnectionHeroProps> = ({
         return "CONNECT";
       case "STARTING_AETHER":
         return "Starting Aether...";
+      case "SCANNING_AETHER":
+        return "Scanning Gateway...";
       case "WAITING_FOR_AETHER":
         return "Starting Aether...";
       case "TESTING_AETHER":
@@ -55,8 +63,14 @@ export const ConnectionHero: React.FC<ConnectionHeroProps> = ({
       const lat = health?.cloudflareTrace?.latencyMs || 48;
       return `${getCityFromColo(colo)} · ${lat} ms`;
     }
-    if (connectionState === "STARTING_AETHER" || connectionState === "WAITING_FOR_AETHER") {
-      return "Launching non-interactive Aether proxy...";
+    if (
+      connectionState === "STARTING_AETHER" ||
+      connectionState === "WAITING_FOR_AETHER"
+    ) {
+      return "Launching managed Aether daemon...";
+    }
+    if (connectionState === "SCANNING_AETHER") {
+      return "Scanning for a working Aether gateway... (Thorough scan · this can take a few minutes on first connection)";
     }
     if (connectionState === "TESTING_AETHER") {
       return "Verifying SOCKS5 proxy on 127.0.0.1:1819...";
@@ -83,10 +97,10 @@ export const ConnectionHero: React.FC<ConnectionHeroProps> = ({
             isConnected
               ? "bg-emerald-500/25 opacity-100"
               : isTransitioning
-              ? "bg-brand-500/20 opacity-80"
-              : isError
-              ? "bg-rose-500/25 opacity-100"
-              : "bg-transparent opacity-0"
+                ? "bg-brand-500/20 opacity-80"
+                : isError
+                  ? "bg-rose-500/25 opacity-100"
+                  : "bg-transparent opacity-0"
           }`}
         />
 
@@ -128,10 +142,10 @@ export const ConnectionHero: React.FC<ConnectionHeroProps> = ({
               isConnected
                 ? "border-emerald-500/40 shadow-[0_0_30px_rgba(16,185,129,0.2)] bg-emerald-950/10"
                 : isTransitioning
-                ? "border-transparent bg-brand-950/10"
-                : isError
-                ? "border-rose-500/50 bg-rose-950/10"
-                : "border-zinc-800 bg-zinc-900/30 hover:border-zinc-700"
+                  ? "border-transparent bg-brand-950/10"
+                  : isError
+                    ? "border-rose-500/50 bg-rose-950/10"
+                    : "border-zinc-800 bg-zinc-900/30 hover:border-zinc-700"
             }`}
           >
             {/* Stationary Button and Text */}
@@ -142,10 +156,10 @@ export const ConnectionHero: React.FC<ConnectionHeroProps> = ({
                 isConnected
                   ? "bg-gradient-to-b from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 shadow-emerald-900/40 cursor-pointer"
                   : isTransitioning
-                  ? "bg-zinc-800/90 text-zinc-200 cursor-wait shadow-none"
-                  : isError
-                  ? "bg-gradient-to-b from-rose-600 to-rose-700 hover:from-rose-500 hover:to-rose-600 shadow-rose-900/40 cursor-pointer"
-                  : "bg-gradient-to-b from-brand-600 to-brand-700 hover:from-brand-500 hover:to-brand-600 shadow-brand-900/30 hover:shadow-brand-500/20 cursor-pointer"
+                    ? "bg-zinc-800/90 text-zinc-200 cursor-wait shadow-none"
+                    : isError
+                      ? "bg-gradient-to-b from-rose-600 to-rose-700 hover:from-rose-500 hover:to-rose-600 shadow-rose-900/40 cursor-pointer"
+                      : "bg-gradient-to-b from-brand-600 to-brand-700 hover:from-brand-500 hover:to-brand-600 shadow-brand-900/30 hover:shadow-brand-500/20 cursor-pointer"
               }`}
             >
               {isConnected ? (
@@ -173,24 +187,26 @@ export const ConnectionHero: React.FC<ConnectionHeroProps> = ({
               isConnected
                 ? "bg-emerald-400 shadow-[0_0_8px_#34d399]"
                 : isTransitioning
-                ? "bg-amber-400 animate-pulse"
-                : isError
-                ? "bg-rose-400"
-                : "bg-zinc-600"
+                  ? "bg-amber-400 animate-pulse"
+                  : isError
+                    ? "bg-rose-400"
+                    : "bg-zinc-600"
             }`}
           />
           <span className="font-medium text-zinc-200">
             {isConnected
               ? "Securely Connected"
               : isTransitioning
-              ? "Connecting..."
-              : isError
-              ? "Connection Error"
-              : "Disconnected"}
+                ? "Connecting..."
+                : isError
+                  ? "Connection Error"
+                  : "Disconnected"}
           </span>
         </div>
 
-        <p className="text-xs text-zinc-400 font-normal">{getSubStatusText()}</p>
+        <p className="text-xs text-zinc-400 font-normal">
+          {getSubStatusText()}
+        </p>
 
         {isConnected && health?.cloudflareTrace && (
           <div className="flex items-center justify-center gap-3 pt-1 text-[11px] text-zinc-400">

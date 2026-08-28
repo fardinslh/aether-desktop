@@ -1,6 +1,7 @@
 export type ConnectionState =
   | "DISCONNECTED"
   | "STARTING_AETHER"
+  | "SCANNING_AETHER"
   | "WAITING_FOR_AETHER"
   | "TESTING_AETHER"
   | "STARTING_ROUTER"
@@ -34,7 +35,12 @@ export interface ApplicationRule {
 
 export type AetherProtocol = "wireguard" | "masque" | "warp_in_warp";
 export type AetherIpMode = "ipv4" | "ipv6" | "dual";
-export type AetherScanMode = "turbo" | "balanced" | "thorough" | "stealth" | "ironclad";
+export type AetherScanMode =
+  | "turbo"
+  | "balanced"
+  | "thorough"
+  | "stealth"
+  | "ironclad";
 
 export interface AetherSettings {
   executablePath: string;
