@@ -5,10 +5,11 @@ use crate::models::AppSettings;
 use crate::routing::SingBoxConfigGenerator;
 use crate::settings::storage::atomic_replace_file;
 use crate::settings::SettingsStorage;
+use crate::models::settings::AetherLaunchOptions;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -47,6 +48,29 @@ fn classify_log_level(line: &str, is_stderr: bool) -> &'static str {
     } else {
         "INFO"
     }
+}
+
+pub fn parse_candidate_rtt_from_line(line: &str) -> Option<u32> {
+    let lower = line.to_lowercase();
+    let candidate_pos = lower
+        .find("rtt")
+        .or_else(|| lower.find("latency"))
+        .or_else(|| lower.find("ping"))?;
+
+    let after = &lower[candidate_pos..];
+    let start_idx = after.find(|c: char| c.is_ascii_digit())?;
+    let num_slice = &after[start_idx..];
+
+    let mut digits = String::new();
+    for ch in num_slice.chars() {
+        if ch.is_ascii_digit() {
+            digits.push(ch);
+        } else {
+            break;
+        }
+    }
+
+    digits.parse::<u32>().ok().filter(|&v| v > 0 && v < 10000)
 }
 
 pub struct ProcessHandle {
@@ -97,11 +121,15 @@ impl ProcessHandle {
 
 pub struct AetherRunner {
     handle: Option<ProcessHandle>,
+    best_candidate_rtt: Arc<AtomicU32>,
 }
 
 impl AetherRunner {
     pub fn new() -> Self {
-        Self { handle: None }
+        Self {
+            handle: None,
+            best_candidate_rtt: Arc::new(AtomicU32::new(0)),
+        }
     }
 
     pub fn is_running(&mut self) -> bool {
@@ -124,9 +152,27 @@ impl AetherRunner {
         }
     }
 
+    pub fn get_best_candidate_rtt(&self) -> Option<u32> {
+        let v = self.best_candidate_rtt.load(Ordering::SeqCst);
+        if v > 0 {
+            Some(v)
+        } else {
+            None
+        }
+    }
+
     pub fn start(
         &mut self,
         settings: &AppSettings,
+        logger: &RingBufferLogger,
+    ) -> Result<(), String> {
+        self.start_with_options(settings, &AetherLaunchOptions::default(), logger)
+    }
+
+    pub fn start_with_options(
+        &mut self,
+        settings: &AppSettings,
+        options: &AetherLaunchOptions,
         logger: &RingBufferLogger,
     ) -> Result<(), String> {
         let exe_path = &settings.aether.executable_path;
@@ -140,10 +186,12 @@ impl AetherRunner {
             let _ = std::fs::create_dir_all(&aether_data_dir);
         }
 
+        self.best_candidate_rtt.store(0, Ordering::SeqCst);
+
         let aether_config_path = SettingsStorage::get_aether_config_path();
         let cli_args = settings
             .aether
-            .build_cli_arguments(Some(&aether_config_path));
+            .build_cli_arguments_with_options(Some(&aether_config_path), options);
 
         logger.log(
             "INFO",
@@ -176,11 +224,13 @@ impl AetherRunner {
 
         let stop_flag = Arc::new(AtomicBool::new(false));
         let interactive_prompt_detected = Arc::new(AtomicBool::new(false));
+        let best_rtt_clone = self.best_candidate_rtt.clone();
 
         if let Some(stdout) = child.stdout.take() {
             let log_clone = logger.clone();
             let stop_clone = stop_flag.clone();
             let interactive_clone = interactive_prompt_detected.clone();
+            let best_rtt_loop = best_rtt_clone.clone();
             thread::spawn(move || {
                 let reader = BufReader::new(stdout);
                 for line in reader.lines() {
@@ -199,6 +249,17 @@ impl AetherRunner {
                                 interactive_clone.store(true, Ordering::SeqCst);
                                 log_clone.log("ERROR", "Aether", format!("Interactive prompt detected: '{}'. Managed launch arguments were incomplete.", l.trim()));
                             } else {
+                                if let Some(rtt) = parse_candidate_rtt_from_line(&l) {
+                                    let current_best = best_rtt_loop.load(Ordering::SeqCst);
+                                    if current_best == 0 || rtt < current_best {
+                                        best_rtt_loop.store(rtt, Ordering::SeqCst);
+                                        log_clone.log(
+                                            "INFO",
+                                            "Aether",
+                                            format!("Best candidate so far: {} ms", rtt),
+                                        );
+                                    }
+                                }
                                 let lvl = classify_log_level(&l, false);
                                 log_clone.log(lvl, "Aether", l);
                             }
@@ -802,5 +863,34 @@ impl SingBoxRunner {
             h.kill(logger);
         }
         self.handle = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_candidate_rtt_various_formats() {
+        assert_eq!(
+            parse_candidate_rtt_from_line("[+] candidate 162.159.192.1:2408 OK (rtt: 78ms)"),
+            Some(78)
+        );
+        assert_eq!(
+            parse_candidate_rtt_from_line("candidate ok ... rtt=42ms"),
+            Some(42)
+        );
+        assert_eq!(
+            parse_candidate_rtt_from_line("Endpoint 162.159.193.10:500 ok (rtt: 65ms)"),
+            Some(65)
+        );
+        assert_eq!(
+            parse_candidate_rtt_from_line("Testing endpoint latency: 120ms"),
+            Some(120)
+        );
+        assert_eq!(
+            parse_candidate_rtt_from_line("Random log line with no timing"),
+            None
+        );
     }
 }

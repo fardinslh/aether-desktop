@@ -26,6 +26,7 @@ export function App() {
     deleteApplicationRule,
     updateApplicationRoute,
     triggerConnect,
+    triggerFindFasterGateway,
     triggerDisconnect,
     refreshAll,
   } = useAppStore();
@@ -57,6 +58,7 @@ export function App() {
               connectionState={connectionState}
               health={health}
               onConnect={triggerConnect}
+              onFindFasterGateway={triggerFindFasterGateway}
               onDisconnect={triggerDisconnect}
               onViewDiagnostics={() => setActiveTab("diagnostics")}
               errorDetails={errorDetails}

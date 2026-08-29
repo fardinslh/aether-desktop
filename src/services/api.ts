@@ -10,6 +10,7 @@ import {
   ExecutableInspection,
   HealthStatus,
   LogEntry,
+  RouteOptimizationResult,
   RunningProcessInfo,
 } from "../types";
 
@@ -34,6 +35,10 @@ export const api = {
 
   async connect(): Promise<void> {
     return invoke<void>("connect_tunnel");
+  },
+
+  async findFasterGateway(): Promise<RouteOptimizationResult> {
+    return invoke<RouteOptimizationResult>("find_faster_gateway");
   },
 
   async disconnect(): Promise<void> {

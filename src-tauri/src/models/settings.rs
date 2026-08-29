@@ -76,8 +76,22 @@ pub struct AetherSettings {
     pub launch_arguments: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AetherLaunchOptions {
+    pub quick_reconnect_override: Option<bool>,
+    pub scan_mode_override: Option<AetherScanMode>,
+}
+
 impl AetherSettings {
     pub fn build_cli_arguments(&self, aether_config_path: Option<&Path>) -> Vec<String> {
+        self.build_cli_arguments_with_options(aether_config_path, &AetherLaunchOptions::default())
+    }
+
+    pub fn build_cli_arguments_with_options(
+        &self,
+        aether_config_path: Option<&Path>,
+        options: &AetherLaunchOptions,
+    ) -> Vec<String> {
         let mut args = Vec::new();
 
         // 1. Explicit managed config path
@@ -104,8 +118,12 @@ impl AetherSettings {
             AetherIpMode::Dual => args.push("--dual".to_string()),
         }
 
-        // 5. Scan Mode
-        match self.scan_mode {
+        // 5. Scan Mode (override if specified for optimization, without changing persistent settings)
+        let effective_scan_mode = options
+            .scan_mode_override
+            .as_ref()
+            .unwrap_or(&self.scan_mode);
+        match effective_scan_mode {
             AetherScanMode::Turbo => args.push("--turbo".to_string()),
             AetherScanMode::Balanced => args.push("--balanced".to_string()),
             AetherScanMode::Thorough => args.push("--thorough".to_string()),
@@ -113,8 +131,11 @@ impl AetherSettings {
             AetherScanMode::Ironclad => args.push("--ironclad".to_string()),
         }
 
-        // 6. Quick Reconnect
-        if self.quick_reconnect {
+        // 6. Quick Reconnect (override if specified for optimization, without changing persistent settings)
+        let effective_quick_reconnect = options
+            .quick_reconnect_override
+            .unwrap_or(self.quick_reconnect);
+        if effective_quick_reconnect {
             args.push("--quick-reconnect".to_string());
         }
 
@@ -253,5 +274,110 @@ impl Default for AppSettings {
             application_rules: crate::routing::presets::get_default_rules(),
             first_run_completed: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_a_normal_connect_includes_quick_reconnect_when_configured() {
+        let settings = AetherSettings {
+            executable_path: "C:\\Aether\\aether.exe".to_string(),
+            host: "127.0.0.1".to_string(),
+            port: 1819,
+            protocol: AetherProtocol::Wireguard,
+            ip_mode: AetherIpMode::Ipv4,
+            scan_mode: AetherScanMode::Turbo,
+            quick_reconnect: true,
+            additional_arguments: vec![],
+            launch_arguments: vec![],
+        };
+
+        let args = settings.build_cli_arguments(None);
+        assert!(args.contains(&"--quick-reconnect".to_string()));
+        assert!(args.contains(&"--turbo".to_string()));
+        assert!(!args.contains(&"--thorough".to_string()));
+    }
+
+    #[test]
+    fn test_b_optimization_launch_does_not_include_quick_reconnect() {
+        let settings = AetherSettings {
+            executable_path: "C:\\Aether\\aether.exe".to_string(),
+            host: "127.0.0.1".to_string(),
+            port: 1819,
+            protocol: AetherProtocol::Wireguard,
+            ip_mode: AetherIpMode::Ipv4,
+            scan_mode: AetherScanMode::Turbo,
+            quick_reconnect: true, // Saved user setting is true
+            additional_arguments: vec![],
+            launch_arguments: vec![],
+        };
+
+        let opt_options = AetherLaunchOptions {
+            quick_reconnect_override: Some(false),
+            scan_mode_override: Some(AetherScanMode::Thorough),
+        };
+
+        let args = settings.build_cli_arguments_with_options(None, &opt_options);
+        assert!(!args.contains(&"--quick-reconnect".to_string()));
+    }
+
+    #[test]
+    fn test_c_optimization_launch_forces_thorough_without_mutating_saved_settings() {
+        let settings = AetherSettings {
+            executable_path: "C:\\Aether\\aether.exe".to_string(),
+            host: "127.0.0.1".to_string(),
+            port: 1819,
+            protocol: AetherProtocol::Wireguard,
+            ip_mode: AetherIpMode::Ipv4,
+            scan_mode: AetherScanMode::Turbo, // Saved user setting is Turbo
+            quick_reconnect: true,
+            additional_arguments: vec![],
+            launch_arguments: vec![],
+        };
+
+        let opt_options = AetherLaunchOptions {
+            quick_reconnect_override: Some(false),
+            scan_mode_override: Some(AetherScanMode::Thorough),
+        };
+
+        let args = settings.build_cli_arguments_with_options(None, &opt_options);
+        assert!(args.contains(&"--thorough".to_string()));
+        assert!(!args.contains(&"--turbo".to_string()));
+        // Saved setting struct was not mutated
+        assert_eq!(settings.scan_mode, AetherScanMode::Turbo);
+        assert_eq!(settings.quick_reconnect, true);
+    }
+
+    #[test]
+    fn test_d_after_optimization_normal_connect_again_includes_quick_reconnect() {
+        let settings = AetherSettings {
+            executable_path: "C:\\Aether\\aether.exe".to_string(),
+            host: "127.0.0.1".to_string(),
+            port: 1819,
+            protocol: AetherProtocol::Wireguard,
+            ip_mode: AetherIpMode::Ipv4,
+            scan_mode: AetherScanMode::Balanced,
+            quick_reconnect: true,
+            additional_arguments: vec![],
+            launch_arguments: vec![],
+        };
+
+        // 1. Simulate optimization run
+        let opt_options = AetherLaunchOptions {
+            quick_reconnect_override: Some(false),
+            scan_mode_override: Some(AetherScanMode::Thorough),
+        };
+        let opt_args = settings.build_cli_arguments_with_options(None, &opt_options);
+        assert!(!opt_args.contains(&"--quick-reconnect".to_string()));
+        assert!(opt_args.contains(&"--thorough".to_string()));
+
+        // 2. Subsequent normal Connect invocation
+        let normal_args = settings.build_cli_arguments(None);
+        assert!(normal_args.contains(&"--quick-reconnect".to_string()));
+        assert!(normal_args.contains(&"--balanced".to_string()));
+        assert!(!normal_args.contains(&"--thorough".to_string()));
     }
 }

@@ -5,11 +5,26 @@ use crate::models::{AppSettings, ConnectionState};
 use crate::process::detector::ProcessDetector;
 use crate::process::runner::{AetherRunner, SingBoxRunner};
 use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::Emitter;
 use tokio::sync::Mutex;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RouteOptimizationResult {
+    pub success: bool,
+    pub previous_latency_ms: Option<u64>,
+    pub previous_pop: Option<String>,
+    pub previous_ip: Option<String>,
+    pub new_latency_ms: Option<u64>,
+    pub new_pop: Option<String>,
+    pub new_ip: Option<String>,
+    pub latency_delta_ms: Option<i64>,
+    pub message: String,
+}
 
 pub struct ConnectionOrchestrator {
     pub aether: Mutex<AetherRunner>,
@@ -99,6 +114,17 @@ impl ConnectionOrchestrator {
             let _ = handle.emit("connection-state-changed", ConnectionState::StartingAether);
         }
 
+        let default_options = crate::models::settings::AetherLaunchOptions::default();
+        self.connect_internal(settings, attempt_id, &default_options)
+            .await
+    }
+
+    async fn connect_internal(
+        &self,
+        settings: &AppSettings,
+        attempt_id: u64,
+        options: &crate::models::settings::AetherLaunchOptions,
+    ) -> Result<(), String> {
         let t_connect_start = std::time::Instant::now();
         *self.last_error.write() = None;
         *self.active_aether_ip.write() = None;
@@ -183,10 +209,10 @@ impl ConnectionOrchestrator {
                 }
             }
         } else {
-            // Port is free: launch managed Aether instance
+            // Port is free: launch managed Aether instance with specified options
             let aether_pid = {
                 let mut aether_guard = self.aether.lock().await;
-                if let Err(e) = aether_guard.start(settings, &self.logger) {
+                if let Err(e) = aether_guard.start_with_options(settings, options, &self.logger) {
                     self.set_error(format!(
                         "[Attempt #{}] Failed to start Aether: {}",
                         attempt_id, e
@@ -207,8 +233,12 @@ impl ConnectionOrchestrator {
 
             // Probe managed Aether with scan-mode-aware startup deadline
             self.set_state(ConnectionState::ScanningAether);
+            let effective_scan_mode = options
+                .scan_mode_override
+                .as_ref()
+                .unwrap_or(&settings.aether.scan_mode);
             let startup_deadline =
-                crate::models::settings::aether_startup_timeout(&settings.aether.scan_mode);
+                crate::models::settings::aether_startup_timeout(effective_scan_mode);
             let check_interval = Duration::from_millis(300);
 
             self.logger.log(
@@ -219,7 +249,7 @@ impl ConnectionOrchestrator {
                     attempt_id,
                     aether_host,
                     aether_port,
-                    settings.aether.scan_mode,
+                    effective_scan_mode,
                     startup_deadline.as_secs()
                 ),
             );
@@ -235,7 +265,7 @@ impl ConnectionOrchestrator {
                     let mut aether_guard = self.aether.lock().await;
                     if aether_guard.is_interactive_prompt_detected() {
                         let err = format!(
-                            "[Attempt #{}] Aether entered interactive mode. Managed launch arguments are incomplete.",
+                            "[Attempt #{}] Aether entered interactive mode. Managed launch arguments were incomplete.",
                             attempt_id
                         );
                         aether_guard.stop(&self.logger);
@@ -292,7 +322,7 @@ impl ConnectionOrchestrator {
             if !aether_ready {
                 let err = format!(
                     "[Attempt #{}] Aether started, but local proxy on {}:{} did not become ready within {}s deadline (Scan Mode: {:?}). View Diagnostics for details.",
-                    attempt_id, aether_host, aether_port, startup_deadline.as_secs(), settings.aether.scan_mode
+                    attempt_id, aether_host, aether_port, startup_deadline.as_secs(), effective_scan_mode
                 );
                 self.logger.log(
                     "INFO",
@@ -436,6 +466,438 @@ impl ConnectionOrchestrator {
         Ok(())
     }
 
+    pub async fn find_faster_gateway(
+        &self,
+        settings: &AppSettings,
+    ) -> Result<RouteOptimizationResult, String> {
+        // 1. Acquire operation lock FIRST
+        let _op_guard = match self.op_lock.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => return Err("Connection operation already in progress".to_string()),
+        };
+
+        let opt_id = self.next_attempt_id.fetch_add(1, Ordering::SeqCst);
+        let current_state = *self.state.read();
+
+        match current_state {
+            ConnectionState::Connected => {
+                // Connected route optimization flow
+                self.logger.log(
+                    "INFO",
+                    "Aether",
+                    format!(
+                        "[Optimize #{}] Fresh gateway scan requested (Find Faster Gateway)",
+                        opt_id
+                    ),
+                );
+
+                // 1. Capture previous verified telemetry
+                let prev_trace = HealthProber::query_cloudflare_trace_via_socks5(
+                    &settings.aether.host,
+                    settings.aether.port,
+                )
+                .await
+                .ok();
+                let prev_latency_ms = prev_trace.as_ref().map(|t| t.latency_ms);
+                let prev_pop = prev_trace.as_ref().map(|t| t.colo.clone());
+                let prev_ip = prev_trace.as_ref().map(|t| t.ip.clone());
+
+                self.logger.log(
+                    "INFO",
+                    "Aether",
+                    format!(
+                        "[Optimize #{}] Previous gateway: POP: {}, IP: {}, Latency: {:?} ms",
+                        opt_id,
+                        prev_pop.as_deref().unwrap_or("unknown"),
+                        prev_ip.as_deref().unwrap_or("unknown"),
+                        prev_latency_ms
+                    ),
+                );
+                self.logger.log(
+                    "INFO",
+                    "Aether",
+                    format!(
+                        "[Optimize #{}] Quick reconnect disabled for fresh scan",
+                        opt_id
+                    ),
+                );
+                self.logger.log(
+                    "INFO",
+                    "Aether",
+                    format!("[Optimize #{}] Thorough scan started", opt_id),
+                );
+
+                self.set_state(ConnectionState::ScanningAether);
+
+                // 2. Stop sing-box first to release TUN
+                self.singbox.lock().await.stop(&self.logger);
+
+                // 3. Stop managed Aether instance
+                if self.is_aether_managed.load(Ordering::SeqCst) {
+                    self.aether.lock().await.stop(&self.logger);
+                }
+
+                // 4. Start Aether with Thorough scan and Quick Reconnect FORCE DISABLED
+                let opt_options = crate::models::settings::AetherLaunchOptions {
+                    quick_reconnect_override: Some(false),
+                    scan_mode_override: Some(crate::models::settings::AetherScanMode::Thorough),
+                };
+
+                let t_scan_start = std::time::Instant::now();
+                let aether_spawn_res = {
+                    let mut aether_guard = self.aether.lock().await;
+                    aether_guard.start_with_options(settings, &opt_options, &self.logger)
+                };
+
+                if let Err(e) = aether_spawn_res {
+                    self.logger.log(
+                        "ERROR",
+                        "Aether",
+                        format!(
+                            "[Optimize #{}] Failed to spawn Aether for fresh scan: {}. Entering rollback...",
+                            opt_id, e
+                        ),
+                    );
+                    return self
+                        .rollback_and_restore(
+                            settings,
+                            opt_id,
+                            prev_latency_ms,
+                            prev_pop,
+                            prev_ip,
+                            e,
+                        )
+                        .await;
+                }
+                self.is_aether_managed.store(true, Ordering::SeqCst);
+
+                // 5. Wait for Aether SOCKS proxy ready with Thorough deadline
+                let startup_deadline = crate::models::settings::aether_startup_timeout(
+                    &crate::models::settings::AetherScanMode::Thorough,
+                );
+                let check_interval = Duration::from_millis(300);
+                let mut aether_ready = false;
+                let mut new_trace_opt = None;
+
+                while t_scan_start.elapsed() < startup_deadline {
+                    tokio::time::sleep(check_interval).await;
+
+                    {
+                        let mut aether_guard = self.aether.lock().await;
+                        if aether_guard.is_interactive_prompt_detected()
+                            || !aether_guard.is_running()
+                        {
+                            aether_guard.stop(&self.logger);
+                            break;
+                        }
+                    }
+
+                    if HealthProber::check_port_open(
+                        &settings.aether.host,
+                        settings.aether.port,
+                        150,
+                    )
+                    .await
+                    {
+                        match HealthProber::query_cloudflare_trace_via_socks5(
+                            &settings.aether.host,
+                            settings.aether.port,
+                        )
+                        .await
+                        {
+                            Ok(trace) => {
+                                *self.active_aether_ip.write() = Some(trace.ip.clone());
+                                new_trace_opt = Some(trace);
+                                aether_ready = true;
+                                break;
+                            }
+                            Err(_) => {}
+                        }
+                    }
+                }
+
+                if !aether_ready {
+                    self.logger.log(
+                        "WARN",
+                        "Aether",
+                        format!(
+                            "[Optimize #{}] Fresh scan failed / timed out. Restoring previous connection using Quick Reconnect",
+                            opt_id
+                        ),
+                    );
+                    self.aether.lock().await.stop(&self.logger);
+                    return self
+                        .rollback_and_restore(
+                            settings,
+                            opt_id,
+                            prev_latency_ms,
+                            prev_pop,
+                            prev_ip,
+                            "Fresh scan did not yield a responsive gateway within the timeout deadline"
+                                .to_string(),
+                        )
+                        .await;
+                }
+
+                let new_trace = new_trace_opt.unwrap();
+                let new_latency_ms = new_trace.latency_ms;
+                let new_pop = new_trace.colo.clone();
+                let new_ip = new_trace.ip.clone();
+
+                self.logger.log(
+                    "INFO",
+                    "Aether",
+                    format!(
+                        "[Optimize #{}] Aether SOCKS ready in {:.2}s. New gateway: POP: {}, IP: {}, Latency: {:?} ms",
+                        opt_id,
+                        t_scan_start.elapsed().as_secs_f32(),
+                        new_pop,
+                        new_ip,
+                        new_latency_ms
+                    ),
+                );
+
+                // 6. Restart sing-box router
+                self.set_state(ConnectionState::StartingRouter);
+                let sb_spawn_res = {
+                    let mut sb_guard = self.singbox.lock().await;
+                    sb_guard.start(settings, &self.logger)
+                };
+                if let Err(e) = sb_spawn_res {
+                    self.logger.log(
+                        "ERROR",
+                        "sing-box",
+                        format!(
+                            "[Optimize #{}] Failed to start sing-box after fresh scan: {}. Entering rollback...",
+                            opt_id, e
+                        ),
+                    );
+                    return self
+                        .rollback_and_restore(
+                            settings,
+                            opt_id,
+                            prev_latency_ms,
+                            prev_pop,
+                            prev_ip,
+                            e,
+                        )
+                        .await;
+                }
+
+                // 7. Verify routing
+                self.set_state(ConnectionState::TestingRouting);
+                let interface_name = &settings.sing_box.interface_name;
+                let tun_address = &settings.sing_box.tun_address;
+                let expected_aether_ip = self.active_aether_ip.read().clone();
+
+                let mut sb_guard = self.singbox.lock().await;
+                if let Err(verify_err) = sb_guard
+                    .verify_router_and_egress(
+                        interface_name,
+                        Some(tun_address),
+                        Duration::from_secs(6),
+                        expected_aether_ip.as_deref(),
+                        &self.logger,
+                    )
+                    .await
+                {
+                    self.logger.log(
+                        "ERROR",
+                        "sing-box",
+                        format!(
+                            "[Optimize #{}] Routing verification failed after fresh scan: {}. Entering rollback...",
+                            opt_id, verify_err
+                        ),
+                    );
+                    sb_guard.stop(&self.logger);
+                    drop(sb_guard);
+                    return self
+                        .rollback_and_restore(
+                            settings,
+                            opt_id,
+                            prev_latency_ms,
+                            prev_pop,
+                            prev_ip,
+                            verify_err,
+                        )
+                        .await;
+                }
+
+                self.logger.log(
+                    "INFO",
+                    "Aether",
+                    format!("[Optimize #{}] Routing verification passed", opt_id),
+                );
+                self.logger.log(
+                    "INFO",
+                    "Aether",
+                    format!("[Optimize #{}] Gateway optimization complete", opt_id),
+                );
+                self.set_state(ConnectionState::Connected);
+
+                let latency_delta_ms =
+                    prev_latency_ms.map(|prev| prev as i64 - new_latency_ms as i64);
+
+                let msg = match latency_delta_ms {
+                    Some(delta) if delta > 0 => {
+                        format!("Gateway optimized! Latency improved by {} ms.", delta)
+                    }
+                    Some(_) => {
+                        format!(
+                            "Fresh scan complete. Selected lowest current RTT candidate ({} ms).",
+                            new_latency_ms
+                        )
+                    }
+                    None => "Fresh scan complete. Connected to optimal gateway.".to_string(),
+                };
+
+                Ok(RouteOptimizationResult {
+                    success: true,
+                    previous_latency_ms: prev_latency_ms,
+                    previous_pop: prev_pop,
+                    previous_ip: prev_ip,
+                    new_latency_ms: Some(new_latency_ms),
+                    new_pop: Some(new_pop),
+                    new_ip: Some(new_ip),
+                    latency_delta_ms,
+                    message: msg,
+                })
+            }
+            ConnectionState::Disconnected | ConnectionState::Error => {
+                // Disconnected "Find Best Gateway" flow: connect using Thorough scan and Quick Reconnect disabled
+                self.logger.log(
+                    "INFO",
+                    "Aether",
+                    format!(
+                        "[Optimize #{}] Initial connection requested via fresh gateway scan (Find Best Gateway)",
+                        opt_id
+                    ),
+                );
+                self.logger.log(
+                    "INFO",
+                    "Aether",
+                    format!(
+                        "[Optimize #{}] Quick reconnect disabled for fresh scan",
+                        opt_id
+                    ),
+                );
+                self.logger.log(
+                    "INFO",
+                    "Aether",
+                    format!("[Optimize #{}] Thorough scan started", opt_id),
+                );
+
+                self.set_state(ConnectionState::StartingAether);
+
+                let opt_options = crate::models::settings::AetherLaunchOptions {
+                    quick_reconnect_override: Some(false),
+                    scan_mode_override: Some(crate::models::settings::AetherScanMode::Thorough),
+                };
+
+                // Run connection with opt_options
+                self.connect_internal(settings, opt_id, &opt_options).await?;
+
+                let new_trace = HealthProber::query_cloudflare_trace_via_socks5(
+                    &settings.aether.host,
+                    settings.aether.port,
+                )
+                .await
+                .ok();
+                let new_latency_ms = new_trace.as_ref().map(|t| t.latency_ms);
+                let new_pop = new_trace.as_ref().map(|t| t.colo.clone());
+                let new_ip = new_trace.as_ref().map(|t| t.ip.clone());
+
+                self.logger.log(
+                    "INFO",
+                    "Aether",
+                    format!(
+                        "[Optimize #{}] Initial gateway scan complete and connected",
+                        opt_id
+                    ),
+                );
+
+                Ok(RouteOptimizationResult {
+                    success: true,
+                    previous_latency_ms: None,
+                    previous_pop: None,
+                    previous_ip: None,
+                    new_latency_ms,
+                    new_pop,
+                    new_ip,
+                    latency_delta_ms: None,
+                    message: "Connected to best available gateway via Thorough scan.".to_string(),
+                })
+            }
+            _ => Err("Connection operation already in progress".to_string()),
+        }
+    }
+
+    async fn rollback_and_restore(
+        &self,
+        settings: &AppSettings,
+        opt_id: u64,
+        prev_latency_ms: Option<u64>,
+        prev_pop: Option<String>,
+        prev_ip: Option<String>,
+        failure_reason: String,
+    ) -> Result<RouteOptimizationResult, String> {
+        self.logger.log(
+            "WARN",
+            "STATE",
+            format!(
+                "[Optimize #{}] Fresh scan failed ({}), restoring previous working gateway via Quick Reconnect...",
+                opt_id, failure_reason
+            ),
+        );
+        self.set_state(ConnectionState::StartingAether);
+
+        // Stop any running instances first
+        self.singbox.lock().await.stop(&self.logger);
+        if self.is_aether_managed.load(Ordering::SeqCst) {
+            self.aether.lock().await.stop(&self.logger);
+        }
+
+        // Connect with normal configured settings (Quick Reconnect enabled)
+        let normal_options = crate::models::settings::AetherLaunchOptions::default();
+        match self
+            .connect_internal(settings, opt_id, &normal_options)
+            .await
+        {
+            Ok(_) => {
+                self.logger.log(
+                    "INFO",
+                    "STATE",
+                    format!(
+                        "[Optimize #{}] Successfully restored previous connection via Quick Reconnect",
+                        opt_id
+                    ),
+                );
+                Ok(RouteOptimizationResult {
+                    success: false,
+                    previous_latency_ms: prev_latency_ms,
+                    previous_pop: prev_pop,
+                    previous_ip: prev_ip,
+                    new_latency_ms: None,
+                    new_pop: None,
+                    new_ip: None,
+                    latency_delta_ms: None,
+                    message: format!(
+                        "Fresh scan failed ({}). Restored previous working connection.",
+                        failure_reason
+                    ),
+                })
+            }
+            Err(restore_err) => {
+                let err = format!(
+                    "Fresh scan failed ({}) AND restoration of previous connection also failed ({})",
+                    failure_reason, restore_err
+                );
+                self.set_error(err.clone());
+                Err(err)
+            }
+        }
+    }
+
     pub async fn disconnect(&self) -> Result<(), String> {
         let _op_guard = self.op_lock.lock().await;
 
@@ -515,5 +977,54 @@ impl ConnectionOrchestrator {
             is_conn,
         )
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_e_duplicate_optimize_cannot_create_multiple_lifecycle_operations() {
+        let logger = RingBufferLogger::new(100);
+        let state = Arc::new(RwLock::new(ConnectionState::Disconnected));
+        let orch = ConnectionOrchestrator::new(state.clone(), logger);
+        let settings = AppSettings::default();
+
+        // 1. Acquire op_lock manually to simulate an in-flight operation
+        let _guard = orch.op_lock.try_lock().expect("Failed to lock op_lock");
+
+        // 2. Invoke find_faster_gateway while lock is held
+        let res = orch.find_faster_gateway(&settings).await;
+        assert!(res.is_err());
+        assert_eq!(
+            res.unwrap_err(),
+            "Connection operation already in progress"
+        );
+
+        // 3. Verify state remained Disconnected (no phantom state mutation)
+        assert_eq!(*orch.state.read(), ConnectionState::Disconnected);
+    }
+
+    #[tokio::test]
+    async fn test_f_optimize_rejected_while_other_operation_is_active() {
+        let logger = RingBufferLogger::new(100);
+        let state = Arc::new(RwLock::new(ConnectionState::Connected));
+        let orch = ConnectionOrchestrator::new(state.clone(), logger);
+        let settings = AppSettings::default();
+
+        // 1. Hold op_lock to simulate active disconnect/connect
+        let _guard = orch.op_lock.try_lock().expect("Failed to lock op_lock");
+
+        // 2. Attempt find_faster_gateway
+        let res = orch.find_faster_gateway(&settings).await;
+        assert!(res.is_err());
+        assert_eq!(
+            res.unwrap_err(),
+            "Connection operation already in progress"
+        );
+
+        // State remains Connected
+        assert_eq!(*orch.state.read(), ConnectionState::Connected);
     }
 }

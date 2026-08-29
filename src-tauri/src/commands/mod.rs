@@ -4,6 +4,7 @@ use crate::logging::{LogEntry, RingBufferLogger};
 use crate::models::health::CloudflareTrace;
 use crate::models::{AppSettings, ConnectionState, HealthStatus};
 use crate::process::icon::extract_icon_base64;
+use crate::process::orchestrator::RouteOptimizationResult;
 use crate::process::{
     pick_windows_executable, ConnectionOrchestrator, ProcessDetector, RunningProcessInfo,
 };
@@ -118,6 +119,14 @@ pub fn get_connection_state(state: State<'_, AppState>) -> ConnectionState {
 pub async fn connect_tunnel(state: State<'_, AppState>) -> Result<(), String> {
     let settings = SettingsStorage::load();
     state.orchestrator.connect(&settings).await
+}
+
+#[tauri::command]
+pub async fn find_faster_gateway(
+    state: State<'_, AppState>,
+) -> Result<RouteOptimizationResult, String> {
+    let settings = SettingsStorage::load();
+    state.orchestrator.find_faster_gateway(&settings).await
 }
 
 #[tauri::command]

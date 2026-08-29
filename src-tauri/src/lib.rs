@@ -47,6 +47,7 @@ pub fn run() {
             commands::reset_settings,
             commands::get_connection_state,
             commands::connect_tunnel,
+            commands::find_faster_gateway,
             commands::disconnect_tunnel,
             commands::get_health_status,
             commands::get_running_applications,

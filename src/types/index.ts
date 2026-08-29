@@ -182,3 +182,20 @@ export interface DownloadProgress {
   downloadedBytes: number;
   totalBytes: number;
 }
+
+export interface RouteOptimizationResult {
+  success: boolean;
+  previousLatencyMs?: number | null;
+  previousPop?: string | null;
+  previousIp?: string | null;
+  newLatencyMs?: number | null;
+  newPop?: string | null;
+  newIp?: string | null;
+  latencyDeltaMs?: number | null;
+  message: string;
+}
+
+export interface GatewayScanProgress {
+  bestRttMs?: number | null;
+  message: string;
+}

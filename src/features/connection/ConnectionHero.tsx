@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import {
   Power,
   Globe,
@@ -9,14 +9,18 @@ import {
   Cpu,
   Activity,
   Terminal,
+  Zap,
+  CheckCircle2,
+  X,
 } from "lucide-react";
-import { ConnectionState, HealthStatus } from "../../types";
+import { ConnectionState, HealthStatus, RouteOptimizationResult } from "../../types";
 
 interface ConnectionHeroProps {
   connectionState: ConnectionState;
   health: HealthStatus | null;
   onConnect: () => void;
   onDisconnect: () => void;
+  onFindFasterGateway?: () => Promise<RouteOptimizationResult | void>;
   onViewDiagnostics?: () => void;
   errorDetails?: string | null;
 }
@@ -26,13 +30,45 @@ export const ConnectionHero: React.FC<ConnectionHeroProps> = ({
   health,
   onConnect,
   onDisconnect,
+  onFindFasterGateway,
   onViewDiagnostics,
   errorDetails,
 }) => {
+  const [showConfirmModal, setShowConfirmModal] = useState<boolean>(false);
+  const [isOptimizing, setIsOptimizing] = useState<boolean>(false);
+  const [optimizationResult, setOptimizationResult] = useState<RouteOptimizationResult | null>(null);
+  const [optimizationError, setOptimizationError] = useState<string | null>(null);
+
   const isConnected = connectionState === "CONNECTED";
   const isDisconnected = connectionState === "DISCONNECTED";
   const isError = connectionState === "ERROR";
   const isTransitioning = !isConnected && !isDisconnected && !isError;
+
+  const handleOptimizeClick = () => {
+    if (isConnected) {
+      setShowConfirmModal(true);
+    } else {
+      executeFindFasterGateway();
+    }
+  };
+
+  const executeFindFasterGateway = async () => {
+    setShowConfirmModal(false);
+    setIsOptimizing(true);
+    setOptimizationError(null);
+    try {
+      if (onFindFasterGateway) {
+        const res = await onFindFasterGateway();
+        if (res) {
+          setOptimizationResult(res);
+        }
+      }
+    } catch (err: any) {
+      setOptimizationError(err?.message || err?.toString() || "Optimization failed");
+    } finally {
+      setIsOptimizing(false);
+    }
+  };
 
   const getSubStatusText = () => {
     if (isConnected) {
@@ -95,7 +131,7 @@ export const ConnectionHero: React.FC<ConnectionHeroProps> = ({
         {/* Subtle background rail line */}
         <div className="absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r from-transparent via-app-border to-transparent" />
 
-        {/* Top: Public Gateway Node */}
+        {/* Top: Public Gateway Node with Find Faster Gateway Trigger */}
         <div className="w-full flex items-center justify-between px-3 py-1.5 rounded-sm bg-app-inset border border-app-border-subtle text-xs font-mono mb-3">
           <div className="flex items-center gap-2">
             <Globe className={`w-3.5 h-3.5 ${isConnected ? "text-signal-green" : isTransitioning ? "text-signal-cyan animate-pulse" : "text-ink-400"}`} />
@@ -109,14 +145,26 @@ export const ConnectionHero: React.FC<ConnectionHeroProps> = ({
             </span>
           </div>
 
-          <div className="flex items-center gap-3 text-[11px]">
+          <div className="flex items-center gap-2.5 text-[11px]">
             {isConnected && health?.cloudflareTrace?.latencyMs !== undefined && (
               <span className="text-signal-green flex items-center gap-1">
                 <Activity className="w-3 h-3" />
                 <span>{health.cloudflareTrace.latencyMs} ms</span>
               </span>
             )}
-            <span className="flex items-center gap-1.5">
+            
+            {/* Find Faster Gateway button */}
+            <button
+              onClick={handleOptimizeClick}
+              disabled={isTransitioning || isOptimizing}
+              className="flex items-center gap-1 px-2 py-0.5 rounded-xs bg-app-surface hover:bg-app-panel border border-app-border hover:border-signal-cyan/60 text-ink-200 hover:text-signal-cyan text-[10px] font-mono transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+              title={isConnected ? "Perform a fresh Thorough sweep for a lower latency gateway" : "Connect using a fresh Thorough candidate sweep"}
+            >
+              <Zap className={`w-3 h-3 ${isOptimizing ? "animate-pulse text-signal-cyan" : "text-signal-cyan"}`} />
+              <span>{isConnected ? "Find Faster Gateway" : "Find Best Gateway"}</span>
+            </button>
+
+            <span className="flex items-center gap-1.5 ml-1">
               <span className={`w-1.5 h-1.5 rounded-full ${isConnected ? "bg-signal-green" : isTransitioning ? "bg-signal-cyan animate-pulse" : "bg-ink-500"}`} />
               <span className="text-ink-400 font-sans text-[10px] uppercase">
                 {isConnected ? "Active" : isTransitioning ? "Syncing" : "Standby"}
@@ -131,6 +179,89 @@ export const ConnectionHero: React.FC<ConnectionHeroProps> = ({
           <div className={`w-2 h-2 rounded-full border transition-all ${isConnected ? "border-signal-green bg-signal-green/30" : isTransitioning ? "border-signal-cyan bg-signal-cyan/40 animate-ping" : "border-app-border bg-app-inset"}`} />
           <div className={`w-0.5 h-4 transition-colors duration-500 ${isConnected ? "bg-signal-green" : isTransitioning ? "bg-signal-cyan" : "bg-app-border"}`} />
         </div>
+
+        {/* Route Optimization Result / Telemetry Diff Card */}
+        {optimizationResult && (
+          <div
+            className={`w-full max-w-md my-1.5 p-2.5 rounded-sm border text-xs font-mono flex items-start justify-between gap-2 transition-all shadow-sm ${
+              optimizationResult.success
+                ? (optimizationResult.latencyDeltaMs ?? 0) > 0
+                  ? "bg-signal-green-dim border-signal-green/40 text-signal-green"
+                  : "bg-signal-cyan-dim border-signal-cyan/40 text-signal-cyan"
+                : "bg-signal-amber-dim border-signal-amber/40 text-signal-amber"
+            }`}
+          >
+            <div className="flex items-start gap-2">
+              {optimizationResult.success ? (
+                <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0" />
+              ) : (
+                <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+              )}
+              <div>
+                <div className="font-bold uppercase tracking-wider text-[10px]">
+                  {optimizationResult.success
+                    ? (optimizationResult.latencyDeltaMs ?? 0) > 0
+                      ? "Gateway Optimized"
+                      : "Fresh Scan Complete"
+                    : "Previous Working Gateway Restored"}
+                </div>
+                <div className="text-[11px] mt-0.5 text-ink-200">
+                  {optimizationResult.previousLatencyMs !== undefined &&
+                  optimizationResult.previousLatencyMs !== null ? (
+                    <span>
+                      Previous:{" "}
+                      <span className="text-ink-400 font-semibold">
+                        {optimizationResult.previousLatencyMs} ms
+                        {optimizationResult.previousPop && ` (${optimizationResult.previousPop})`}
+                      </span>
+                      {optimizationResult.newLatencyMs !== undefined &&
+                        optimizationResult.newLatencyMs !== null && (
+                          <span>
+                            {" "}→ New:{" "}
+                            <span className="font-bold text-ink-100">
+                              {optimizationResult.newLatencyMs} ms
+                              {optimizationResult.newPop && ` (${optimizationResult.newPop})`}
+                            </span>
+                          </span>
+                        )}
+                      {optimizationResult.latencyDeltaMs !== undefined &&
+                        optimizationResult.latencyDeltaMs !== null &&
+                        optimizationResult.latencyDeltaMs > 0 && (
+                          <span className="text-signal-green font-bold ml-1">
+                            (+{optimizationResult.latencyDeltaMs} ms faster)
+                          </span>
+                        )}
+                    </span>
+                  ) : (
+                    <span>{optimizationResult.message}</span>
+                  )}
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={() => setOptimizationResult(null)}
+              className="text-ink-400 hover:text-ink-100 p-0.5 cursor-pointer"
+              title="Dismiss notification"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
+        {optimizationError && (
+          <div className="w-full max-w-md my-1.5 p-2 rounded-sm border bg-signal-red-dim border-signal-red/40 text-signal-red text-xs font-mono flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+              <span>{optimizationError}</span>
+            </div>
+            <button
+              onClick={() => setOptimizationError(null)}
+              className="text-signal-red/70 hover:text-signal-red p-0.5 cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
 
         {/* Center: The Precision Routing Core Module */}
         <div className="w-full max-w-md my-1">
@@ -298,6 +429,41 @@ export const ConnectionHero: React.FC<ConnectionHeroProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Confirmation Modal for Find Faster Gateway while Connected */}
+      {showConfirmModal && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="w-full max-w-sm bg-app-panel border border-app-border rounded-md p-4 shadow-2xl text-ink-200 select-none animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center gap-2 mb-2.5 text-signal-cyan">
+              <Zap className="w-4 h-4" />
+              <h3 className="text-xs font-bold font-mono uppercase tracking-wider">
+                Search for a Faster Gateway
+              </h3>
+            </div>
+            <p className="text-xs text-ink-300 mb-3 leading-relaxed">
+              Finding a faster gateway performs a fresh network scan and temporarily interrupts the active connection. A thorough scan sweeps full candidate ranges.
+            </p>
+            <div className="p-2 rounded-sm bg-app-inset border border-app-border-subtle text-[11px] text-ink-400 font-mono mb-4">
+              Your previous working gateway will be restored automatically if a responsive alternative is not found.
+            </div>
+            <div className="flex items-center justify-end gap-2 text-xs font-mono">
+              <button
+                onClick={() => setShowConfirmModal(false)}
+                className="px-3 py-1.5 rounded-sm bg-app-surface hover:bg-app-inset border border-app-border text-ink-300 hover:text-ink-100 transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={executeFindFasterGateway}
+                className="px-3 py-1.5 rounded-sm bg-signal-cyan hover:bg-signal-cyan-muted text-black font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
+              >
+                <Zap className="w-3.5 h-3.5 fill-black" />
+                <span>Start Scan</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

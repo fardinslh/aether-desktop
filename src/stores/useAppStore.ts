@@ -220,6 +220,38 @@ export function useAppStore() {
     }
   };
 
+  const optimizeInFlightRef = useRef<boolean>(false);
+  const triggerFindFasterGateway = async () => {
+    if (optimizeInFlightRef.current) {
+      console.log("Optimization command already in flight, ignoring duplicate trigger");
+      return;
+    }
+    optimizeInFlightRef.current = true;
+    stateVersionRef.current += 1;
+    setErrorDetails(null);
+    setConnectionState("SCANNING_AETHER");
+
+    try {
+      const res = await api.findFasterGateway();
+      stateVersionRef.current += 1;
+      const st = await api.getConnectionState();
+      setConnectionState(st);
+      if (st === "CONNECTED") {
+        const hl = await api.getHealthStatus();
+        setHealth(hl);
+      }
+      return res;
+    } catch (err: any) {
+      stateVersionRef.current += 1;
+      const st = await api.getConnectionState();
+      setConnectionState(st);
+      setErrorDetails(err?.toString() || "Gateway scan failed");
+      throw err;
+    } finally {
+      optimizeInFlightRef.current = false;
+    }
+  };
+
   const triggerDisconnect = async () => {
     if (disconnectInFlightRef.current) {
       console.log("Disconnect command already in flight, ignoring duplicate trigger");
@@ -257,6 +289,7 @@ export function useAppStore() {
     deleteApplicationRule,
     updateApplicationRoute,
     triggerConnect,
+    triggerFindFasterGateway,
     triggerDisconnect,
     refreshAll,
   };
