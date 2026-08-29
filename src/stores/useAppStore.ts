@@ -15,20 +15,30 @@ export function useAppStore() {
   const stateRef = useRef<ConnectionState>(connectionState);
   stateRef.current = connectionState;
 
+  // Request epoch / version counter to prevent stale polling responses from overwriting newer event states
+  const stateVersionRef = useRef<number>(0);
+  const connectInFlightRef = useRef<boolean>(false);
+  const disconnectInFlightRef = useRef<boolean>(false);
+
   // Fetch initial state
   const refreshAll = useCallback(async () => {
+    const versionAtStart = stateVersionRef.current;
     try {
-      const [fetchedSettings, fetchedState, fetchedHealth, fetchedLogs] = await Promise.all([
+      const [fetchedSettings, fetchedHealth, fetchedLogs] = await Promise.all([
         api.getSettings(),
-        api.getConnectionState(),
         api.getHealthStatus(),
         api.getLogs(),
       ]);
 
       setSettings(fetchedSettings);
-      setConnectionState(fetchedState);
       setHealth(fetchedHealth);
       setLogs(fetchedLogs);
+
+      // Fetch connection state AFTER slow requests and apply only if version didn't change
+      const fetchedState = await api.getConnectionState();
+      if (stateVersionRef.current === versionAtStart) {
+        setConnectionState(fetchedState);
+      }
     } catch (err) {
       console.error("Error refreshing app state:", err);
     } finally {
@@ -39,10 +49,11 @@ export function useAppStore() {
   useEffect(() => {
     refreshAll();
 
-    // 1. Event-driven connection state updates
+    // 1. Authoritative Event-driven connection state updates
     let unlistenFn: (() => void) | null = null;
     listen<ConnectionState>("connection-state-changed", (event) => {
       if (event.payload) {
+        stateVersionRef.current += 1;
         setConnectionState(event.payload);
       }
     }).then((unlisten) => {
@@ -51,28 +62,52 @@ export function useAppStore() {
       console.warn("Failed to attach Tauri event listener:", err);
     });
 
-    // 2. Adaptive polling reconciliation
+    // 2. Adaptive polling reconciliation with epoch protection
     let timeoutId: ReturnType<typeof setTimeout>;
     const poll = async () => {
-      try {
-        const [st, hl, lg] = await Promise.all([
-          api.getConnectionState(),
-          api.getHealthStatus(),
-          api.getLogs(),
-        ]);
-        setConnectionState(st);
-        setHealth(hl);
-        setLogs(lg);
-      } catch {
-        // network polling error
-      }
-
       const isTransitioning =
         stateRef.current !== "CONNECTED" &&
         stateRef.current !== "DISCONNECTED" &&
         stateRef.current !== "ERROR";
 
-      timeoutId = setTimeout(poll, isTransitioning ? 250 : 2000);
+      const versionAtStart = stateVersionRef.current;
+
+      try {
+        if (isTransitioning) {
+          // During transitional states, NEVER execute expensive health probes.
+          // Only fetch lightweight connection state and logs.
+          const [st, lg] = await Promise.all([
+            api.getConnectionState(),
+            api.getLogs(),
+          ]);
+          if (stateVersionRef.current === versionAtStart) {
+            setConnectionState(st);
+          }
+          setLogs(lg);
+        } else {
+          // When state is stable, poll health and logs, then check connection state after slow health
+          const [hl, lg] = await Promise.all([
+            api.getHealthStatus(),
+            api.getLogs(),
+          ]);
+          setHealth(hl);
+          setLogs(lg);
+
+          const st = await api.getConnectionState();
+          if (stateVersionRef.current === versionAtStart) {
+            setConnectionState(st);
+          }
+        }
+      } catch {
+        // network polling error ignored
+      }
+
+      const nextTransitioning =
+        stateRef.current !== "CONNECTED" &&
+        stateRef.current !== "DISCONNECTED" &&
+        stateRef.current !== "ERROR";
+
+      timeoutId = setTimeout(poll, nextTransitioning ? 800 : 2000);
     };
 
     timeoutId = setTimeout(poll, 1000);
@@ -155,31 +190,55 @@ export function useAppStore() {
     await updateSettings(updated);
   };
 
-  // Immediate State Transition Triggers
+  // Immediate State Transition Triggers with in-flight click protection
   const triggerConnect = async () => {
+    if (connectInFlightRef.current) {
+      console.log("Connect command already in flight, ignoring duplicate trigger");
+      return;
+    }
+    connectInFlightRef.current = true;
+    stateVersionRef.current += 1;
     setErrorDetails(null);
-    // Instant 0ms visual feedback on click
+    // Instant visual feedback
     setConnectionState("STARTING_AETHER");
+
     try {
       await api.connect();
-      const [st, h] = await Promise.all([api.getConnectionState(), api.getHealthStatus()]);
+      stateVersionRef.current += 1;
+      const st = await api.getConnectionState();
       setConnectionState(st);
-      setHealth(h);
+      if (st === "CONNECTED") {
+        const hl = await api.getHealthStatus();
+        setHealth(hl);
+      }
     } catch (err: any) {
+      stateVersionRef.current += 1;
       setConnectionState("ERROR");
       setErrorDetails(err?.toString() || "Connection error");
+    } finally {
+      connectInFlightRef.current = false;
     }
   };
 
   const triggerDisconnect = async () => {
-    // Instant 0ms visual feedback on click
+    if (disconnectInFlightRef.current) {
+      console.log("Disconnect command already in flight, ignoring duplicate trigger");
+      return;
+    }
+    disconnectInFlightRef.current = true;
+    stateVersionRef.current += 1;
+    // Instant visual feedback
     setConnectionState("DISCONNECTING");
+
     try {
       await api.disconnect();
+      stateVersionRef.current += 1;
       const st = await api.getConnectionState();
       setConnectionState(st);
     } catch (err: any) {
       console.error("Disconnect error:", err);
+    } finally {
+      disconnectInFlightRef.current = false;
     }
   };
 

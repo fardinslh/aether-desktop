@@ -72,6 +72,10 @@ impl ProcessHandle {
         }
     }
 
+    pub fn child_pid(&self) -> Option<u32> {
+        self.child.as_ref().map(|c| c.id())
+    }
+
     pub fn is_interactive_prompt_detected(&self) -> bool {
         self.interactive_prompt_detected.load(Ordering::SeqCst)
     }
@@ -106,6 +110,10 @@ impl AetherRunner {
         } else {
             false
         }
+    }
+
+    pub fn pid(&self) -> Option<u32> {
+        self.handle.as_ref().and_then(|h| h.child_pid())
     }
 
     pub fn is_interactive_prompt_detected(&self) -> bool {
@@ -273,6 +281,10 @@ impl SingBoxRunner {
         } else {
             false
         }
+    }
+
+    pub fn pid(&self) -> Option<u32> {
+        self.handle.as_ref().and_then(|h| h.child_pid())
     }
 
     pub fn write_config_to_path(&self, config: &SingBoxConfig, path: &Path) -> Result<(), String> {
@@ -531,11 +543,13 @@ impl SingBoxRunner {
             "INFO",
             "sing-box",
             format!(
-                "Verified TUN network adapter presence: {}",
+                "Verified TUN network adapter presence in {:.2}s: {}",
+                start.elapsed().as_secs_f32(),
                 matched_adapter_name
             ),
         );
 
+        let t_stages_start = std::time::Instant::now();
         // Execute staged 3-tier egress and DNS verification decision path
         let log_cb = |lvl: &str, target: &str, msg: &str| {
             logger.log(lvl, target, msg);
@@ -548,8 +562,19 @@ impl SingBoxRunner {
             expected_aether_ip,
             Some(&log_cb),
         )
-        .await
-        .map(|_| ())
+        .await?;
+
+        logger.log(
+            "INFO",
+            "sing-box",
+            format!(
+                "All egress verification stages passed in {:.2}s (Total router ready: {:.2}s)",
+                t_stages_start.elapsed().as_secs_f32(),
+                start.elapsed().as_secs_f32()
+            ),
+        );
+
+        Ok(())
     }
 
     /// Transactional Live Apply with full health and system egress verification:

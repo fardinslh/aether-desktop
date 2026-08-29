@@ -312,6 +312,7 @@ impl HealthProber {
         // -------------------------------------------------------------------------
         // Stage 1: DNS-independent system egress test (via IP-literal 1.1.1.1 / 1.0.0.1)
         // -------------------------------------------------------------------------
+        let t_stage1 = Instant::now();
         let mut ip_trace_opt = None;
         let mut last_ip_err = String::new();
         for attempt in 1..=4 {
@@ -336,7 +337,8 @@ impl HealthProber {
                         "INFO",
                         "sing-box",
                         &format!(
-                            "Stage 1 PASS: DNS-independent IP-literal egress verified (POP: {}, IP: {}, Latency: {} ms)",
+                            "Stage 1 PASS in {:.2}s: DNS-independent IP-literal egress verified (POP: {}, IP: {}, Latency: {} ms)",
+                            t_stage1.elapsed().as_secs_f32(),
                             t.colo, t.ip, t.latency_ms
                         ),
                     );
@@ -349,7 +351,8 @@ impl HealthProber {
                         "ERROR",
                         "sing-box",
                         &format!(
-                            "Stage 1 FAIL: Direct system egress failed on IP-literal transport (1.1.1.1 / 1.0.0.1): {}",
+                            "Stage 1 FAIL after {:.2}s: Direct system egress failed on IP-literal transport (1.1.1.1 / 1.0.0.1): {}",
+                            t_stage1.elapsed().as_secs_f32(),
                             last_ip_err
                         ),
                     );
@@ -380,6 +383,7 @@ impl HealthProber {
         // -------------------------------------------------------------------------
         // Stage 2: Windows System DNS Resolution test
         // -------------------------------------------------------------------------
+        let t_stage2 = Instant::now();
         let mut dns_resolved_ips = Vec::new();
         let mut last_dns_err = String::new();
         for attempt in 1..=4 {
@@ -399,7 +403,8 @@ impl HealthProber {
 
         if dns_resolved_ips.is_empty() {
             let dns_fail_msg = format!(
-                "Stage 2 DNS Failure: Windows system DNS resolution failed under TUN strict_route: {}",
+                "Stage 2 DNS Failure after {:.2}s: Windows system DNS resolution failed under TUN strict_route: {}",
+                t_stage2.elapsed().as_secs_f32(),
                 last_dns_err
             );
             if let Some(logger) = log_fn {
@@ -413,7 +418,8 @@ impl HealthProber {
                 "INFO",
                 "sing-box",
                 &format!(
-                    "Stage 2 PASS: Windows system DNS resolver confirmed (www.cloudflare.com -> {:?})",
+                    "Stage 2 PASS in {:.2}s: Windows system DNS resolver confirmed (www.cloudflare.com -> {:?})",
+                    t_stage2.elapsed().as_secs_f32(),
                     dns_resolved_ips
                 ),
             );
@@ -422,6 +428,7 @@ impl HealthProber {
         // -------------------------------------------------------------------------
         // Stage 3: Full Hostname HTTPS Trace verification (REQUIRED!)
         // -------------------------------------------------------------------------
+        let t_stage3 = Instant::now();
         let mut host_trace_opt = None;
         let mut last_host_err = String::new();
         for attempt in 1..=4 {
@@ -446,7 +453,8 @@ impl HealthProber {
                         "INFO",
                         "sing-box",
                         &format!(
-                            "Stage 3 PASS: Hostname HTTPS trace verified (POP: {}, IP: {}, Latency: {} ms)",
+                            "Stage 3 PASS in {:.2}s: Hostname HTTPS trace verified (POP: {}, IP: {}, Latency: {} ms)",
+                            t_stage3.elapsed().as_secs_f32(),
                             t.colo, t.ip, t.latency_ms
                         ),
                     );

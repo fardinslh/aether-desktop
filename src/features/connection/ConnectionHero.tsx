@@ -59,9 +59,11 @@ export const ConnectionHero: React.FC<ConnectionHeroProps> = ({
 
   const getSubStatusText = () => {
     if (isConnected) {
-      const colo = health?.cloudflareTrace?.colo || "FRA";
-      const lat = health?.cloudflareTrace?.latencyMs || 48;
-      return `${getCityFromColo(colo)} · ${lat} ms`;
+      const trace = health?.cloudflareTrace;
+      if (trace && trace.colo && trace.latencyMs !== undefined) {
+        return `${getCityFromColo(trace.colo)} · ${trace.latencyMs} ms`;
+      }
+      return "Connected · Measuring health...";
     }
     if (
       connectionState === "STARTING_AETHER" ||

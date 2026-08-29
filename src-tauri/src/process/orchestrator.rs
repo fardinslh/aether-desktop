@@ -5,7 +5,7 @@ use crate::models::{AppSettings, ConnectionState};
 use crate::process::detector::ProcessDetector;
 use crate::process::runner::{AetherRunner, SingBoxRunner};
 use parking_lot::RwLock;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::Emitter;
@@ -20,6 +20,8 @@ pub struct ConnectionOrchestrator {
     pub logger: RingBufferLogger,
     pub last_error: Arc<RwLock<Option<String>>>,
     pub app_handle: Arc<RwLock<Option<tauri::AppHandle>>>,
+    pub op_lock: Mutex<()>,
+    pub next_attempt_id: AtomicU64,
 }
 
 impl ConnectionOrchestrator {
@@ -33,6 +35,8 @@ impl ConnectionOrchestrator {
             logger,
             last_error: Arc::new(RwLock::new(None)),
             app_handle: Arc::new(RwLock::new(None)),
+            op_lock: Mutex::new(()),
+            next_attempt_id: AtomicU64::new(1),
         }
     }
 
@@ -64,11 +68,37 @@ impl ConnectionOrchestrator {
     }
 
     pub async fn connect(&self, settings: &AppSettings) -> Result<(), String> {
-        let current = *self.state.read();
-        if current != ConnectionState::Disconnected && current != ConnectionState::Error {
-            return Err("Connection already in progress or connected".to_string());
+        // Synchronous atomic entry check and state transition BEFORE any await
+        let attempt_id = self.next_attempt_id.fetch_add(1, Ordering::SeqCst);
+        {
+            let mut state = self.state.write();
+            match *state {
+                ConnectionState::Disconnected | ConnectionState::Error => {
+                    *state = ConnectionState::StartingAether;
+                }
+                _ => return Err("Connection already in progress or connected".to_string()),
+            }
         }
 
+        // Emit StartingAether event & log attempt start immediately
+        self.logger.log(
+            "INFO",
+            "STATE",
+            format!(
+                "[Attempt #{}] State changed to: StartingAether (CONNECT attempt initiated)",
+                attempt_id
+            ),
+        );
+        if let Some(ref handle) = *self.app_handle.read() {
+            let _ = handle.emit("connection-state-changed", ConnectionState::StartingAether);
+        }
+
+        let _op_guard = match self.op_lock.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => return Err("Connection operation already in progress".to_string()),
+        };
+
+        let t_connect_start = std::time::Instant::now();
         *self.last_error.write() = None;
         *self.active_aether_ip.write() = None;
 
@@ -76,7 +106,8 @@ impl ConnectionOrchestrator {
         let aether_port = settings.aether.port;
 
         // 1. Safe Existing-Aether Check with Process Owner Validation
-        let is_port_occupied = HealthProber::check_port_open(aether_host, aether_port, 300).await;
+        let t_aether_start = std::time::Instant::now();
+        let is_port_occupied = HealthProber::check_port_open(aether_host, aether_port, 150).await;
         if is_port_occupied {
             let owner_info = ProcessDetector::get_process_for_tcp_port(aether_port);
             match owner_info {
@@ -84,8 +115,8 @@ impl ConnectionOrchestrator {
                     let proc_lower = proc_name.to_lowercase();
                     if !proc_lower.starts_with("aether") {
                         let err = format!(
-                            "Port {}:{} is in use by another process ('{}', PID: {}), which is not Aether. Resolve port conflict.",
-                            aether_host, aether_port, proc_name, pid
+                            "[Attempt #{}] Port {}:{} is in use by another process ('{}', PID: {}), which is not Aether. Resolve port conflict.",
+                            attempt_id, aether_host, aether_port, proc_name, pid
                         );
                         self.set_error(err.clone());
                         return Err(err);
@@ -94,7 +125,7 @@ impl ConnectionOrchestrator {
                     self.logger.log(
                         "INFO",
                         "Aether",
-                        format!("Existing Aether process detected (PID: {}, '{}') on {}:{}. Validating proxy health...", pid, proc_name, aether_host, aether_port),
+                        format!("[Attempt #{}] Existing Aether process detected (PID: {}, '{}') on {}:{}. Validating proxy health...", attempt_id, pid, proc_name, aether_host, aether_port),
                     );
 
                     match HealthProber::query_cloudflare_trace_via_socks5(aether_host, aether_port)
@@ -105,8 +136,8 @@ impl ConnectionOrchestrator {
                                 "INFO",
                                 "Aether",
                                 format!(
-                                    "Reusing existing healthy external Aether instance (PID: {}) on {}:{} (POP: {}, IP: {}, Latency: {} ms)",
-                                    pid, aether_host, aether_port, trace.colo, trace.ip, trace.latency_ms
+                                    "[Attempt #{}] Reusing existing healthy external Aether instance (PID: {}) on {}:{} in {:.2}s (POP: {}, IP: {}, Latency: {} ms)",
+                                    attempt_id, pid, aether_host, aether_port, t_aether_start.elapsed().as_secs_f32(), trace.colo, trace.ip, trace.latency_ms
                                 ),
                             );
                             *self.active_aether_ip.write() = Some(trace.ip);
@@ -114,8 +145,8 @@ impl ConnectionOrchestrator {
                         }
                         Err(e) => {
                             let err = format!(
-                                "Port {}:{} is owned by an existing Aether process (PID: {}), but SOCKS5 validation failed: {}. Ensure Aether is connected.",
-                                aether_host, aether_port, pid, e
+                                "[Attempt #{}] Port {}:{} is owned by an existing Aether process (PID: {}), but SOCKS5 validation failed: {}. Ensure Aether is connected.",
+                                attempt_id, aether_host, aether_port, pid, e
                             );
                             self.set_error(err.clone());
                             return Err(err);
@@ -132,8 +163,8 @@ impl ConnectionOrchestrator {
                                 "INFO",
                                 "Aether",
                                 format!(
-                                    "Reusing existing healthy external listener on {}:{} (POP: {}, IP: {})",
-                                    aether_host, aether_port, trace.colo, trace.ip
+                                    "[Attempt #{}] Reusing existing healthy external listener on {}:{} in {:.2}s (POP: {}, IP: {})",
+                                    attempt_id, aether_host, aether_port, t_aether_start.elapsed().as_secs_f32(), trace.colo, trace.ip
                                 ),
                             );
                             *self.active_aether_ip.write() = Some(trace.ip);
@@ -141,8 +172,8 @@ impl ConnectionOrchestrator {
                         }
                         Err(e) => {
                             let err = format!(
-                                "Port {}:{} is in use, but proxy validation failed: {}. Resolve port conflict.",
-                                aether_host, aether_port, e
+                                "[Attempt #{}] Port {}:{} is in use, but proxy validation failed: {}. Resolve port conflict.",
+                                attempt_id, aether_host, aether_port, e
                             );
                             self.set_error(err.clone());
                             return Err(err);
@@ -152,28 +183,39 @@ impl ConnectionOrchestrator {
             }
         } else {
             // Port is free: launch managed Aether instance
-            self.set_state(ConnectionState::StartingAether);
-            {
+            let aether_pid = {
                 let mut aether_guard = self.aether.lock().await;
                 if let Err(e) = aether_guard.start(settings, &self.logger) {
-                    self.set_error(format!("Failed to start Aether: {}", e));
+                    self.set_error(format!(
+                        "[Attempt #{}] Failed to start Aether: {}",
+                        attempt_id, e
+                    ));
                     return Err(e);
                 }
-            }
+                aether_guard.pid()
+            };
             self.is_aether_managed.store(true, Ordering::SeqCst);
+            self.logger.log(
+                "INFO",
+                "Aether",
+                format!(
+                    "[Attempt #{}] Managed Aether process spawned (PID: {:?})",
+                    attempt_id, aether_pid
+                ),
+            );
 
             // Probe managed Aether with scan-mode-aware startup deadline
             self.set_state(ConnectionState::ScanningAether);
             let startup_deadline =
                 crate::models::settings::aether_startup_timeout(&settings.aether.scan_mode);
-            let start_instant = std::time::Instant::now();
-            let check_interval = Duration::from_millis(400);
+            let check_interval = Duration::from_millis(300);
 
             self.logger.log(
                 "INFO",
                 "Aether",
                 format!(
-                    "Waiting for Aether SOCKS proxy on {}:{} (Scan Mode: {:?}, Deadline: {}s)...",
+                    "[Attempt #{}] Waiting for Aether SOCKS proxy on {}:{} (Scan Mode: {:?}, Deadline: {}s)...",
+                    attempt_id,
                     aether_host,
                     aether_port,
                     settings.aether.scan_mode,
@@ -182,24 +224,28 @@ impl ConnectionOrchestrator {
             );
 
             let mut aether_ready = false;
-            let mut attempt: u64 = 0;
-            while start_instant.elapsed() < startup_deadline {
+            let mut attempt_cnt: u64 = 0;
+            while t_aether_start.elapsed() < startup_deadline {
                 tokio::time::sleep(check_interval).await;
-                attempt += 1;
+                attempt_cnt += 1;
 
                 // 1. Immediate interactive prompt abort check & process liveness
                 {
                     let mut aether_guard = self.aether.lock().await;
                     if aether_guard.is_interactive_prompt_detected() {
-                        let err = "Aether entered interactive mode. Managed launch arguments are incomplete.".to_string();
+                        let err = format!(
+                            "[Attempt #{}] Aether entered interactive mode. Managed launch arguments are incomplete.",
+                            attempt_id
+                        );
                         aether_guard.stop(&self.logger);
                         self.set_error(err.clone());
                         return Err(err);
                     }
                     if !aether_guard.is_running() {
-                        let err =
-                            "Aether process stopped unexpectedly. View Diagnostics for details."
-                                .to_string();
+                        let err = format!(
+                            "[Attempt #{}] Aether process stopped unexpectedly. View Diagnostics for details.",
+                            attempt_id
+                        );
                         aether_guard.stop(&self.logger);
                         self.set_error(err.clone());
                         return Err(err);
@@ -207,7 +253,7 @@ impl ConnectionOrchestrator {
                 }
 
                 // 2. SOCKS5 probe
-                if HealthProber::check_port_open(aether_host, aether_port, 250).await {
+                if HealthProber::check_port_open(aether_host, aether_port, 150).await {
                     match HealthProber::query_cloudflare_trace_via_socks5(aether_host, aether_port)
                         .await
                     {
@@ -216,8 +262,8 @@ impl ConnectionOrchestrator {
                                 "INFO",
                                 "Aether",
                                 format!(
-                                    "Aether SOCKS5 tunnel confirmed online (POP: {}, IP: {}, Latency: {} ms, Elapsed: {:.1}s)",
-                                    trace.colo, trace.ip, trace.latency_ms, start_instant.elapsed().as_secs_f32()
+                                    "[Attempt #{}] Aether SOCKS5 tunnel confirmed online in {:.2}s (PID: {:?}, POP: {}, IP: {}, Latency: {} ms)",
+                                    attempt_id, t_aether_start.elapsed().as_secs_f32(), aether_pid, trace.colo, trace.ip, trace.latency_ms
                                 ),
                             );
                             *self.active_aether_ip.write() = Some(trace.ip);
@@ -225,13 +271,14 @@ impl ConnectionOrchestrator {
                             break;
                         }
                         Err(err) => {
-                            if attempt % 15 == 0 {
+                            if attempt_cnt % 15 == 0 {
                                 self.logger.log(
                                     "DEBUG",
                                     "Aether",
                                     format!(
-                                        "Waiting for SOCKS5 proxy initialization ({:.1}s elapsed): {}",
-                                        start_instant.elapsed().as_secs_f32(),
+                                        "[Attempt #{}] Waiting for SOCKS5 proxy initialization ({:.1}s elapsed): {}",
+                                        attempt_id,
+                                        t_aether_start.elapsed().as_secs_f32(),
                                         err
                                     ),
                                 );
@@ -243,8 +290,16 @@ impl ConnectionOrchestrator {
 
             if !aether_ready {
                 let err = format!(
-                    "Aether started, but local proxy on {}:{} did not become ready within {}s deadline (Scan Mode: {:?}). View Diagnostics for details.",
-                    aether_host, aether_port, startup_deadline.as_secs(), settings.aether.scan_mode
+                    "[Attempt #{}] Aether started, but local proxy on {}:{} did not become ready within {}s deadline (Scan Mode: {:?}). View Diagnostics for details.",
+                    attempt_id, aether_host, aether_port, startup_deadline.as_secs(), settings.aether.scan_mode
+                );
+                self.logger.log(
+                    "INFO",
+                    "Aether",
+                    format!(
+                        "[Attempt #{}] Stopping managed Aether due to startup deadline timeout",
+                        attempt_id
+                    ),
                 );
                 self.aether.lock().await.stop(&self.logger);
                 self.set_error(err.clone());
@@ -252,12 +307,24 @@ impl ConnectionOrchestrator {
             }
         }
 
+        let d_aether_ready = t_aether_start.elapsed();
+
         // Check Windows administrator elevation before launching TUN
         if !HealthProber::is_process_elevated() {
-            let err = "Administrator privileges are required to create the Windows TUN adapter."
-                .to_string();
+            let err = format!(
+                "[Attempt #{}] Administrator privileges are required to create the Windows TUN adapter.",
+                attempt_id
+            );
             self.logger.log("ERROR", "UAC", &err);
             if self.is_aether_managed.load(Ordering::SeqCst) {
+                self.logger.log(
+                    "INFO",
+                    "Aether",
+                    format!(
+                        "[Attempt #{}] Stopping managed Aether due to UAC elevation missing",
+                        attempt_id
+                    ),
+                );
                 self.aether.lock().await.stop(&self.logger);
             }
             self.set_error(err.clone());
@@ -266,19 +333,44 @@ impl ConnectionOrchestrator {
 
         // 2. Launch sing-box router
         self.set_state(ConnectionState::StartingRouter);
-        {
+        let t_sb_start = std::time::Instant::now();
+        let sb_pid = {
             let mut sb_guard = self.singbox.lock().await;
             if let Err(e) = sb_guard.start(settings, &self.logger) {
                 if self.is_aether_managed.load(Ordering::SeqCst) {
+                    self.logger.log(
+                        "INFO",
+                        "Aether",
+                        format!(
+                            "[Attempt #{}] Stopping managed Aether due to sing-box start failure: {}",
+                            attempt_id, e
+                        ),
+                    );
                     self.aether.lock().await.stop(&self.logger);
                 }
-                self.set_error(format!("Failed to start sing-box TUN router: {}", e));
+                self.set_error(format!(
+                    "[Attempt #{}] Failed to start sing-box TUN router: {}",
+                    attempt_id, e
+                ));
                 return Err(e);
             }
-        }
+            sb_guard.pid()
+        };
+        let d_sb_spawn = t_sb_start.elapsed();
+        self.logger.log(
+            "INFO",
+            "sing-box",
+            format!(
+                "[Attempt #{}] sing-box TUN router spawned in {:.2}s (PID: {:?})",
+                attempt_id,
+                d_sb_spawn.as_secs_f32(),
+                sb_pid
+            ),
+        );
 
         // 3. Bounded routing and system egress verification matching Aether IP
         self.set_state(ConnectionState::TestingRouting);
+        let t_verify_start = std::time::Instant::now();
         let interface_name = &settings.sing_box.interface_name;
         let tun_address = &settings.sing_box.tun_address;
         let expected_aether_ip = self.active_aether_ip.read().clone();
@@ -295,34 +387,69 @@ impl ConnectionOrchestrator {
             .await
         {
             let err = format!(
-                "Routing verification failed: {}. Stopping connection attempt.",
-                verify_err
+                "[Attempt #{}] Routing verification failed: {}. Stopping connection attempt.",
+                attempt_id, verify_err
+            );
+            self.logger.log(
+                "INFO",
+                "sing-box",
+                format!(
+                    "[Attempt #{}] Stopping sing-box due to verification failure",
+                    attempt_id
+                ),
             );
             sb_guard.stop(&self.logger);
             drop(sb_guard);
             if self.is_aether_managed.load(Ordering::SeqCst) {
+                self.logger.log(
+                    "INFO",
+                    "Aether",
+                    format!(
+                        "[Attempt #{}] Stopping managed Aether due to verification failure",
+                        attempt_id
+                    ),
+                );
                 self.aether.lock().await.stop(&self.logger);
             }
             self.set_error(err.clone());
             return Err(err);
         }
 
+        let d_verify = t_verify_start.elapsed();
+        let total_duration = t_connect_start.elapsed();
+
         self.set_state(ConnectionState::Connected);
         self.logger.log(
             "INFO",
             "STATE",
-            "Connection established and fully verified successfully.",
+            format!(
+                "[Attempt #{}] CONNECTED in {:.2}s! Timing breakdown: Aether ready: {:.2}s | sing-box spawn: {:.2}s | Verification: {:.2}s | Total: {:.2}s",
+                attempt_id,
+                total_duration.as_secs_f32(),
+                d_aether_ready.as_secs_f32(),
+                d_sb_spawn.as_secs_f32(),
+                d_verify.as_secs_f32(),
+                total_duration.as_secs_f32()
+            ),
         );
         Ok(())
     }
 
     pub async fn disconnect(&self) -> Result<(), String> {
-        let current = *self.state.read();
-        if current == ConnectionState::Disconnected {
-            return Ok(());
-        }
+        let _op_guard = self.op_lock.lock().await;
 
-        self.set_state(ConnectionState::Disconnecting);
+        {
+            let mut state = self.state.write();
+            if *state == ConnectionState::Disconnected {
+                return Ok(());
+            }
+            *state = ConnectionState::Disconnecting;
+        }
+        self.logger
+            .log("INFO", "STATE", "State changed to: Disconnecting");
+        if let Some(ref handle) = *self.app_handle.read() {
+            let _ = handle.emit("connection-state-changed", ConnectionState::Disconnecting);
+        }
 
         // Always stop sing-box TUN router
         self.singbox.lock().await.stop(&self.logger);
@@ -351,6 +478,7 @@ impl ConnectionOrchestrator {
     }
 
     pub async fn apply_live_settings(&self, settings: &AppSettings) -> Result<(), String> {
+        let _op_guard = self.op_lock.lock().await;
         let current = *self.state.read();
         if current == ConnectionState::Connected {
             self.logger.log(

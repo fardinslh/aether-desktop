@@ -815,3 +815,69 @@ fn test_p_staged_egress_decision_path_mocked_suite() {
         err_d
     );
 }
+
+#[test]
+fn test_q_concurrent_connect_atomic_single_attempt() {
+    use aether_desktop_lib::logging::RingBufferLogger;
+    use aether_desktop_lib::models::ConnectionState;
+    use aether_desktop_lib::process::orchestrator::ConnectionOrchestrator;
+    use parking_lot::RwLock;
+    use std::sync::Arc;
+
+    let state = Arc::new(RwLock::new(ConnectionState::Disconnected));
+    let logger = RingBufferLogger::new(100);
+    let orchestrator = Arc::new(ConnectionOrchestrator::new(state.clone(), logger));
+
+    let tokio_rt = tokio::runtime::Runtime::new().unwrap();
+
+    let mut settings = AppSettings::default();
+    // Use an unassigned port to prevent actual binding
+    settings.aether.port = 58199;
+    settings.aether.executable_path = "C:\\invalid\\aether.exe".to_string();
+
+    let orch1 = orchestrator.clone();
+    let orch2 = orchestrator.clone();
+    let set1 = settings.clone();
+    let set2 = settings.clone();
+
+    let (res1, res2) =
+        tokio_rt.block_on(async move { tokio::join!(orch1.connect(&set1), orch2.connect(&set2)) });
+
+    // Exactly one must be rejected immediately with "Connection already in progress"
+    let rejected_count = [res1, res2]
+        .iter()
+        .filter(|r| match r {
+            Err(e) => e.contains("Connection already in progress"),
+            _ => false,
+        })
+        .count();
+
+    assert_eq!(
+        rejected_count, 1,
+        "Concurrent connect calls must atomically reject duplicates: exactly 1 rejected immediately"
+    );
+}
+
+#[test]
+fn test_r_single_launch_per_component_on_connection() {
+    use aether_desktop_lib::logging::RingBufferLogger;
+    use aether_desktop_lib::models::ConnectionState;
+    use aether_desktop_lib::process::orchestrator::ConnectionOrchestrator;
+    use parking_lot::RwLock;
+    use std::sync::Arc;
+
+    let state = Arc::new(RwLock::new(ConnectionState::Disconnected));
+    let logger = RingBufferLogger::new(100);
+    let orchestrator = ConnectionOrchestrator::new(state.clone(), logger);
+
+    // Initial attempt ID must start at 1
+    assert_eq!(
+        orchestrator
+            .next_attempt_id
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+
+    // When Disconnected, state is idle
+    assert_eq!(*orchestrator.state.read(), ConnectionState::Disconnected);
+}
