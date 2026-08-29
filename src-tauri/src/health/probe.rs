@@ -92,7 +92,6 @@ impl HealthProber {
     }
 
     /// Formats a detailed reqwest error breakdown including connection/timeout flags and underlying source error chain
-    /// Formats a detailed reqwest error breakdown including connection/timeout flags and underlying source error chain
     pub fn format_reqwest_error(prefix: &str, err: &reqwest::Error) -> String {
         use std::error::Error;
         let mut flags: Vec<String> = Vec::new();
@@ -283,12 +282,190 @@ impl HealthProber {
         Self::parse_trace_body(&body, latency_ms)
     }
 
-    /// Performs direct system Cloudflare trace probe through Windows network stack/TUN adapter
+    /// Performs direct system Cloudflare trace probe through Windows network stack/TUN adapter using hostname resolution.
+    /// Hostname resolution is authoritative for normal user-facing internet health.
     pub async fn query_direct_system_cloudflare_trace() -> Result<CloudflareTrace, String> {
-        match Self::query_direct_system_cloudflare_trace_hostname().await {
-            Ok(t) => Ok(t),
-            Err(_) => Self::query_direct_system_cloudflare_trace_ip_literal().await,
+        Self::query_direct_system_cloudflare_trace_hostname().await
+    }
+
+    /// Executes the 3-stage egress and DNS verification decision path:
+    /// Stage 1: DNS-independent IP-literal system egress test (1.1.1.1 / 1.0.0.1)
+    /// Strict Check: system egress IP == expected Aether SOCKS proxy egress IP
+    /// Stage 2: Windows System DNS Resolution test (www.cloudflare.com)
+    /// Stage 3: Full Hostname HTTPS Trace verification (https://www.cloudflare.com/cdn-cgi/trace)
+    /// Returns Ok(CloudflareTrace) containing the final verified trace, or Err(String) with the exact failing stage.
+    pub async fn verify_staged_egress_decision_path<F1, Fut1, F2, Fut2, F3, Fut3>(
+        mut ip_literal_fn: F1,
+        mut dns_fn: F2,
+        mut hostname_fn: F3,
+        expected_aether_ip: Option<&str>,
+        log_fn: Option<&(dyn Fn(&str, &str, &str) + Send + Sync)>,
+    ) -> Result<CloudflareTrace, String>
+    where
+        F1: FnMut() -> Fut1 + Send,
+        Fut1: std::future::Future<Output = Result<CloudflareTrace, String>> + Send,
+        F2: FnMut() -> Fut2 + Send,
+        Fut2: std::future::Future<Output = Result<Vec<std::net::IpAddr>, String>> + Send,
+        F3: FnMut() -> Fut3 + Send,
+        Fut3: std::future::Future<Output = Result<CloudflareTrace, String>> + Send,
+    {
+        // -------------------------------------------------------------------------
+        // Stage 1: DNS-independent system egress test (via IP-literal 1.1.1.1 / 1.0.0.1)
+        // -------------------------------------------------------------------------
+        let mut ip_trace_opt = None;
+        let mut last_ip_err = String::new();
+        for attempt in 1..=4 {
+            match ip_literal_fn().await {
+                Ok(trace) => {
+                    ip_trace_opt = Some(trace);
+                    break;
+                }
+                Err(e) => {
+                    last_ip_err = e;
+                    if attempt < 4 {
+                        tokio::time::sleep(Duration::from_millis(300)).await;
+                    }
+                }
+            }
         }
+
+        let ip_trace = match ip_trace_opt {
+            Some(t) => {
+                if let Some(logger) = log_fn {
+                    logger(
+                        "INFO",
+                        "sing-box",
+                        &format!(
+                            "Stage 1 PASS: DNS-independent IP-literal egress verified (POP: {}, IP: {}, Latency: {} ms)",
+                            t.colo, t.ip, t.latency_ms
+                        ),
+                    );
+                }
+                t
+            }
+            None => {
+                if let Some(logger) = log_fn {
+                    logger(
+                        "ERROR",
+                        "sing-box",
+                        &format!(
+                            "Stage 1 FAIL: Direct system egress failed on IP-literal transport (1.1.1.1 / 1.0.0.1): {}",
+                            last_ip_err
+                        ),
+                    );
+                }
+                return Err(format!(
+                    "Stage 1 Transport Failure: Direct IP-literal system egress failed: {}",
+                    last_ip_err
+                ));
+            }
+        };
+
+        // -------------------------------------------------------------------------
+        // Strict Egress Consistency Check: System egress IP must match Aether proxy egress IP
+        // -------------------------------------------------------------------------
+        if let Some(exp_ip) = expected_aether_ip {
+            if !ip_trace.ip.is_empty() && !exp_ip.is_empty() && ip_trace.ip != exp_ip {
+                let mismatch_err = format!(
+                    "Stage 1 Egress Mismatch: System egress IP ({}) does not match Aether SOCKS egress IP ({}). Traffic is not traversing Aether outbound.",
+                    ip_trace.ip, exp_ip
+                );
+                if let Some(logger) = log_fn {
+                    logger("ERROR", "sing-box", &mismatch_err);
+                }
+                return Err(mismatch_err);
+            }
+        }
+
+        // -------------------------------------------------------------------------
+        // Stage 2: Windows System DNS Resolution test
+        // -------------------------------------------------------------------------
+        let mut dns_resolved_ips = Vec::new();
+        let mut last_dns_err = String::new();
+        for attempt in 1..=4 {
+            match dns_fn().await {
+                Ok(ips) => {
+                    dns_resolved_ips = ips;
+                    break;
+                }
+                Err(e) => {
+                    last_dns_err = e;
+                    if attempt < 4 {
+                        tokio::time::sleep(Duration::from_millis(300)).await;
+                    }
+                }
+            }
+        }
+
+        if dns_resolved_ips.is_empty() {
+            let dns_fail_msg = format!(
+                "Stage 2 DNS Failure: Windows system DNS resolution failed under TUN strict_route: {}",
+                last_dns_err
+            );
+            if let Some(logger) = log_fn {
+                logger("ERROR", "sing-box", &dns_fail_msg);
+            }
+            return Err(dns_fail_msg);
+        }
+
+        if let Some(logger) = log_fn {
+            logger(
+                "INFO",
+                "sing-box",
+                &format!(
+                    "Stage 2 PASS: Windows system DNS resolver confirmed (www.cloudflare.com -> {:?})",
+                    dns_resolved_ips
+                ),
+            );
+        }
+
+        // -------------------------------------------------------------------------
+        // Stage 3: Full Hostname HTTPS Trace verification (REQUIRED!)
+        // -------------------------------------------------------------------------
+        let mut host_trace_opt = None;
+        let mut last_host_err = String::new();
+        for attempt in 1..=4 {
+            match hostname_fn().await {
+                Ok(trace) => {
+                    host_trace_opt = Some(trace);
+                    break;
+                }
+                Err(e) => {
+                    last_host_err = e;
+                    if attempt < 4 {
+                        tokio::time::sleep(Duration::from_millis(300)).await;
+                    }
+                }
+            }
+        }
+
+        let host_trace = match host_trace_opt {
+            Some(t) => {
+                if let Some(logger) = log_fn {
+                    logger(
+                        "INFO",
+                        "sing-box",
+                        &format!(
+                            "Stage 3 PASS: Hostname HTTPS trace verified (POP: {}, IP: {}, Latency: {} ms)",
+                            t.colo, t.ip, t.latency_ms
+                        ),
+                    );
+                }
+                t
+            }
+            None => {
+                let host_fail_msg = format!(
+                    "Stage 3 Hostname HTTPS Failure: Hostname HTTPS egress test failed after retries: {}",
+                    last_host_err
+                );
+                if let Some(logger) = log_fn {
+                    logger("ERROR", "sing-box", &host_fail_msg);
+                }
+                return Err(host_fail_msg);
+            }
+        };
+
+        Ok(host_trace)
     }
 
     /// Enumerates Windows adapters using native GetAdaptersAddresses IP Helper API

@@ -95,14 +95,10 @@ fn main() {
     );
 
     test_o_dns_hijack_infrastructure_overrides_private_lan_rule();
-    println!(
-        "✓ TEST O [UNIT / MOCKED INTEGRATION]: DNS queries (port 53 / 192.168.1.1:53) intercepted by hijack-dns rather than private IP direct (PASSED)"
-    );
+    println!("✓ TEST O [UNIT / MOCKED INTEGRATION]: DNS queries (port 53 / 192.168.1.1:53) intercepted by hijack-dns rather than private IP direct (PASSED)");
 
-    test_p_staged_egress_and_dns_probe_methods();
-    println!(
-        "✓ TEST P [UNIT / MOCKED INTEGRATION]: Staged transport (1.1.1.1 / 1.0.0.1) and system DNS resolver methods (PASSED)"
-    );
+    test_p_staged_egress_decision_path_mocked_suite();
+    println!("✓ TEST P [UNIT / MOCKED INTEGRATION]: Staged decision path (Scenarios A/B/C/D) verified with injectable mock probes (PASSED)");
 
     println!("\n==================================================================");
     println!("ALL 26 VERIFICATION & RELIABILITY TESTS PASSED!");
@@ -709,27 +705,101 @@ fn test_o_dns_hijack_infrastructure_overrides_private_lan_rule() {
     assert_eq!(discord_route, "v2ray");
 }
 
-fn test_p_staged_egress_and_dns_probe_methods() {
+fn test_p_staged_egress_decision_path_mocked_suite() {
     use aether_desktop_lib::health::HealthProber;
+    use aether_desktop_lib::models::health::CloudflareTrace;
 
-    // 1. Trace body parsing verification
-    let sample_body = "ip=104.28.19.42\nwarp=off\ngateway=off\nrbi=off\nkex=none\nuag=Mozilla\ncolo=FRA\nsliver=none\nloc=DE\nts=1700000000\nfl=32f12\nh=www.cloudflare.com\nipclass=regular\nproto=h2\nwarp=off\n";
-    let parsed =
-        HealthProber::parse_trace_body(sample_body, 45).expect("Should parse valid trace body");
-    assert_eq!(parsed.ip, "104.28.19.42");
-    assert_eq!(parsed.colo, "FRA");
-    assert_eq!(parsed.loc, "DE");
-    assert_eq!(parsed.latency_ms, 45);
-
-    // 2. Reqwest error formatter verification
-    let client = reqwest::Client::builder().build().unwrap();
-    let err = client
-        .get("http://invalid.domain.that.does.not.exist.xyz123")
-        .send();
     let tokio_rt = tokio::runtime::Runtime::new().unwrap();
-    if let Err(e) = tokio_rt.block_on(err) {
-        let formatted = HealthProber::format_reqwest_error("Test request failed", &e);
-        assert!(!formatted.is_empty());
-        assert!(formatted.contains("Test request failed"));
-    }
+
+    let dummy_trace_good = CloudflareTrace {
+        ip: "104.28.19.42".to_string(),
+        warp: "off".to_string(),
+        colo: "FRA".to_string(),
+        loc: "DE".to_string(),
+        latency_ms: 35,
+    };
+
+    let dummy_trace_mismatch = CloudflareTrace {
+        ip: "198.51.100.1".to_string(),
+        warp: "off".to_string(),
+        colo: "FRA".to_string(),
+        loc: "DE".to_string(),
+        latency_ms: 35,
+    };
+
+    // -------------------------------------------------------------------------
+    // Scenario A [MOCKED INTEGRATION]: IP-literal PASS + DNS PASS + Hostname PASS => Verification PASS
+    // -------------------------------------------------------------------------
+    let res_a = tokio_rt.block_on(HealthProber::verify_staged_egress_decision_path(
+        || async { Ok(dummy_trace_good.clone()) },
+        || async { Ok(vec!["104.28.19.42".parse().unwrap()]) },
+        || async { Ok(dummy_trace_good.clone()) },
+        Some("104.28.19.42"),
+        None,
+    ));
+    assert!(
+        res_a.is_ok(),
+        "All staged probes passing must result in verification Ok: {:?}",
+        res_a.err()
+    );
+    assert_eq!(res_a.unwrap().ip, "104.28.19.42");
+
+    // -------------------------------------------------------------------------
+    // Scenario B [MOCKED INTEGRATION]: IP-literal PASS + DNS FAIL => Verification FAIL (Stage 2)
+    // -------------------------------------------------------------------------
+    let res_b = tokio_rt.block_on(HealthProber::verify_staged_egress_decision_path(
+        || async { Ok(dummy_trace_good.clone()) },
+        || async { Err("Windows system DNS timeout on query".to_string()) },
+        || async { Ok(dummy_trace_good.clone()) },
+        Some("104.28.19.42"),
+        None,
+    ));
+    assert!(res_b.is_err(), "DNS probe failure must fail verification");
+    let err_b = res_b.unwrap_err();
+    assert!(
+        err_b.contains("Stage 2 DNS Failure"),
+        "Error message must specify Stage 2 DNS failure: {}",
+        err_b
+    );
+
+    // -------------------------------------------------------------------------
+    // Scenario C [MOCKED INTEGRATION]: IP-literal PASS + DNS PASS + Hostname FAIL => Verification FAIL (Stage 3)
+    // -------------------------------------------------------------------------
+    let res_c = tokio_rt.block_on(HealthProber::verify_staged_egress_decision_path(
+        || async { Ok(dummy_trace_good.clone()) },
+        || async { Ok(vec!["104.28.19.42".parse().unwrap()]) },
+        || async {
+            Err("TLS handshake error connecting to https://www.cloudflare.com".to_string())
+        },
+        Some("104.28.19.42"),
+        None,
+    ));
+    assert!(
+        res_c.is_err(),
+        "Hostname HTTPS failure must fail verification"
+    );
+    let err_c = res_c.unwrap_err();
+    assert!(
+        err_c.contains("Stage 3 Hostname HTTPS Failure"),
+        "Error message must specify Stage 3 Hostname HTTPS failure: {}",
+        err_c
+    );
+
+    // -------------------------------------------------------------------------
+    // Scenario D [MOCKED INTEGRATION]: IP-literal egress IP != Aether IP => Verification FAIL (Stage 1 Mismatch)
+    // -------------------------------------------------------------------------
+    let res_d = tokio_rt.block_on(HealthProber::verify_staged_egress_decision_path(
+        || async { Ok(dummy_trace_mismatch.clone()) },
+        || async { Ok(vec!["104.28.19.42".parse().unwrap()]) },
+        || async { Ok(dummy_trace_good.clone()) },
+        Some("104.28.19.42"),
+        None,
+    ));
+    assert!(res_d.is_err(), "Egress IP mismatch must fail verification");
+    let err_d = res_d.unwrap_err();
+    assert!(
+        err_d.contains("Stage 1 Egress Mismatch"),
+        "Error message must specify Stage 1 Egress Mismatch: {}",
+        err_d
+    );
 }

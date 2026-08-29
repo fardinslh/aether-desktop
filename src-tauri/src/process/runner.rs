@@ -536,119 +536,20 @@ impl SingBoxRunner {
             ),
         );
 
-        // Stage 1: DNS-independent system egress test (via IP-literal 1.1.1.1 / 1.0.0.1)
-        let mut system_trace_opt = None;
-        let mut ip_literal_err = String::new();
-        for _ in 1..=4 {
-            match HealthProber::query_direct_system_cloudflare_trace_ip_literal().await {
-                Ok(trace) => {
-                    system_trace_opt = Some(trace);
-                    break;
-                }
-                Err(e) => {
-                    ip_literal_err = e;
-                    tokio::time::sleep(Duration::from_millis(300)).await;
-                }
-            }
-        }
-
-        let system_trace = match system_trace_opt {
-            Some(t) => {
-                logger.log(
-                    "INFO",
-                    "sing-box",
-                    format!(
-                        "DNS-independent system egress confirmed via IP-literal (POP: {}, IP: {}, Latency: {} ms)",
-                        t.colo, t.ip, t.latency_ms
-                    ),
-                );
-                t
-            }
-            None => {
-                logger.log(
-                    "ERROR",
-                    "sing-box",
-                    format!(
-                        "Direct system egress failed on IP-literal transport (1.1.1.1 / 1.0.0.1): {}",
-                        ip_literal_err
-                    ),
-                );
-                return Err(format!(
-                    "Direct system egress failed (transport error): {}",
-                    ip_literal_err
-                ));
-            }
+        // Execute staged 3-tier egress and DNS verification decision path
+        let log_cb = |lvl: &str, target: &str, msg: &str| {
+            logger.log(lvl, target, msg);
         };
 
-        // Strict egress consistency check: system traffic must match Aether proxy egress IP
-        if let Some(exp_ip) = expected_aether_ip {
-            if !system_trace.ip.is_empty() && !exp_ip.is_empty() && system_trace.ip != exp_ip {
-                return Err(format!(
-                    "System egress IP ({}) does not match Aether egress IP ({}). Traffic is not traversing Aether outbound.",
-                    system_trace.ip, exp_ip
-                ));
-            }
-        }
-
-        // Stage 2: Windows System DNS Resolution test
-        let mut dns_resolved_ips = Vec::new();
-        let mut dns_err = String::new();
-        for _ in 1..=4 {
-            match HealthProber::test_system_dns_resolution("www.cloudflare.com").await {
-                Ok(ips) => {
-                    dns_resolved_ips = ips;
-                    break;
-                }
-                Err(e) => {
-                    dns_err = e;
-                    tokio::time::sleep(Duration::from_millis(300)).await;
-                }
-            }
-        }
-
-        if dns_resolved_ips.is_empty() {
-            logger.log(
-                "ERROR",
-                "sing-box",
-                format!("Windows system DNS resolver failed: {}", dns_err),
-            );
-            return Err(format!(
-                "System DNS resolution failed under TUN strict-route: {}",
-                dns_err
-            ));
-        }
-
-        logger.log(
-            "INFO",
-            "sing-box",
-            format!(
-                "Windows system DNS resolver confirmed (www.cloudflare.com -> {:?})",
-                dns_resolved_ips
-            ),
-        );
-
-        // Stage 3: Full Hostname HTTPS Trace verification
-        match HealthProber::query_direct_system_cloudflare_trace_hostname().await {
-            Ok(host_trace) => {
-                logger.log(
-                    "INFO",
-                    "sing-box",
-                    format!(
-                        "Hostname HTTPS trace confirmed (POP: {}, IP: {})",
-                        host_trace.colo, host_trace.ip
-                    ),
-                );
-            }
-            Err(host_err) => {
-                logger.log(
-                    "WARN",
-                    "sing-box",
-                    format!("Hostname HTTPS trace test returned: {}", host_err),
-                );
-            }
-        }
-
-        Ok(())
+        HealthProber::verify_staged_egress_decision_path(
+            || HealthProber::query_direct_system_cloudflare_trace_ip_literal(),
+            || HealthProber::test_system_dns_resolution("www.cloudflare.com"),
+            || HealthProber::query_direct_system_cloudflare_trace_hostname(),
+            expected_aether_ip,
+            Some(&log_cb),
+        )
+        .await
+        .map(|_| ())
     }
 
     /// Transactional Live Apply with full health and system egress verification:
