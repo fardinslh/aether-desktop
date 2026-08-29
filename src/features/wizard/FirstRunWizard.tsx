@@ -196,48 +196,49 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ settings, curren
   };
 
   return (
-    <div className="fixed inset-0 bg-background-base/95 backdrop-blur-md z-40 flex items-center justify-center p-6 select-none overflow-y-auto">
-      <div className="bg-background-surface border border-zinc-800/90 rounded-2xl max-w-2xl w-full p-8 shadow-2xl space-y-6">
+    <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-40 flex items-center justify-center p-6 select-none overflow-y-auto">
+      <div className="bg-app-panel border border-app-border rounded-md max-w-2xl w-full p-6 shadow-2xl space-y-5">
         {/* Header */}
-        <div className="text-center space-y-2">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-brand-600/10 border border-brand-500/20 text-brand-400 mb-2">
-            <ShieldCheck className="w-8 h-8 text-brand-400" />
+        <div className="text-center space-y-1.5 border-b border-app-border pb-4">
+          <div className="inline-flex items-center justify-center w-12 h-12 rounded-sm bg-signal-cyan-dim border border-signal-cyan/30 text-signal-cyan mb-1">
+            <ShieldCheck className="w-6 h-6 text-signal-cyan" />
           </div>
-          <h1 className="text-2xl font-bold text-zinc-100 tracking-tight">Welcome to Aether Desktop</h1>
-          <p className="text-sm text-zinc-400 max-w-md mx-auto">
-            Automated, split-tunnel VPN orchestration designed for seamless gaming, voice chat, and secure internet routing.
+          <h1 className="text-lg font-bold font-mono tracking-wider text-ink-100 uppercase">
+            AETHER DESKTOP INITIALIZATION
+          </h1>
+          <p className="text-xs text-ink-400 max-w-md mx-auto font-sans">
+            Automated, per-application routing orchestration for Windows network stack.
           </p>
         </div>
 
         {/* Required Dependencies Section */}
-        <div className="space-y-4">
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 flex items-center gap-2">
-            <span>Required Core Engines</span>
-            <span className="text-[10px] lowercase text-zinc-500">(installed automatically)</span>
+        <div className="space-y-3 font-sans">
+          <h2 className="text-xs font-bold font-mono uppercase tracking-wider text-ink-200 flex items-center gap-2">
+            <span>CORE SUBSYSTEM ENGINES</span>
           </h2>
 
           {/* Aether Card */}
-          <div className="p-4 rounded-xl bg-background-subtle border border-zinc-800/80 space-y-3">
+          <div className="p-3.5 rounded-sm bg-app-surface border border-app-border space-y-2.5">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-lg bg-brand-600/20 border border-brand-500/30 flex items-center justify-center text-brand-400 font-bold text-sm">
+                <div className="w-8 h-8 rounded-xs bg-signal-cyan-dim border border-signal-cyan/30 flex items-center justify-center text-signal-cyan font-bold font-mono text-xs">
                   AE
                 </div>
                 <div>
-                  <div className="text-sm font-semibold text-zinc-200 flex items-center gap-2">
+                  <div className="text-xs font-semibold text-ink-100 flex items-center gap-2">
                     <span>Aether Core Client</span>
                     {isAetherReady ? (
-                      <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-emerald-950/70 text-emerald-400 border border-emerald-800/50">
-                        <CheckCircle2 className="w-3 h-3" /> Ready {depStatus?.aetherVersion ? `(${depStatus.aetherVersion})` : ""}
+                      <span className="inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.2 rounded-xs bg-signal-green-dim text-signal-green border border-signal-green/30">
+                        <CheckCircle2 className="w-2.5 h-2.5" /> READY {depStatus?.aetherVersion ? `(${depStatus.aetherVersion})` : ""}
                       </span>
                     ) : (
-                      <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-amber-950/70 text-amber-400 border border-amber-800/50">
-                        <AlertCircle className="w-3 h-3" /> Not Installed
+                      <span className="inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.2 rounded-xs bg-signal-amber-dim text-signal-amber border border-signal-amber/30">
+                        <AlertCircle className="w-2.5 h-2.5" /> NOT INSTALLED
                       </span>
                     )}
                   </div>
-                  <p className="text-xs text-zinc-400">
-                    Primary VPN client tunnel running as a local SOCKS5 proxy on port 1819.
+                  <p className="text-[11px] text-ink-400 font-mono">
+                    Local SOCKS5 proxy daemon on port 1819.
                   </p>
                 </div>
               </div>
@@ -246,17 +247,17 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ settings, curren
                 <button
                   onClick={handleInstallAether}
                   disabled={aetherInstalling}
-                  className="px-3.5 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-500 text-white font-medium text-xs flex items-center gap-1.5 shadow-sm transition-all disabled:opacity-50"
+                  className="px-3 py-1.5 rounded-sm bg-signal-cyan hover:bg-signal-cyan-muted text-black font-bold text-xs flex items-center gap-1.5 shadow-sm transition-all disabled:opacity-40 cursor-pointer"
                 >
                   {aetherInstalling ? (
                     <>
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      <span>Installing...</span>
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      <span>INSTALLING...</span>
                     </>
                   ) : (
                     <>
-                      <Download className="w-3.5 h-3.5" />
-                      <span>Download & Install</span>
+                      <Download className="w-3 h-3" />
+                      <span>INSTALL</span>
                     </>
                   )}
                 </button>
@@ -265,14 +266,14 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ settings, curren
 
             {/* Aether Download Progress */}
             {aetherProgress && (
-              <div className="space-y-1.5 pt-2 border-t border-zinc-800/60">
-                <div className="flex justify-between text-xs text-zinc-400">
+              <div className="space-y-1 pt-2 border-t border-app-border-subtle font-mono text-xs">
+                <div className="flex justify-between text-ink-400 text-[10px]">
                   <span>{aetherProgress.status}</span>
-                  <span className="font-mono text-brand-400 font-semibold">{aetherProgress.percent}%</span>
+                  <span className="text-signal-cyan font-semibold">{aetherProgress.percent}%</span>
                 </div>
-                <div className="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                <div className="w-full h-1 bg-app-inset rounded-full overflow-hidden">
                   <div
-                    className="h-full bg-brand-500 rounded-full transition-all duration-200"
+                    className="h-full bg-signal-cyan transition-all duration-200"
                     style={{ width: `${aetherProgress.percent}%` }}
                   />
                 </div>
@@ -280,34 +281,34 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ settings, curren
             )}
 
             {aetherError && (
-              <div className="text-xs text-rose-400 bg-rose-950/40 p-2.5 rounded-lg border border-rose-900/50">
+              <div className="text-[11px] font-mono text-signal-red bg-signal-red-dim p-2 rounded-xs border border-signal-red/30">
                 {aetherError}
               </div>
             )}
           </div>
 
           {/* sing-box Card */}
-          <div className="p-4 rounded-xl bg-background-subtle border border-zinc-800/80 space-y-3">
+          <div className="p-3.5 rounded-sm bg-app-surface border border-app-border space-y-2.5">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-lg bg-blue-600/20 border border-blue-500/30 flex items-center justify-center text-blue-400 font-bold text-sm">
+                <div className="w-8 h-8 rounded-xs bg-signal-cyan-dim border border-signal-cyan/30 flex items-center justify-center text-signal-cyan font-bold font-mono text-xs">
                   SB
                 </div>
                 <div>
-                  <div className="text-sm font-semibold text-zinc-200 flex items-center gap-2">
+                  <div className="text-xs font-semibold text-ink-100 flex items-center gap-2">
                     <span>sing-box TUN Router</span>
                     {isSingboxReady ? (
-                      <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-emerald-950/70 text-emerald-400 border border-emerald-800/50">
-                        <CheckCircle2 className="w-3 h-3" /> Ready {depStatus?.singboxVersion ? `(${depStatus.singboxVersion.split(' ')[0]})` : ""}
+                      <span className="inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.2 rounded-xs bg-signal-green-dim text-signal-green border border-signal-green/30">
+                        <CheckCircle2 className="w-2.5 h-2.5" /> READY {depStatus?.singboxVersion ? `(${depStatus.singboxVersion.split(' ')[0]})` : ""}
                       </span>
                     ) : (
-                      <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-amber-950/70 text-amber-400 border border-amber-800/50">
-                        <AlertCircle className="w-3 h-3" /> Not Installed
+                      <span className="inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.2 rounded-xs bg-signal-amber-dim text-signal-amber border border-signal-amber/30">
+                        <AlertCircle className="w-2.5 h-2.5" /> NOT INSTALLED
                       </span>
                     )}
                   </div>
-                  <p className="text-xs text-zinc-400">
-                    High-performance TUN adapter managing Windows routing rules and live bypasses.
+                  <p className="text-[11px] text-ink-400 font-mono">
+                    Wintun router managing network paths.
                   </p>
                 </div>
               </div>
@@ -316,17 +317,17 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ settings, curren
                 <button
                   onClick={handleInstallSingbox}
                   disabled={singboxInstalling}
-                  className="px-3.5 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-500 text-white font-medium text-xs flex items-center gap-1.5 shadow-sm transition-all disabled:opacity-50"
+                  className="px-3 py-1.5 rounded-sm bg-signal-cyan hover:bg-signal-cyan-muted text-black font-bold text-xs flex items-center gap-1.5 shadow-sm transition-all disabled:opacity-40 cursor-pointer"
                 >
                   {singboxInstalling ? (
                     <>
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      <span>Installing...</span>
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      <span>INSTALLING...</span>
                     </>
                   ) : (
                     <>
-                      <Download className="w-3.5 h-3.5" />
-                      <span>Download & Install</span>
+                      <Download className="w-3 h-3" />
+                      <span>INSTALL</span>
                     </>
                   )}
                 </button>
@@ -335,14 +336,14 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ settings, curren
 
             {/* sing-box Download Progress */}
             {singboxProgress && (
-              <div className="space-y-1.5 pt-2 border-t border-zinc-800/60">
-                <div className="flex justify-between text-xs text-zinc-400">
+              <div className="space-y-1 pt-2 border-t border-app-border-subtle font-mono text-xs">
+                <div className="flex justify-between text-ink-400 text-[10px]">
                   <span>{singboxProgress.status}</span>
-                  <span className="font-mono text-blue-400 font-semibold">{singboxProgress.percent}%</span>
+                  <span className="text-signal-cyan font-semibold">{singboxProgress.percent}%</span>
                 </div>
-                <div className="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                <div className="w-full h-1 bg-app-inset rounded-full overflow-hidden">
                   <div
-                    className="h-full bg-blue-500 rounded-full transition-all duration-200"
+                    className="h-full bg-signal-cyan transition-all duration-200"
                     style={{ width: `${singboxProgress.percent}%` }}
                   />
                 </div>
@@ -350,26 +351,28 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ settings, curren
             )}
 
             {singboxError && (
-              <div className="text-xs text-rose-400 bg-rose-950/40 p-2.5 rounded-lg border border-rose-900/50">
+              <div className="text-[11px] font-mono text-signal-red bg-signal-red-dim p-2 rounded-xs border border-signal-red/30">
                 {singboxError}
               </div>
             )}
           </div>
 
           {/* Secondary Proxy (Optional) */}
-          <div className="p-4 rounded-xl bg-background-subtle border border-zinc-800/80 space-y-3">
+          <div className="p-3.5 rounded-sm bg-app-surface border border-app-border space-y-2.5 font-sans">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-lg bg-purple-600/20 border border-purple-500/30 flex items-center justify-center text-purple-400">
+                <div className="w-8 h-8 rounded-xs bg-signal-amber-dim border border-signal-amber/30 flex items-center justify-center text-signal-amber">
                   <Server className="w-4 h-4" />
                 </div>
                 <div>
-                  <div className="text-sm font-semibold text-zinc-200 flex items-center gap-2">
-                    <span>Secondary Proxy (V2Ray / Xray)</span>
-                    <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-normal">Optional</span>
+                  <div className="text-xs font-semibold text-ink-100 flex items-center gap-2">
+                    <span>Secondary SOCKS5 Proxy</span>
+                    <span className="text-[9px] font-mono text-ink-400 border border-app-border-subtle px-1 py-0.1 rounded-xs">
+                      OPTIONAL
+                    </span>
                   </div>
-                  <p className="text-xs text-zinc-400">
-                    Used for routing Discord, Chrome, and AI Developer tools (default: 127.0.0.1:10808).
+                  <p className="text-[11px] text-ink-400 font-mono">
+                    Targeted proxy for AI tools and Discord (default: 127.0.0.1:10808).
                   </p>
                 </div>
               </div>
@@ -377,98 +380,98 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ settings, curren
               <button
                 onClick={handleTestSecondaryProxy}
                 disabled={secProxyTesting}
-                className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium transition-colors"
+                className="px-3 py-1 bg-app-panel hover:bg-app-elevated border border-app-border text-ink-200 text-xs font-mono rounded-sm transition-colors cursor-pointer"
               >
-                {secProxyTesting ? "Testing..." : "Test Connection"}
+                {secProxyTesting ? "PROBING..." : "PROBE"}
               </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 pt-2">
+            <div className="grid grid-cols-2 gap-3 pt-1 font-mono text-xs">
               <div>
-                <label className="text-[11px] text-zinc-400">Host</label>
+                <label className="text-[10px] text-ink-400">HOST</label>
                 <input
                   type="text"
                   value={secProxyHost}
                   onChange={(e) => setSecProxyHost(e.target.value)}
-                  className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1 text-xs text-zinc-200 font-mono mt-0.5"
+                  className="w-full bg-app-inset border border-app-border-subtle rounded-sm px-2.5 py-1 text-xs text-ink-200 font-mono mt-0.5 focus:outline-none focus:border-signal-cyan"
                 />
               </div>
               <div>
-                <label className="text-[11px] text-zinc-400">Port</label>
+                <label className="text-[10px] text-ink-400">PORT</label>
                 <input
                   type="number"
                   value={secProxyPort}
                   onChange={(e) => setSecProxyPort(Number(e.target.value))}
-                  className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1 text-xs text-zinc-200 font-mono mt-0.5"
+                  className="w-full bg-app-inset border border-app-border-subtle rounded-sm px-2.5 py-1 text-xs text-ink-200 font-mono mt-0.5 focus:outline-none focus:border-signal-cyan"
                 />
               </div>
             </div>
 
             {secProxyResult && (
-              <div className="text-xs font-mono text-zinc-400 pt-1">
-                Status: <span className={secProxyResult.startsWith("Online") ? "text-emerald-400 font-semibold" : "text-amber-400"}>{secProxyResult}</span>
+              <div className="text-[11px] font-mono text-ink-400 pt-1">
+                STATUS: <span className={secProxyResult.startsWith("Online") ? "text-signal-green font-semibold" : "text-signal-amber"}>{secProxyResult}</span>
               </div>
             )}
           </div>
         </div>
 
         {/* Collapsible Advanced Section for Manual Path Selection */}
-        <div className="border-t border-zinc-800/80 pt-4">
+        <div className="border-t border-app-border pt-3 font-mono">
           <button
             onClick={() => setShowAdvanced(!showAdvanced)}
-            className="flex items-center justify-between w-full text-xs font-medium text-zinc-400 hover:text-zinc-200 transition-colors"
+            className="flex items-center justify-between w-full text-xs text-ink-400 hover:text-ink-200 transition-colors cursor-pointer"
           >
-            <span>Advanced: Use Existing Executables</span>
-            {showAdvanced ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+            <span>ADVANCED: SPECIFY CUSTOM BINARIES</span>
+            {showAdvanced ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
           </button>
 
           {showAdvanced && (
-            <div className="mt-4 space-y-4 bg-zinc-950/60 p-4 rounded-xl border border-zinc-800/60">
-              <div className="space-y-1.5">
-                <label className="text-xs text-zinc-400 font-medium">Custom aether.exe Path</label>
+            <div className="mt-3 space-y-3 bg-app-inset p-3 rounded-sm border border-app-border-subtle text-xs">
+              <div className="space-y-1">
+                <label className="text-[10px] text-ink-400">CUSTOM AETHER.EXE PATH</label>
                 <div className="flex gap-2">
                   <input
                     type="text"
                     value={manualAetherPath}
                     onChange={(e) => setManualAetherPath(e.target.value)}
                     placeholder="C:\Path\To\aether.exe"
-                    className="flex-1 bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-xs font-mono text-zinc-200"
+                    className="flex-1 bg-app-panel border border-app-border rounded-sm px-3 py-1.5 text-xs font-mono text-ink-200 focus:outline-none focus:border-signal-cyan"
                   />
                   <button
                     onClick={handleBrowseAether}
-                    className="px-3 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-lg text-xs flex items-center gap-1.5"
+                    className="px-3 py-1.5 bg-app-surface hover:bg-app-elevated border border-app-border text-ink-200 rounded-sm text-xs flex items-center gap-1.5 cursor-pointer"
                   >
                     <FolderOpen className="w-3.5 h-3.5" />
                     <span>Browse</span>
                   </button>
                 </div>
                 {manualAetherFeedback && (
-                  <p className={`text-[11px] ${manualAetherFeedback.startsWith("Validated") ? "text-emerald-400" : "text-amber-400"}`}>
+                  <p className={`text-[10px] ${manualAetherFeedback.startsWith("Validated") ? "text-signal-green" : "text-signal-amber"}`}>
                     {manualAetherFeedback}
                   </p>
                 )}
               </div>
 
-              <div className="space-y-1.5">
-                <label className="text-xs text-zinc-400 font-medium">Custom sing-box.exe Path</label>
+              <div className="space-y-1">
+                <label className="text-[10px] text-ink-400">CUSTOM SING-BOX.EXE PATH</label>
                 <div className="flex gap-2">
                   <input
                     type="text"
                     value={manualSingboxPath}
                     onChange={(e) => setManualSingboxPath(e.target.value)}
                     placeholder="C:\Path\To\sing-box.exe"
-                    className="flex-1 bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-xs font-mono text-zinc-200"
+                    className="flex-1 bg-app-panel border border-app-border rounded-sm px-3 py-1.5 text-xs font-mono text-ink-200 focus:outline-none focus:border-signal-cyan"
                   />
                   <button
                     onClick={handleBrowseSingbox}
-                    className="px-3 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-lg text-xs flex items-center gap-1.5"
+                    className="px-3 py-1.5 bg-app-surface hover:bg-app-elevated border border-app-border text-ink-200 rounded-sm text-xs flex items-center gap-1.5 cursor-pointer"
                   >
                     <FolderOpen className="w-3.5 h-3.5" />
                     <span>Browse</span>
                   </button>
                 </div>
                 {manualSingboxFeedback && (
-                  <p className={`text-[11px] ${manualSingboxFeedback.startsWith("Validated") ? "text-emerald-400" : "text-amber-400"}`}>
+                  <p className={`text-[10px] ${manualSingboxFeedback.startsWith("Validated") ? "text-signal-green" : "text-signal-amber"}`}>
                     {manualSingboxFeedback}
                   </p>
                 )}
@@ -478,15 +481,15 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ settings, curren
         </div>
 
         {/* Footer Finish CTA */}
-        <div className="flex items-center justify-between pt-2 border-t border-zinc-800/80">
-          <div className="text-xs text-zinc-500">
+        <div className="flex items-center justify-between pt-2 border-t border-app-border font-mono">
+          <div className="text-xs">
             {canFinish ? (
-              <span className="text-emerald-400 flex items-center gap-1.5">
-                <CheckCircle2 className="w-3.5 h-3.5" /> Core engines ready to connect
+              <span className="text-signal-green flex items-center gap-1.5 text-[11px]">
+                <CheckCircle2 className="w-3.5 h-3.5" /> SUBSYSTEM ENGINES VERIFIED
               </span>
             ) : (
-              <span className="text-amber-400 flex items-center gap-1.5">
-                <AlertCircle className="w-3.5 h-3.5" /> Install Aether and sing-box to continue
+              <span className="text-signal-amber flex items-center gap-1.5 text-[11px]">
+                <AlertCircle className="w-3.5 h-3.5" /> Aether & sing-box required to proceed
               </span>
             )}
           </div>
@@ -494,17 +497,17 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ settings, curren
           <button
             onClick={handleFinish}
             disabled={!canFinish || isFinishing}
-            className="px-6 py-2.5 rounded-xl bg-brand-600 hover:bg-brand-500 text-white font-medium text-xs flex items-center gap-2 shadow-lg shadow-brand-600/20 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            className="px-5 py-2 rounded-sm bg-signal-cyan hover:bg-signal-cyan-muted text-black font-bold text-xs flex items-center gap-2 shadow-sm transition-all disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
           >
             {isFinishing ? (
               <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                <span>Saving Setup...</span>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <span>INITIALIZING...</span>
               </>
             ) : (
               <>
-                <span>Complete Setup</span>
-                <ArrowRight className="w-4 h-4" />
+                <span>COMPLETE INITIALIZATION</span>
+                <ArrowRight className="w-3.5 h-3.5" />
               </>
             )}
           </button>

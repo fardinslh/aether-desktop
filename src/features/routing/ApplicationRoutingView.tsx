@@ -3,11 +3,9 @@ import {
   Plus,
   Search,
   Trash2,
-  Zap,
-  Server,
-  ShieldCheck,
   Edit2,
   RefreshCw,
+  ArrowRight,
 } from "lucide-react";
 import { ApplicationRule, RouteDestination } from "../../types";
 import { AppIcon } from "../../components/AppIcon";
@@ -50,66 +48,42 @@ export const ApplicationRoutingView: React.FC<ApplicationRoutingViewProps> = ({
     return matchesQuery && matchesTab;
   });
 
-  const getDestinationBadge = (dest: RouteDestination) => {
-    switch (dest) {
-      case "direct":
-        return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-            <Zap className="w-3 h-3" />
-            Direct Internet
-          </span>
-        );
-      case "secondaryProxy":
-        return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
-            <Server className="w-3 h-3" />
-            Secondary Proxy (10808)
-          </span>
-        );
-      case "aether":
-        return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium bg-brand-500/10 text-brand-400 border border-brand-500/20">
-            <ShieldCheck className="w-3 h-3" />
-            Aether Tunnel
-          </span>
-        );
-    }
-  };
-
   return (
-    <div className="flex flex-col h-full space-y-3 px-4 py-3">
+    <div className="flex flex-col h-full space-y-2.5 px-4 py-2.5 select-none">
       {/* Header Bar */}
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex items-center justify-between gap-3 bg-app-panel border border-app-border rounded-md p-3">
         <div>
           <div className="flex items-center gap-2">
-            <h2 className="text-sm font-semibold text-zinc-100">Application Routing Rules</h2>
+            <h2 className="text-xs font-bold tracking-wider uppercase text-ink-100 font-mono">
+              APPLICATION ROUTING MATRIX
+            </h2>
             {isApplying && (
-              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium bg-brand-500/20 text-brand-300 border border-brand-500/30 animate-pulse">
+              <span className="inline-flex items-center gap-1.5 px-2 py-0.2 rounded-xs text-[10px] font-mono bg-signal-cyan-dim text-signal-cyan border border-signal-cyan/30 animate-pulse">
                 <RefreshCw className="w-2.5 h-2.5 animate-spin" />
-                Applying routing changes...
+                <span>Applying Routing Stack...</span>
               </span>
             )}
           </div>
-          <p className="text-xs text-zinc-400">
-            Configure how each application connects: Direct, Secondary Proxy (V2Ray), or Aether Tunnel.
+          <p className="text-[11px] text-ink-400 font-sans mt-0.5">
+            Deterministic per-process traffic steering between Direct Bypass, Secondary Proxy, and Aether TUN.
           </p>
         </div>
 
         <button
           onClick={() => setIsAddModalOpen(true)}
-          className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold shadow-md shadow-brand-900/30 transition-all active:scale-95 flex-shrink-0"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-sm bg-signal-cyan hover:bg-signal-cyan-muted text-black text-xs font-bold transition-all shadow-sm cursor-pointer flex-shrink-0"
         >
-          <Plus className="w-3.5 h-3.5" />
-          <span>Add Application</span>
+          <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
+          <span>Add Process</span>
         </button>
       </div>
 
       {/* Filter and Search Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-b border-zinc-800 pb-2">
-        <div className="flex items-center gap-1 bg-zinc-900 p-0.5 rounded-lg border border-zinc-800">
+      <div className="flex flex-wrap items-center justify-between gap-2 bg-app-panel border border-app-border rounded-md p-2">
+        <div className="flex items-center gap-1 bg-app-inset p-0.5 rounded-sm border border-app-border-subtle">
           {(
             [
-              { id: "all", label: `All (${rules.length})` },
+              { id: "all", label: `All Routes (${rules.length})` },
               {
                 id: "secondaryProxy",
                 label: `Secondary (${rules.filter((r) => (r.destination || r.route) === "secondaryProxy").length})`,
@@ -127,10 +101,10 @@ export const ApplicationRoutingView: React.FC<ApplicationRoutingViewProps> = ({
             <button
               key={t.id}
               onClick={() => setActiveTab(t.id)}
-              className={`px-2.5 py-1 text-xs rounded-md font-medium transition-all ${
+              className={`px-2 py-1 text-[11px] font-mono rounded-xs transition-all cursor-pointer ${
                 activeTab === t.id
-                  ? "bg-zinc-800 text-zinc-100 shadow-sm"
-                  : "text-zinc-400 hover:text-zinc-300"
+                  ? "bg-app-surface text-ink-100 border border-app-border font-semibold shadow-sm"
+                  : "text-ink-400 hover:text-ink-200 border border-transparent"
               }`}
             >
               {t.label}
@@ -138,28 +112,28 @@ export const ApplicationRoutingView: React.FC<ApplicationRoutingViewProps> = ({
           ))}
         </div>
 
-        <div className="relative w-52">
-          <Search className="w-3.5 h-3.5 absolute left-2.5 top-2.5 text-zinc-500" />
+        <div className="relative w-56">
+          <Search className="w-3.5 h-3.5 absolute left-2.5 top-2 text-ink-400" />
           <input
             type="text"
-            placeholder="Search applications..."
+            placeholder="Filter process or app name..."
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            className="w-full pl-8 pr-3 py-1 bg-zinc-900 border border-zinc-800 rounded-lg text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-brand-500"
+            className="w-full pl-8 pr-3 py-1 bg-app-inset border border-app-border-subtle rounded-sm text-xs font-mono text-ink-200 placeholder-ink-500 focus:outline-none focus:border-signal-cyan"
           />
         </div>
       </div>
 
-      {/* Rule List Container */}
-      <div className="flex-1 overflow-y-auto rounded-xl border border-zinc-800/80 bg-background-card divide-y divide-zinc-800/60 max-h-[380px]">
+      {/* Rule List Matrix Container */}
+      <div className="flex-1 overflow-y-auto rounded-md border border-app-border bg-app-panel divide-y divide-app-border-subtle max-h-[380px]">
         {filteredRules.length === 0 ? (
-          <div className="p-10 text-center text-zinc-500 text-xs flex flex-col items-center justify-center space-y-2">
-            <div>No matching application rules found.</div>
+          <div className="p-8 text-center text-ink-400 text-xs font-mono flex flex-col items-center justify-center space-y-2">
+            <div>No matching application process rules found.</div>
             <button
               onClick={() => setIsAddModalOpen(true)}
-              className="text-brand-400 hover:underline font-medium"
+              className="text-signal-cyan hover:underline font-mono text-xs cursor-pointer"
             >
-              + Add an application
+              + Add a new application rule
             </button>
           </div>
         ) : (
@@ -169,16 +143,17 @@ export const ApplicationRoutingView: React.FC<ApplicationRoutingViewProps> = ({
             return (
               <div
                 key={rule.id}
-                className={`flex items-center justify-between p-3 transition-colors ${
-                  rule.enabled ? "hover:bg-zinc-800/30" : "opacity-50 hover:bg-zinc-900/30"
+                className={`flex items-center justify-between px-3 py-2 transition-colors ${
+                  rule.enabled ? "hover:bg-app-surface/60" : "opacity-40 hover:bg-app-inset"
                 }`}
               >
-                <div className="flex items-center gap-3">
+                {/* Left: App Identity */}
+                <div className="flex items-center gap-2.5 min-w-[220px]">
                   <input
                     type="checkbox"
                     checked={rule.enabled}
                     onChange={(e) => onToggleRule(rule.id, e.target.checked)}
-                    className="w-4 h-4 rounded border-zinc-700 bg-zinc-900 text-brand-500 focus:ring-brand-500 cursor-pointer"
+                    className="w-3.5 h-3.5 rounded-xs border-app-border bg-app-inset text-signal-cyan focus:ring-signal-cyan cursor-pointer"
                     title={rule.enabled ? "Disable rule" : "Enable rule"}
                   />
 
@@ -186,47 +161,92 @@ export const ApplicationRoutingView: React.FC<ApplicationRoutingViewProps> = ({
                     processName={rule.processName}
                     displayName={displayName}
                     iconBase64={rule.iconBase64}
-                    size="md"
+                    size="sm"
                   />
 
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-semibold text-zinc-200">{displayName}</span>
+                  <div className="flex flex-col">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs font-semibold text-ink-100">{displayName}</span>
                       {rule.source === "preset" && (
-                        <span className="text-[9px] px-1.5 py-0.2 rounded bg-zinc-800 text-zinc-400 font-mono">
-                          Preset
+                        <span className="text-[9px] px-1 py-0.1 rounded-xs bg-app-inset text-ink-400 font-mono border border-app-border-subtle">
+                          PRESET
                         </span>
                       )}
                     </div>
-                    <div className="text-[11px] font-mono text-zinc-400">{rule.processName}</div>
+                    <span className="text-[10px] font-mono text-ink-400">{rule.processName}</span>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2">
-                  <select
-                    value={currentDest}
-                    onChange={(e) => onChangeRoute(rule.id, e.target.value as RouteDestination)}
-                    className="bg-zinc-900 border border-zinc-800 text-zinc-300 text-xs rounded-lg px-2.5 py-1 focus:outline-none focus:border-brand-500 cursor-pointer"
-                  >
-                    <option value="secondaryProxy">Secondary Proxy (V2Ray)</option>
-                    <option value="direct">Direct Internet</option>
-                    <option value="aether">Aether Tunnel</option>
-                  </select>
+                {/* Center: Topological Signal Rail Line */}
+                <div className="hidden sm:flex flex-1 items-center px-4">
+                  <div className="w-full flex items-center gap-1">
+                    <div className="w-1.5 h-1.5 rounded-full bg-app-border" />
+                    <div className="flex-1 h-px bg-app-border-subtle relative">
+                      <div className={`absolute right-0 top-1/2 -translate-y-1/2 w-1.5 h-1.5 rounded-full ${
+                        currentDest === "secondaryProxy"
+                          ? "bg-signal-amber"
+                          : currentDest === "direct"
+                          ? "bg-signal-cyan"
+                          : "bg-signal-green"
+                      }`} />
+                    </div>
+                    <ArrowRight className={`w-3 h-3 ${
+                      currentDest === "secondaryProxy"
+                        ? "text-signal-amber"
+                        : currentDest === "direct"
+                        ? "text-signal-cyan"
+                        : "text-signal-green"
+                    }`} />
+                  </div>
+                </div>
 
-                  {getDestinationBadge(currentDest)}
+                {/* Right: Route Switch & Actions */}
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center bg-app-inset p-0.5 rounded-sm border border-app-border-subtle font-mono text-[10px]">
+                    <button
+                      onClick={() => onChangeRoute(rule.id, "direct")}
+                      className={`px-2 py-0.5 rounded-xs transition-all cursor-pointer ${
+                        currentDest === "direct"
+                          ? "bg-signal-cyan/20 text-signal-cyan border border-signal-cyan/40 font-semibold"
+                          : "text-ink-400 hover:text-ink-200"
+                      }`}
+                    >
+                      DIRECT
+                    </button>
+                    <button
+                      onClick={() => onChangeRoute(rule.id, "secondaryProxy")}
+                      className={`px-2 py-0.5 rounded-xs transition-all cursor-pointer ${
+                        currentDest === "secondaryProxy"
+                          ? "bg-signal-amber/20 text-signal-amber border border-signal-amber/40 font-semibold"
+                          : "text-ink-400 hover:text-ink-200"
+                      }`}
+                    >
+                      SECONDARY
+                    </button>
+                    <button
+                      onClick={() => onChangeRoute(rule.id, "aether")}
+                      className={`px-2 py-0.5 rounded-xs transition-all cursor-pointer ${
+                        currentDest === "aether"
+                          ? "bg-signal-green/20 text-signal-green border border-signal-green/40 font-semibold"
+                          : "text-ink-400 hover:text-ink-200"
+                      }`}
+                    >
+                      AETHER
+                    </button>
+                  </div>
 
                   <button
                     onClick={() => setEditingRule(rule)}
-                    className="p-1.5 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 rounded-md transition-colors"
-                    title="Change / Edit application"
+                    className="p-1 text-ink-400 hover:text-ink-100 hover:bg-app-surface rounded-sm transition-colors cursor-pointer"
+                    title="Edit Rule"
                   >
                     <Edit2 className="w-3.5 h-3.5" />
                   </button>
 
                   <button
                     onClick={() => onDeleteRule(rule.id)}
-                    className="p-1.5 text-zinc-500 hover:text-rose-400 hover:bg-rose-950/20 rounded-md transition-colors"
-                    title="Remove application rule"
+                    className="p-1 text-ink-400 hover:text-signal-red hover:bg-signal-red-dim rounded-sm transition-colors cursor-pointer"
+                    title="Delete Rule"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>

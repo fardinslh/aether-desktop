@@ -67,148 +67,153 @@ export const EditApplicationModal: React.FC<EditApplicationModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-fade-in">
-      <div className="bg-background-card border border-zinc-800 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-xs p-4 select-none">
+      <div className="bg-app-panel border border-app-border rounded-md w-full max-w-md shadow-xl overflow-hidden flex flex-col max-h-[90vh]">
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-app-border bg-app-surface">
           <div className="flex items-center gap-3">
             <AppIcon processName={rule.processName} displayName={displayName} size="md" />
             <div>
-              <div className="flex items-center gap-2">
-                <h3 className="text-sm font-semibold text-zinc-100">{rule.displayName || rule.processName}</h3>
+              <div className="flex items-center gap-1.5">
+                <h3 className="text-xs font-bold font-mono tracking-wider text-ink-100 uppercase">
+                  {rule.displayName || rule.processName}
+                </h3>
                 {rule.source === "preset" && (
-                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-zinc-800 text-zinc-400 font-mono">
-                    Preset
+                  <span className="text-[9px] px-1 py-0.1 rounded-xs bg-app-inset text-ink-400 font-mono border border-app-border-subtle">
+                    PRESET
                   </span>
                 )}
                 {priority === "high" && (
-                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-950/60 border border-amber-600/40 text-amber-300 font-mono font-semibold">
-                    High Priority
+                  <span className="text-[9px] px-1 py-0.1 rounded-xs bg-signal-amber-dim border border-signal-amber/40 text-signal-amber font-mono font-semibold">
+                    HIGH PRIORITY
                   </span>
                 )}
               </div>
-              <p className="text-xs font-mono text-zinc-400">{rule.processName}</p>
+              <p className="text-[10px] font-mono text-ink-400">{rule.processName}</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1 rounded-lg text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
+            className="p-1 rounded-sm text-ink-400 hover:text-ink-100 hover:bg-app-panel transition-colors cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-5 space-y-4 overflow-y-auto flex-1">
+        <form onSubmit={handleSubmit} className="p-4 space-y-3.5 overflow-y-auto flex-1 font-sans">
           {/* Display Name */}
           <div>
-            <label className="block text-xs font-semibold text-zinc-300 mb-1">
-              Display Name
+            <label className="block text-[11px] font-mono font-semibold uppercase text-ink-300 mb-1">
+              Process Display Name
             </label>
             <input
               type="text"
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
-              className="w-full px-3 py-1.5 bg-zinc-950 border border-zinc-800 rounded-lg text-xs text-zinc-200 focus:outline-none focus:border-brand-500"
+              className="w-full px-3 py-1.5 bg-app-inset border border-app-border-subtle rounded-sm text-xs font-sans text-ink-200 focus:outline-none focus:border-signal-cyan"
             />
           </div>
 
           {/* Enabled Toggle */}
-          <div className="flex items-center justify-between p-3 rounded-xl bg-zinc-950/60 border border-zinc-800">
+          <div className="flex items-center justify-between p-2.5 rounded-sm bg-app-inset border border-app-border-subtle">
             <div>
-              <div className="text-xs font-semibold text-zinc-200">Rule Status</div>
-              <div className="text-[11px] text-zinc-400">
-                {enabled ? "Active - Network traffic is being routed" : "Disabled - Follows default VPN tunnel"}
+              <div className="text-xs font-semibold text-ink-100 font-mono">RULE ACTIVE STATE</div>
+              <div className="text-[10px] text-ink-400 font-sans">
+                {enabled ? "Active in sing-box routing matrix" : "Disabled · Bypasses matrix to global TUN fallback"}
               </div>
             </div>
             <input
               type="checkbox"
               checked={enabled}
               onChange={(e) => setEnabled(e.target.checked)}
-              className="w-4 h-4 rounded text-brand-500 focus:ring-brand-500 bg-zinc-900 border-zinc-700 cursor-pointer"
+              className="w-3.5 h-3.5 rounded-xs text-signal-cyan focus:ring-signal-cyan bg-app-panel border-app-border cursor-pointer"
             />
           </div>
 
           {/* Destination Selector */}
-          <div className="space-y-2">
-            <label className="block text-xs font-semibold text-zinc-300">
-              Routing Destination:
+          <div className="space-y-1.5">
+            <label className="block text-[11px] font-mono font-semibold uppercase text-ink-300">
+              Steer Route Destination:
             </label>
-            <div className="grid grid-cols-3 gap-2">
-              <button
-                type="button"
-                onClick={() => setDestination("secondaryProxy")}
-                className={`flex flex-col items-center p-2.5 rounded-xl border text-center transition-all ${
-                  destination === "secondaryProxy"
-                    ? "bg-cyan-950/30 border-cyan-500 text-cyan-300 shadow-sm"
-                    : "bg-zinc-950/60 border-zinc-800 text-zinc-400 hover:border-zinc-700"
-                }`}
-              >
-                <Server className="w-4 h-4 mb-1" />
-                <span className="text-[11px] font-semibold">Secondary Proxy</span>
-              </button>
-
+            <div className="grid grid-cols-3 gap-2 font-mono">
+              {/* Direct */}
               <button
                 type="button"
                 onClick={() => setDestination("direct")}
-                className={`flex flex-col items-center p-2.5 rounded-xl border text-center transition-all ${
+                className={`flex flex-col items-center p-2 rounded-sm border text-center transition-all cursor-pointer ${
                   destination === "direct"
-                    ? "bg-emerald-950/30 border-emerald-500 text-emerald-300 shadow-sm"
-                    : "bg-zinc-950/60 border-zinc-800 text-zinc-400 hover:border-zinc-700"
+                    ? "bg-signal-cyan-dim border-signal-cyan text-signal-cyan"
+                    : "bg-app-inset border-app-border-subtle text-ink-400 hover:border-app-border"
                 }`}
               >
-                <Zap className="w-4 h-4 mb-1" />
-                <span className="text-[11px] font-semibold">Direct</span>
+                <Zap className="w-3.5 h-3.5 mb-1 text-signal-cyan" />
+                <span className="text-[10px] font-bold">DIRECT</span>
               </button>
 
+              {/* Secondary */}
+              <button
+                type="button"
+                onClick={() => setDestination("secondaryProxy")}
+                className={`flex flex-col items-center p-2 rounded-sm border text-center transition-all cursor-pointer ${
+                  destination === "secondaryProxy"
+                    ? "bg-signal-amber-dim border-signal-amber text-signal-amber"
+                    : "bg-app-inset border-app-border-subtle text-ink-400 hover:border-app-border"
+                }`}
+              >
+                <Server className="w-3.5 h-3.5 mb-1 text-signal-amber" />
+                <span className="text-[10px] font-bold">SECONDARY</span>
+              </button>
+
+              {/* Aether */}
               <button
                 type="button"
                 onClick={() => setDestination("aether")}
-                className={`flex flex-col items-center p-2.5 rounded-xl border text-center transition-all ${
+                className={`flex flex-col items-center p-2 rounded-sm border text-center transition-all cursor-pointer ${
                   destination === "aether"
-                    ? "bg-brand-950/30 border-brand-500 text-brand-300 shadow-sm"
-                    : "bg-zinc-950/60 border-zinc-800 text-zinc-400 hover:border-zinc-700"
+                    ? "bg-signal-green-dim border-signal-green text-signal-green"
+                    : "bg-app-inset border-app-border-subtle text-ink-400 hover:border-app-border"
                 }`}
               >
-                <ShieldCheck className="w-4 h-4 mb-1" />
-                <span className="text-[11px] font-semibold">Aether</span>
+                <ShieldCheck className="w-3.5 h-3.5 mb-1 text-signal-green" />
+                <span className="text-[10px] font-bold">AETHER</span>
               </button>
             </div>
           </div>
 
           {/* Advanced Collapsible Section */}
-          <div className="border border-zinc-800/80 rounded-xl overflow-hidden bg-zinc-950/40">
+          <div className="border border-app-border-subtle rounded-sm overflow-hidden bg-app-inset font-mono">
             <button
               type="button"
               onClick={() => setIsAdvancedOpen(!isAdvancedOpen)}
-              className="w-full flex items-center justify-between px-3 py-2.5 text-xs font-semibold text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/40 transition-colors"
+              className="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold text-ink-400 hover:text-ink-200 hover:bg-app-surface transition-colors cursor-pointer"
             >
               <div className="flex items-center gap-1.5">
-                <SlidersHorizontal className="w-3.5 h-3.5 text-zinc-500" />
-                <span>Advanced Routing Options</span>
+                <SlidersHorizontal className="w-3.5 h-3.5 text-ink-500" />
+                <span>ADVANCED ROUTING PRECEDENCE</span>
               </div>
               {isAdvancedOpen ? (
-                <ChevronDown className="w-3.5 h-3.5 text-zinc-500" />
+                <ChevronDown className="w-3.5 h-3.5 text-ink-500" />
               ) : (
-                <ChevronRight className="w-3.5 h-3.5 text-zinc-500" />
+                <ChevronRight className="w-3.5 h-3.5 text-ink-500" />
               )}
             </button>
 
             {isAdvancedOpen && (
-              <div className="p-3 border-t border-zinc-800/80 space-y-3 animate-fade-in text-xs">
+              <div className="p-3 border-t border-app-border-subtle space-y-2.5 text-xs">
                 <div>
-                  <label className="block font-semibold text-zinc-300 mb-1">
-                    Rule Precedence & Priority
-                  </label>
-                  <p className="text-[11px] text-zinc-500 mb-2">
-                    Controls whether this application route overrides global STUN/TURN fallback rules (ports 3478, 5349).
+                  <div className="font-semibold text-ink-200 mb-1 text-[11px]">
+                    Priority Evaluation Layer
+                  </div>
+                  <p className="text-[10px] text-ink-400 font-sans mb-2">
+                    Controls whether this process route overrides global STUN/TURN fallback bypass rules (ports 3478, 5349).
                   </p>
 
-                  <div className="space-y-2">
+                  <div className="space-y-1.5 font-sans">
                     <label
-                      className={`flex items-start gap-2.5 p-2.5 rounded-lg border cursor-pointer transition-all ${
+                      className={`flex items-start gap-2 p-2 rounded-sm border cursor-pointer transition-all ${
                         priority === "normal"
-                          ? "bg-zinc-900 border-brand-500/60 text-zinc-100"
-                          : "bg-zinc-950/80 border-zinc-800/80 text-zinc-400 hover:border-zinc-700"
+                          ? "bg-app-surface border-signal-cyan text-ink-100"
+                          : "bg-app-panel border-app-border text-ink-400 hover:border-ink-500"
                       }`}
                     >
                       <input
@@ -217,21 +222,21 @@ export const EditApplicationModal: React.FC<EditApplicationModalProps> = ({
                         value="normal"
                         checked={priority === "normal"}
                         onChange={() => setPriority("normal")}
-                        className="mt-0.5 text-brand-500 focus:ring-brand-500 bg-zinc-900 border-zinc-700"
+                        className="mt-0.5 text-signal-cyan focus:ring-signal-cyan bg-app-inset border-app-border"
                       />
                       <div>
-                        <div className="font-semibold text-xs text-zinc-200">Normal Priority (Default)</div>
-                        <div className="text-[11px] text-zinc-500">
+                        <div className="font-semibold text-xs text-ink-100 font-mono">NORMAL PRIORITY (DEFAULT)</div>
+                        <div className="text-[10px] text-ink-400">
                           Evaluated after generic STUN/TURN Direct rules. Recommended for web browsers, Spotify, Telegram, and IDEs.
                         </div>
                       </div>
                     </label>
 
                     <label
-                      className={`flex items-start gap-2.5 p-2.5 rounded-lg border cursor-pointer transition-all ${
+                      className={`flex items-start gap-2 p-2 rounded-sm border cursor-pointer transition-all ${
                         priority === "high"
-                          ? "bg-amber-950/20 border-amber-500/60 text-amber-200 shadow-sm"
-                          : "bg-zinc-950/80 border-zinc-800/80 text-zinc-400 hover:border-zinc-700"
+                          ? "bg-signal-amber-dim border-signal-amber text-signal-amber shadow-sm"
+                          : "bg-app-panel border-app-border text-ink-400 hover:border-ink-500"
                       }`}
                     >
                       <input
@@ -240,15 +245,15 @@ export const EditApplicationModal: React.FC<EditApplicationModalProps> = ({
                         value="high"
                         checked={priority === "high"}
                         onChange={() => setPriority("high")}
-                        className="mt-0.5 text-amber-500 focus:ring-amber-500 bg-zinc-900 border-zinc-700"
+                        className="mt-0.5 text-signal-amber focus:ring-signal-amber bg-app-inset border-app-border"
                       />
                       <div>
-                        <div className="flex items-center gap-1.5 font-semibold text-xs text-amber-300">
-                          <span>High Priority Override</span>
-                          <AlertTriangle className="w-3 h-3 text-amber-400" />
+                        <div className="flex items-center gap-1.5 font-semibold text-xs text-signal-amber font-mono">
+                          <span>HIGH PRIORITY OVERRIDE</span>
+                          <AlertTriangle className="w-3 h-3 text-signal-amber" />
                         </div>
-                        <div className="text-[11px] text-zinc-400">
-                          Evaluated <strong>before</strong> generic compatibility rules. Prevents voice/WebRTC connection loops (e.g. Discord Voice channel fix).
+                        <div className="text-[10px] text-ink-300">
+                          Evaluated <strong>before</strong> generic compatibility rules. Fixes voice/WebRTC connection loops (e.g. Discord Voice channel fix).
                         </div>
                       </div>
                     </label>
@@ -259,30 +264,30 @@ export const EditApplicationModal: React.FC<EditApplicationModalProps> = ({
           </div>
 
           {/* Actions */}
-          <div className="flex items-center justify-between pt-3 border-t border-zinc-800">
+          <div className="flex items-center justify-between pt-3 border-t border-app-border font-mono">
             <button
               type="button"
               onClick={handleDelete}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-rose-400 hover:bg-rose-950/30 border border-transparent hover:border-rose-900/40 text-xs font-medium transition-colors"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-sm text-signal-red hover:bg-signal-red-dim border border-transparent hover:border-signal-red/30 text-xs transition-colors cursor-pointer"
             >
               <Trash2 className="w-3.5 h-3.5" />
-              <span>Remove Rule</span>
+              <span>Delete</span>
             </button>
 
             <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={onClose}
-                className="px-3.5 py-1.5 rounded-lg border border-zinc-800 text-zinc-300 hover:bg-zinc-800 text-xs font-medium transition-colors"
+                className="px-3 py-1.5 rounded-sm border border-app-border text-ink-300 hover:bg-app-surface text-xs transition-colors cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold shadow-md shadow-brand-900/30 transition-all active:scale-95"
+                className="flex items-center gap-1.5 px-4 py-1.5 rounded-sm bg-signal-cyan hover:bg-signal-cyan-muted text-black font-bold text-xs transition-all shadow-sm cursor-pointer"
               >
                 <Save className="w-3.5 h-3.5" />
-                <span>Save Changes</span>
+                <span>Save Rule</span>
               </button>
             </div>
           </div>

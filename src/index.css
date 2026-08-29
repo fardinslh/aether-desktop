@@ -1,35 +1,53 @@
-﻿@tailwind base;
+@tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
   * {
-    border-color: rgba(39, 39, 42, 0.8);
+    border-color: #262d3d;
   }
   
   body {
     margin: 0;
     padding: 0;
+    background-color: #0c0e12;
+    color: #e2e8f0;
     user-select: none;
     -webkit-user-select: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
   }
 }
 
-/* Custom scrollbar for dark theme */
+/* Precision scrollbar for dark desktop utility */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #090a0f;
+  background: #090b0e;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #27272a;
-  border-radius: 3px;
+  background: #262d3d;
+  border-radius: 2px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #3f3f46;
+  background: #3b465c;
+}
+
+/* Subtle topological grid pattern utility */
+.bg-grid-topology {
+  background-size: 24px 24px;
+  background-image: 
+    linear-gradient(to right, rgba(38, 45, 61, 0.35) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(38, 45, 61, 0.35) 1px, transparent 1px);
+}
+
+/* Precision rail connection line */
+.route-rail-line {
+  background: linear-gradient(90deg, #262d3d 0%, #00d2ff 50%, #262d3d 100%);
+  background-size: 200% 100%;
 }

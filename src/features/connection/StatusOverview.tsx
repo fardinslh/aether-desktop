@@ -1,5 +1,5 @@
-﻿import React from "react";
-import { Globe, Radio, Shield, Network, CheckCircle2, AlertCircle } from "lucide-react";
+import React from "react";
+import { Globe, Radio, Shield, Network } from "lucide-react";
 import { HealthStatus, ConnectionState } from "../../types";
 
 interface StatusOverviewProps {
@@ -10,70 +10,97 @@ interface StatusOverviewProps {
 export const StatusOverview: React.FC<StatusOverviewProps> = ({ health, connectionState }) => {
   const isConnected = connectionState === "CONNECTED";
 
-  const cards = [
+  const telemetryItems = [
     {
-      id: "internet",
-      title: "Internet",
+      id: "egress",
+      label: "EGRESS TRANSPORT",
       icon: Globe,
-      status: isConnected ? "Active" : "Normal",
-      ok: isConnected ? health?.internet.ok : true,
-      subtitle: isConnected ? "Through sing-box TUN" : "Direct network",
+      statusText: isConnected ? "TUNNEL EGRESS" : "DIRECT/LOCAL",
+      address: isConnected && health?.cloudflareTrace ? `${health.cloudflareTrace.ip}` : "Standard Gateway",
+      meta: isConnected && health?.cloudflareTrace ? `${health.cloudflareTrace.colo} · ${health.cloudflareTrace.latencyMs ?? "—"}ms` : "ISP Default",
+      isActive: isConnected,
+      color: "signal-green",
     },
     {
       id: "aether",
-      title: "Aether Tunnel",
+      label: "AETHER DAEMON",
       icon: Radio,
-      status: isConnected ? "Running" : "Standby",
-      ok: isConnected ? health?.aetherTunnel.ok : true,
-      subtitle: isConnected ? "SOCKS5 127.0.0.1:1819" : "Ready to launch",
+      statusText: isConnected ? "MANAGED SOCKS5" : "STANDBY",
+      address: "127.0.0.1:1819",
+      meta: isConnected ? "WireGuard Engine" : "Ready to spawn",
+      isActive: isConnected,
+      color: "signal-green",
     },
     {
-      id: "routing",
-      title: "System Routing",
+      id: "singbox",
+      label: "ROUTER & TUN",
       icon: Shield,
-      status: isConnected ? "Active" : "Disabled",
-      ok: isConnected ? health?.routing.ok : true,
-      subtitle: isConnected ? "singbox-tun adapter" : "Standard table",
+      statusText: isConnected ? "WINTUN STACK" : "INACTIVE",
+      address: "singbox-tun",
+      meta: "172.19.0.1/30 (Strict)",
+      isActive: isConnected,
+      color: "signal-cyan",
     },
     {
       id: "secondary",
-      title: "Secondary Proxy",
+      label: "SECONDARY PROXY",
       icon: Network,
-      status: isConnected ? "Active" : "Standby",
-      ok: isConnected ? health?.secondaryProxy.ok : true,
-      subtitle: "127.0.0.1:10808",
+      statusText: "V2RAY SOCKS",
+      address: "127.0.0.1:10808",
+      meta: health?.secondaryProxy.ok ? "Ready & Bound" : "Standby",
+      isActive: health?.secondaryProxy.ok ?? false,
+      color: "signal-amber",
     },
   ];
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 px-4">
-      {cards.map((c) => {
-        const Icon = c.icon;
-        const isOk = c.ok;
-
-        return (
-          <div
-            key={c.id}
-            className="p-2.5 rounded-xl bg-background-card border border-zinc-800/80 hover:border-zinc-700/80 transition-colors"
-          >
-            <div className="flex items-center justify-between mb-1.5">
-              <div className="p-1.5 rounded-lg bg-zinc-900 border border-zinc-800/80 text-zinc-400">
-                <Icon className="w-3.5 h-3.5 text-brand-400" />
-              </div>
-              {isOk ? (
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-              ) : (
-                <AlertCircle className="w-3.5 h-3.5 text-amber-400" />
-              )}
-            </div>
-            <div className="text-xs font-semibold text-zinc-200">{c.title}</div>
-            <div className="text-[11px] text-zinc-400 flex items-center gap-1 mt-0.5">
-              <span className={`w-1.5 h-1.5 rounded-full ${isOk && isConnected ? "bg-emerald-400" : "bg-zinc-500"}`} />
-              <span className="truncate">{c.subtitle}</span>
-            </div>
+    <div className="px-4 mt-2 select-none">
+      <div className="w-full bg-app-panel border border-app-border rounded-md p-2.5">
+        <div className="flex items-center justify-between px-1 mb-2">
+          <div className="text-[10px] font-mono font-semibold tracking-wider text-ink-400 uppercase flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-signal-cyan" />
+            <span>SUBSYSTEM TELEMETRY & ROUTING RACK</span>
           </div>
-        );
-      })}
+          <span className="text-[10px] font-mono text-ink-500">POLL: 800ms</span>
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+          {telemetryItems.map((item) => {
+            const Icon = item.icon;
+            return (
+              <div
+                key={item.id}
+                className="bg-app-inset border border-app-border-subtle rounded-sm p-2 flex flex-col justify-between hover:border-app-border transition-colors"
+              >
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[10px] font-mono font-semibold text-ink-400 flex items-center gap-1">
+                    <Icon className="w-3 h-3 text-ink-400" />
+                    <span>{item.label}</span>
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full ${
+                        item.isActive ? "bg-signal-green shadow-[0_0_4px_#10b981]" : "bg-ink-500"
+                      }`}
+                    />
+                    <span className="text-[9px] font-mono uppercase text-ink-400">
+                      {item.isActive ? "OK" : "IDLE"}
+                    </span>
+                  </span>
+                </div>
+
+                <div className="text-xs font-mono font-semibold text-ink-200 truncate">
+                  {item.address}
+                </div>
+
+                <div className="text-[10px] font-mono text-ink-400 truncate mt-0.5">
+                  {item.meta}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 };

@@ -45,7 +45,7 @@ export const AppIcon: React.FC<AppIconProps> = ({
   // Discord
   if (p.includes("discord") || d.includes("discord")) {
     return (
-      <div className={`${sizeContainer} rounded-lg bg-[#5865F2]/20 border border-[#5865F2]/40 text-[#5865F2] flex items-center justify-center font-bold flex-shrink-0 ${className}`}>
+      <div className={`${sizeContainer} rounded-xs bg-[#5865F2]/15 border border-[#5865F2]/40 text-[#5865F2] flex items-center justify-center font-bold flex-shrink-0 ${className}`}>
         <MessageSquare className={iconSize} />
       </div>
     );
@@ -54,7 +54,7 @@ export const AppIcon: React.FC<AppIconProps> = ({
   // Chrome / Edge / Firefox / Browser
   if (p.includes("chrome") || p.includes("firefox") || p.includes("msedge") || p.includes("brave")) {
     return (
-      <div className={`${sizeContainer} rounded-lg bg-amber-500/20 border border-amber-500/40 text-amber-400 flex items-center justify-center flex-shrink-0 ${className}`}>
+      <div className={`${sizeContainer} rounded-xs bg-signal-amber-dim border border-signal-amber/40 text-signal-amber flex items-center justify-center flex-shrink-0 ${className}`}>
         <Globe className={iconSize} />
       </div>
     );
@@ -63,7 +63,7 @@ export const AppIcon: React.FC<AppIconProps> = ({
   // VS Code / IDEs
   if (p.includes("code") || p.includes("devenv") || p.includes("cursor") || p.includes("sublime")) {
     return (
-      <div className={`${sizeContainer} rounded-lg bg-sky-500/20 border border-sky-500/40 text-sky-400 flex items-center justify-center flex-shrink-0 ${className}`}>
+      <div className={`${sizeContainer} rounded-xs bg-signal-cyan-dim border border-signal-cyan/40 text-signal-cyan flex items-center justify-center flex-shrink-0 ${className}`}>
         <Code2 className={iconSize} />
       </div>
     );
@@ -72,7 +72,7 @@ export const AppIcon: React.FC<AppIconProps> = ({
   // Antigravity & AI
   if (p.includes("antigravity") || p.includes("agy") || p.includes("language_server") || p.includes("codex")) {
     return (
-      <div className={`${sizeContainer} rounded-lg bg-purple-500/20 border border-purple-500/40 text-purple-400 flex items-center justify-center flex-shrink-0 ${className}`}>
+      <div className={`${sizeContainer} rounded-xs bg-purple-500/15 border border-purple-500/40 text-purple-400 flex items-center justify-center flex-shrink-0 ${className}`}>
         <Sparkles className={iconSize} />
       </div>
     );
@@ -81,7 +81,7 @@ export const AppIcon: React.FC<AppIconProps> = ({
   // Telegram
   if (p.includes("telegram")) {
     return (
-      <div className={`${sizeContainer} rounded-lg bg-sky-500/20 border border-sky-500/40 text-sky-400 flex items-center justify-center flex-shrink-0 ${className}`}>
+      <div className={`${sizeContainer} rounded-xs bg-signal-cyan-dim border border-signal-cyan/40 text-signal-cyan flex items-center justify-center flex-shrink-0 ${className}`}>
         <Send className={iconSize} />
       </div>
     );
@@ -90,7 +90,7 @@ export const AppIcon: React.FC<AppIconProps> = ({
   // Spotify / Music
   if (p.includes("spotify") || p.includes("music") || p.includes("itunes")) {
     return (
-      <div className={`${sizeContainer} rounded-lg bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 flex items-center justify-center flex-shrink-0 ${className}`}>
+      <div className={`${sizeContainer} rounded-xs bg-signal-green-dim border border-signal-green/40 text-signal-green flex items-center justify-center flex-shrink-0 ${className}`}>
         <Music className={iconSize} />
       </div>
     );
@@ -99,7 +99,7 @@ export const AppIcon: React.FC<AppIconProps> = ({
   // Steam / Games (Dota, Rust, Generals)
   if (p.includes("steam") || p.includes("dota") || p.includes("rust") || p.includes("generals") || p.includes("game")) {
     return (
-      <div className={`${sizeContainer} rounded-lg bg-rose-500/20 border border-rose-500/40 text-rose-400 flex items-center justify-center flex-shrink-0 ${className}`}>
+      <div className={`${sizeContainer} rounded-xs bg-signal-red-dim border border-signal-red/40 text-signal-red flex items-center justify-center flex-shrink-0 ${className}`}>
         <Gamepad2 className={iconSize} />
       </div>
     );
@@ -109,7 +109,7 @@ export const AppIcon: React.FC<AppIconProps> = ({
   const firstLetter = (displayName || processName).charAt(0).toUpperCase();
 
   return (
-    <div className={`${sizeContainer} rounded-lg bg-zinc-800 border border-zinc-700 text-zinc-300 flex items-center justify-center font-bold flex-shrink-0 shadow-inner ${className}`}>
+    <div className={`${sizeContainer} rounded-xs bg-app-surface border border-app-border text-ink-300 font-mono flex items-center justify-center font-bold flex-shrink-0 shadow-xs ${className}`}>
       {firstLetter || <Layers className={iconSize} />}
     </div>
   );

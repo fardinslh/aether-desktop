@@ -2,9 +2,13 @@ import React from "react";
 import {
   Power,
   Globe,
-  CheckCircle2,
   ShieldCheck,
   AlertTriangle,
+  Radio,
+  Network,
+  Cpu,
+  Activity,
+  Terminal,
 } from "lucide-react";
 import { ConnectionState, HealthStatus } from "../../types";
 
@@ -30,218 +34,269 @@ export const ConnectionHero: React.FC<ConnectionHeroProps> = ({
   const isError = connectionState === "ERROR";
   const isTransitioning = !isConnected && !isDisconnected && !isError;
 
-  const getButtonTitle = () => {
-    switch (connectionState) {
-      case "DISCONNECTED":
-        return "CONNECT";
-      case "STARTING_AETHER":
-        return "Starting Aether...";
-      case "SCANNING_AETHER":
-        return "Scanning Gateway...";
-      case "WAITING_FOR_AETHER":
-        return "Starting Aether...";
-      case "TESTING_AETHER":
-        return "Checking Aether...";
-      case "STARTING_ROUTER":
-        return "Starting Router...";
-      case "TESTING_ROUTING":
-        return "Checking Routing...";
-      case "CONNECTED":
-        return "CONNECTED";
-      case "RECONNECTING":
-        return "Reconnecting...";
-      case "DISCONNECTING":
-        return "Disconnecting...";
-      case "ERROR":
-        return "RETRY";
-    }
-  };
-
   const getSubStatusText = () => {
     if (isConnected) {
       const trace = health?.cloudflareTrace;
       if (trace && trace.colo && trace.latencyMs !== undefined) {
-        return `${getCityFromColo(trace.colo)} · ${trace.latencyMs} ms`;
+        return `${getCityFromColo(trace.colo)} (${trace.colo}) · ${trace.latencyMs} ms · Egress: ${trace.ip}`;
       }
-      return "Connected · Measuring health...";
+      return "Connected · Validating network egress telemetry...";
     }
     if (
       connectionState === "STARTING_AETHER" ||
       connectionState === "WAITING_FOR_AETHER"
     ) {
-      return "Launching managed Aether daemon...";
+      return "Spawning managed Aether WireGuard/Shadowsocks daemon...";
     }
     if (connectionState === "SCANNING_AETHER") {
-      return "Scanning for a working Aether gateway... (Thorough scan · this can take a few minutes on first connection)";
+      return "Probing resilient Aether gateway candidates (Thorough Mode)...";
     }
     if (connectionState === "TESTING_AETHER") {
-      return "Verifying SOCKS5 proxy on 127.0.0.1:1819...";
+      return "Verifying SOCKS5 proxy handshake on 127.0.0.1:1819...";
     }
     if (connectionState === "STARTING_ROUTER") {
-      return "Configuring sing-box TUN network adapter...";
+      return "Initializing sing-box Wintun driver & network adapter...";
     }
     if (connectionState === "TESTING_ROUTING") {
-      return "Verifying system egress and application routing...";
+      return "Executing 3-stage egress routing & DNS verification...";
     }
     if (isError) {
-      return errorDetails || "Network subsystem encountered an error.";
+      return errorDetails || "Network subsystem encountered an unrecoverable routing error.";
     }
-    return "Protected by Aether & sing-box TUN router";
+    return "Routing engine standby · Ready to establish isolated TUN tunnel";
   };
 
+  const getStageStep = () => {
+    switch (connectionState) {
+      case "STARTING_AETHER":
+      case "WAITING_FOR_AETHER":
+        return 1;
+      case "SCANNING_AETHER":
+        return 2;
+      case "TESTING_AETHER":
+        return 3;
+      case "STARTING_ROUTER":
+        return 4;
+      case "TESTING_ROUTING":
+        return 5;
+      case "CONNECTED":
+        return 6;
+      default:
+        return 0;
+    }
+  };
+
+  const activeStep = getStageStep();
+
   return (
-    <div className="flex flex-col items-center justify-center pt-8 pb-6 px-4">
-      {/* Stationary Hero Center */}
-      <div className="relative mb-6 flex items-center justify-center">
-        {/* Glow backdrop */}
-        <div
-          className={`absolute -inset-4 rounded-full blur-2xl transition-all duration-700 pointer-events-none ${
-            isConnected
-              ? "bg-emerald-500/25 opacity-100"
-              : isTransitioning
-                ? "bg-brand-500/20 opacity-80"
-                : isError
-                  ? "bg-rose-500/25 opacity-100"
-                  : "bg-transparent opacity-0"
-          }`}
-        />
+    <div className="flex flex-col items-center px-4 pt-2 pb-1 select-none">
+      {/* Precision Routing Topology Display */}
+      <div className="w-full max-w-xl bg-app-panel border border-app-border rounded-md p-4 flex flex-col items-center relative overflow-hidden shadow-sm">
+        {/* Subtle background rail line */}
+        <div className="absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r from-transparent via-app-border to-transparent" />
 
-        {/* Outer stationary ring container */}
-        <div className="relative w-36 h-36 flex items-center justify-center">
-          {/* Subtle animated progress ring overlay when transitioning */}
-          {isTransitioning && (
-            <svg
-              className="absolute inset-0 w-full h-full animate-spin pointer-events-none"
-              viewBox="0 0 100 100"
-              style={{ animationDuration: "2s" }}
-            >
-              <circle
-                cx="50"
-                cy="50"
-                r="46"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="3"
-                className="text-brand-500/20"
-              />
-              <circle
-                cx="50"
-                cy="50"
-                r="46"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="3"
-                strokeDasharray="70 200"
-                strokeLinecap="round"
-                className="text-brand-400"
-              />
-            </svg>
-          )}
-
-          {/* Stationary Base Border */}
-          <div
-            className={`w-full h-full rounded-full border-2 p-2 transition-all duration-500 flex items-center justify-center ${
-              isConnected
-                ? "border-emerald-500/40 shadow-[0_0_30px_rgba(16,185,129,0.2)] bg-emerald-950/10"
+        {/* Top: Public Gateway Node */}
+        <div className="w-full flex items-center justify-between px-3 py-1.5 rounded-sm bg-app-inset border border-app-border-subtle text-xs font-mono mb-3">
+          <div className="flex items-center gap-2">
+            <Globe className={`w-3.5 h-3.5 ${isConnected ? "text-signal-green" : isTransitioning ? "text-signal-cyan animate-pulse" : "text-ink-400"}`} />
+            <span className="text-ink-300 uppercase tracking-wide text-[11px] font-medium">WAN Gateway:</span>
+            <span className={`text-[11px] ${isConnected ? "text-signal-green font-semibold" : "text-ink-400"}`}>
+              {isConnected && health?.cloudflareTrace
+                ? `${health.cloudflareTrace.ip} (${health.cloudflareTrace.colo})`
                 : isTransitioning
-                  ? "border-transparent bg-brand-950/10"
-                  : isError
-                    ? "border-rose-500/50 bg-rose-950/10"
-                    : "border-zinc-800 bg-zinc-900/30 hover:border-zinc-700"
-            }`}
-          >
-            {/* Stationary Button and Text */}
-            <button
-              onClick={isConnected ? onDisconnect : onConnect}
-              disabled={isTransitioning}
-              className={`w-full h-full rounded-full flex flex-col items-center justify-center gap-1 text-white font-semibold transition-all duration-300 transform active:scale-95 shadow-xl select-none ${
-                isConnected
-                  ? "bg-gradient-to-b from-emerald-600 to-emerald-700 hover:from-emerald-500 hover:to-emerald-600 shadow-emerald-900/40 cursor-pointer"
-                  : isTransitioning
-                    ? "bg-zinc-800/90 text-zinc-200 cursor-wait shadow-none"
-                    : isError
-                      ? "bg-gradient-to-b from-rose-600 to-rose-700 hover:from-rose-500 hover:to-rose-600 shadow-rose-900/40 cursor-pointer"
-                      : "bg-gradient-to-b from-brand-600 to-brand-700 hover:from-brand-500 hover:to-brand-600 shadow-brand-900/30 hover:shadow-brand-500/20 cursor-pointer"
-              }`}
-            >
-              {isConnected ? (
-                <ShieldCheck className="w-8 h-8 text-emerald-100 stroke-[2.2]" />
-              ) : isError ? (
-                <AlertTriangle className="w-8 h-8 text-rose-100 stroke-[2.2]" />
-              ) : isTransitioning ? (
-                <div className="w-8 h-8 rounded-full border-2 border-brand-400 border-t-transparent animate-spin" />
-              ) : (
-                <Power className="w-8 h-8 stroke-[2.2]" />
-              )}
-              <span className="text-[11px] tracking-wider font-bold uppercase mt-0.5 whitespace-nowrap px-2">
-                {getButtonTitle()}
+                ? "Negotiating..."
+                : "Standby"}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-3 text-[11px]">
+            {isConnected && health?.cloudflareTrace?.latencyMs !== undefined && (
+              <span className="text-signal-green flex items-center gap-1">
+                <Activity className="w-3 h-3" />
+                <span>{health.cloudflareTrace.latencyMs} ms</span>
               </span>
-            </button>
+            )}
+            <span className="flex items-center gap-1.5">
+              <span className={`w-1.5 h-1.5 rounded-full ${isConnected ? "bg-signal-green" : isTransitioning ? "bg-signal-cyan animate-pulse" : "bg-ink-500"}`} />
+              <span className="text-ink-400 font-sans text-[10px] uppercase">
+                {isConnected ? "Active" : isTransitioning ? "Syncing" : "Standby"}
+              </span>
+            </span>
           </div>
         </div>
-      </div>
 
-      {/* Substatus and Info */}
-      <div className="text-center space-y-1.5 max-w-md">
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-zinc-900/80 border border-zinc-800 text-xs">
-          <span
-            className={`w-2 h-2 rounded-full ${
-              isConnected
-                ? "bg-emerald-400 shadow-[0_0_8px_#34d399]"
-                : isTransitioning
-                  ? "bg-amber-400 animate-pulse"
-                  : isError
-                    ? "bg-rose-400"
-                    : "bg-zinc-600"
-            }`}
-          />
-          <span className="font-medium text-zinc-200">
-            {isConnected
-              ? "Securely Connected"
+        {/* Vertical Highway Signal Lines */}
+        <div className="flex flex-col items-center my-0.5 relative">
+          <div className={`w-0.5 h-4 transition-colors duration-500 ${isConnected ? "bg-signal-green" : isTransitioning ? "bg-signal-cyan" : "bg-app-border"}`} />
+          <div className={`w-2 h-2 rounded-full border transition-all ${isConnected ? "border-signal-green bg-signal-green/30" : isTransitioning ? "border-signal-cyan bg-signal-cyan/40 animate-ping" : "border-app-border bg-app-inset"}`} />
+          <div className={`w-0.5 h-4 transition-colors duration-500 ${isConnected ? "bg-signal-green" : isTransitioning ? "bg-signal-cyan" : "bg-app-border"}`} />
+        </div>
+
+        {/* Center: The Precision Routing Core Module */}
+        <div className="w-full max-w-md my-1">
+          <div className={`w-full rounded-md border p-3.5 transition-all duration-300 ${
+            isConnected
+              ? "bg-app-surface border-signal-green/40 shadow-[0_0_20px_rgba(16,185,129,0.06)]"
               : isTransitioning
-                ? "Connecting..."
-                : isError
-                  ? "Connection Error"
-                  : "Disconnected"}
-          </span>
-        </div>
+              ? "bg-app-surface border-signal-cyan/50 shadow-[0_0_20px_rgba(0,210,255,0.06)]"
+              : isError
+              ? "bg-app-surface border-signal-red/50 shadow-[0_0_20px_rgba(239,68,68,0.08)]"
+              : "bg-app-surface border-app-border hover:border-ink-500"
+          }`}>
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <div className={`p-1.5 rounded-sm border ${
+                  isConnected
+                    ? "bg-signal-green-dim border-signal-green/30 text-signal-green"
+                    : isTransitioning
+                    ? "bg-signal-cyan-dim border-signal-cyan/30 text-signal-cyan animate-pulse"
+                    : isError
+                    ? "bg-signal-red-dim border-signal-red/30 text-signal-red"
+                    : "bg-app-inset border-app-border text-ink-400"
+                }`}>
+                  <Cpu className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="text-xs font-semibold tracking-wide text-ink-100 flex items-center gap-2">
+                    <span>ROUTING CORE</span>
+                    <span className="text-[10px] font-mono font-normal px-1.5 py-0.2 rounded-xs bg-app-inset border border-app-border text-ink-300">
+                      singbox-tun
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-ink-400 font-mono">
+                    {isConnected
+                      ? "172.19.0.1/30 · Strict Mode"
+                      : isTransitioning
+                      ? "Configuring adapter stack..."
+                      : "Ready to route system egress"}
+                  </div>
+                </div>
+              </div>
 
-        <p className="text-xs text-zinc-400 font-normal">
-          {getSubStatusText()}
-        </p>
+              {/* State Chip */}
+              <div className={`px-2 py-0.5 rounded-sm text-[10px] font-mono uppercase tracking-wider font-semibold border ${
+                isConnected
+                  ? "bg-signal-green-dim text-signal-green border-signal-green/30"
+                  : isTransitioning
+                  ? "bg-signal-cyan-dim text-signal-cyan border-signal-cyan/30 animate-pulse"
+                  : isError
+                  ? "bg-signal-red-dim text-signal-red border-signal-red/30"
+                  : "bg-app-inset text-ink-400 border-app-border"
+              }`}>
+                {connectionState}
+              </div>
+            </div>
 
-        {isConnected && health?.cloudflareTrace && (
-          <div className="flex items-center justify-center gap-3 pt-1 text-[11px] text-zinc-400">
-            <span className="flex items-center gap-1 text-zinc-300">
-              <Globe className="w-3 h-3 text-brand-400" />
-              <span>IP: {health.cloudflareTrace.ip}</span>
-            </span>
-            <span className="text-zinc-600">•</span>
-            <span className="flex items-center gap-1 text-emerald-400 font-mono">
-              <CheckCircle2 className="w-3 h-3" />
-              <span>POP: {health.cloudflareTrace.colo}</span>
-            </span>
-          </div>
-        )}
+            {/* Transition Progress Stage Indicators */}
+            {isTransitioning && (
+              <div className="mb-3 p-2 bg-app-inset rounded-sm border border-app-border-subtle">
+                <div className="flex items-center justify-between text-[10px] font-mono text-ink-400 mb-1.5">
+                  <span className="text-signal-cyan font-semibold">STAGE {activeStep} OF 5</span>
+                  <span>{Math.round((activeStep / 5) * 100)}%</span>
+                </div>
+                <div className="w-full bg-app-panel h-1.5 rounded-xs overflow-hidden">
+                  <div
+                    className="bg-signal-cyan h-full transition-all duration-300"
+                    style={{ width: `${Math.min(100, Math.max(15, (activeStep / 5) * 100))}%` }}
+                  />
+                </div>
+              </div>
+            )}
 
-        {isError && (
-          <div className="pt-2 flex items-center justify-center gap-2">
-            <button
-              onClick={onConnect}
-              className="px-3 py-1 rounded bg-rose-600/20 text-rose-300 hover:bg-rose-600/30 text-xs font-medium border border-rose-500/30 transition-colors cursor-pointer"
-            >
-              Retry
-            </button>
-            {onViewDiagnostics && (
+            {/* Primary Operation Button */}
+            {isConnected ? (
+              <div className="flex items-center gap-2">
+                <div className="flex-1 px-3 py-2 rounded-sm bg-signal-green-dim border border-signal-green/30 flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-xs font-semibold text-signal-green">
+                    <ShieldCheck className="w-4 h-4" />
+                    <span>TUNNEL ROUTING ACTIVE</span>
+                  </div>
+                  <span className="text-[10px] font-mono text-signal-green/80">SOCKS 1819</span>
+                </div>
+                <button
+                  onClick={onDisconnect}
+                  className="px-4 py-2 rounded-sm bg-app-elevated hover:bg-zinc-800 text-ink-200 hover:text-white text-xs font-semibold border border-app-border hover:border-ink-400 transition-all cursor-pointer flex items-center gap-1.5"
+                >
+                  <Power className="w-3.5 h-3.5 text-signal-red" />
+                  <span>Disconnect</span>
+                </button>
+              </div>
+            ) : isError ? (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={onConnect}
+                  className="flex-1 py-2 rounded-sm bg-signal-red hover:bg-signal-red-muted text-white text-xs font-bold transition-all shadow-sm cursor-pointer flex items-center justify-center gap-1.5"
+                >
+                  <AlertTriangle className="w-3.5 h-3.5" />
+                  <span>RETRY CONNECTION</span>
+                </button>
+                {onViewDiagnostics && (
+                  <button
+                    onClick={onViewDiagnostics}
+                    className="px-3 py-2 rounded-sm bg-app-elevated hover:bg-zinc-800 text-ink-300 text-xs font-medium border border-app-border transition-colors cursor-pointer flex items-center gap-1"
+                  >
+                    <Terminal className="w-3.5 h-3.5" />
+                    <span>Logs</span>
+                  </button>
+                )}
+              </div>
+            ) : isTransitioning ? (
               <button
-                onClick={onViewDiagnostics}
-                className="px-3 py-1 rounded bg-zinc-800 text-zinc-300 hover:bg-zinc-700 text-xs font-medium transition-colors cursor-pointer"
+                disabled
+                className="w-full py-2.5 rounded-sm bg-app-inset text-signal-cyan border border-signal-cyan/40 text-xs font-mono font-semibold flex items-center justify-center gap-2 cursor-wait"
               >
-                View Diagnostics
+                <div className="w-3.5 h-3.5 border-2 border-signal-cyan border-t-transparent rounded-full animate-spin" />
+                <span>ESTABLISHING ROUTING STACK...</span>
+              </button>
+            ) : (
+              <button
+                onClick={onConnect}
+                className="w-full py-2.5 rounded-sm bg-signal-cyan hover:bg-signal-cyan-muted text-black font-bold text-xs tracking-wide transition-all shadow-sm hover:shadow-[0_0_15px_rgba(0,210,255,0.25)] cursor-pointer flex items-center justify-center gap-2"
+              >
+                <Power className="w-4 h-4 stroke-[2.5]" />
+                <span>INITIALIZE TUNNEL ROUTING</span>
               </button>
             )}
           </div>
-        )}
+        </div>
+
+        {/* Substatus Telemetry Line */}
+        <p className="text-[11px] text-ink-400 text-center font-normal mt-2 max-w-lg">
+          {getSubStatusText()}
+        </p>
+
+        {/* Bottom: Split Routing Destination Highways */}
+        <div className="w-full mt-3 pt-3 border-t border-app-border-subtle grid grid-cols-3 gap-2 text-center text-xs font-mono">
+          <div className="p-2 rounded-sm bg-app-inset border border-app-border-subtle flex flex-col items-center">
+            <div className="flex items-center gap-1 text-[10px] text-ink-400 uppercase">
+              <Radio className={`w-3 h-3 ${isConnected ? "text-signal-green" : "text-ink-500"}`} />
+              <span>Aether TUN</span>
+            </div>
+            <div className={`text-xs font-semibold mt-0.5 ${isConnected ? "text-signal-green" : "text-ink-400"}`}>
+              {isConnected ? "Port 1819" : "Standby"}
+            </div>
+          </div>
+
+          <div className="p-2 rounded-sm bg-app-inset border border-app-border-subtle flex flex-col items-center">
+            <div className="flex items-center gap-1 text-[10px] text-ink-400 uppercase">
+              <Network className="w-3 h-3 text-signal-amber" />
+              <span>Secondary</span>
+            </div>
+            <div className="text-xs font-semibold text-ink-300 mt-0.5">
+              Port 10808
+            </div>
+          </div>
+
+          <div className="p-2 rounded-sm bg-app-inset border border-app-border-subtle flex flex-col items-center">
+            <div className="flex items-center gap-1 text-[10px] text-ink-400 uppercase">
+              <Globe className="w-3 h-3 text-signal-cyan" />
+              <span>Direct LAN</span>
+            </div>
+            <div className="text-xs font-semibold text-ink-300 mt-0.5">
+              Bypass Rules
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -267,3 +322,4 @@ function getCityFromColo(colo: string): string {
   };
   return map[colo.toUpperCase()] || colo;
 }
+
