@@ -84,7 +84,7 @@ fn main() {
     println!("✓ TEST K [UNIT / MOCKED INTEGRATION]: Aether non-interactive CLI arguments build correctly (--config, --bind, --wg, -4, --thorough, --quick-reconnect) (PASSED)");
 
     test_l_aether_scan_mode_startup_deadlines();
-    println!("✓ TEST L [UNIT / MOCKED INTEGRATION]: Aether startup budgets match official strategy deadlines (Turbo: 45s, Balanced: 100s, Thorough: 285s, Stealth: 180s, Ironclad: 210s) (PASSED)");
+    println!("✓ TEST L [UNIT / MOCKED INTEGRATION]: Aether startup budgets match current strategy deadlines (Turbo: 60s, Balanced: 150s, Thorough: 340s, Stealth: 210s, Ironclad: 210s) (PASSED)");
 
     test_m_native_windows_tun_detection_by_ip_and_name();
     println!("✓ TEST M [UNIT / MOCKED INTEGRATION]: Native Windows IP Helper adapter discovery by FriendlyName and configured TUN IP (PASSED)");
@@ -106,8 +106,23 @@ fn main() {
     test_r_op_lock_held_preserves_disconnected_state();
     println!("✓ TEST R [UNIT / MOCKED INTEGRATION]: Operation lock acquisition failure cleanly rejects connect and preserves Disconnected state without fake transitions (PASSED)");
 
+    test_s_deadline_mapping_strictly_exceeds_upstream_budgets();
+    println!("✓ TEST S [UNIT / MOCKED INTEGRATION]: Desktop scan deadlines strictly exceed upstream scan budgets with safety margin (PASSED)");
+
+    test_t_snapshot_rollback_preserves_lastconn_on_failure();
+    println!("✓ TEST T [UNIT / MOCKED INTEGRATION]: Transactional rollback restores pre-optimization lastconn byte-for-byte on failure (PASSED)");
+
+    test_u_snapshot_commit_retains_new_lastconn();
+    println!("✓ TEST U [UNIT / MOCKED INTEGRATION]: Optimization success commits newly selected candidate and discards backup snapshot (PASSED)");
+
+    test_v_tun_teardown_wait_polling();
+    println!("✓ TEST V [UNIT / MOCKED INTEGRATION]: TUN teardown wait polling confirms adapter release and handles timeouts safely (PASSED)");
+
+    test_w_restore_deadline_bounded_to_25s();
+    println!("✓ TEST W [UNIT / MOCKED INTEGRATION]: Rollback restoration deadline is bounded to Quick Reconnect window (25s) (PASSED)");
+
     println!("\n==================================================================");
-    println!("ALL 28 VERIFICATION & RELIABILITY TESTS PASSED!");
+    println!("ALL 33 VERIFICATION & RELIABILITY TESTS PASSED!");
     println!("==================================================================");
 }
 
@@ -615,19 +630,19 @@ fn test_l_aether_scan_mode_startup_deadlines() {
 
     assert_eq!(
         aether_startup_timeout(&AetherScanMode::Turbo),
-        Duration::from_secs(45)
+        Duration::from_secs(60)
     );
     assert_eq!(
         aether_startup_timeout(&AetherScanMode::Balanced),
-        Duration::from_secs(100)
+        Duration::from_secs(150)
     );
     assert_eq!(
         aether_startup_timeout(&AetherScanMode::Thorough),
-        Duration::from_secs(285)
+        Duration::from_secs(340)
     );
     assert_eq!(
         aether_startup_timeout(&AetherScanMode::Stealth),
-        Duration::from_secs(180)
+        Duration::from_secs(210)
     );
     assert_eq!(
         aether_startup_timeout(&AetherScanMode::Ironclad),
@@ -886,4 +901,153 @@ fn test_r_op_lock_held_preserves_disconnected_state() {
         ConnectionState::Disconnected,
         "Connection state must remain Disconnected when op_lock acquisition fails"
     );
+}
+
+fn test_s_deadline_mapping_strictly_exceeds_upstream_budgets() {
+    use aether_desktop_lib::models::settings::{
+        aether_startup_timeout, AetherScanMode, AETHER_RESTORE_TIMEOUT,
+    };
+
+    // Upstream observed budgets: Turbo: 45s, Balanced: 120s, Thorough: 300s, Stealth: 180s, Ironclad: 180s
+    assert!(aether_startup_timeout(&AetherScanMode::Turbo) > Duration::from_secs(45));
+    assert_eq!(
+        aether_startup_timeout(&AetherScanMode::Turbo),
+        Duration::from_secs(60)
+    );
+
+    assert!(aether_startup_timeout(&AetherScanMode::Balanced) > Duration::from_secs(120));
+    assert_eq!(
+        aether_startup_timeout(&AetherScanMode::Balanced),
+        Duration::from_secs(150)
+    );
+
+    assert!(aether_startup_timeout(&AetherScanMode::Thorough) > Duration::from_secs(300));
+    assert_eq!(
+        aether_startup_timeout(&AetherScanMode::Thorough),
+        Duration::from_secs(340)
+    );
+
+    assert!(aether_startup_timeout(&AetherScanMode::Stealth) > Duration::from_secs(180));
+    assert_eq!(
+        aether_startup_timeout(&AetherScanMode::Stealth),
+        Duration::from_secs(210)
+    );
+
+    assert!(aether_startup_timeout(&AetherScanMode::Ironclad) > Duration::from_secs(180));
+    assert_eq!(
+        aether_startup_timeout(&AetherScanMode::Ironclad),
+        Duration::from_secs(210)
+    );
+
+    // Restore timeout is bounded to quick reconnect (25s)
+    assert_eq!(AETHER_RESTORE_TIMEOUT, Duration::from_secs(25));
+}
+
+fn test_t_snapshot_rollback_preserves_lastconn_on_failure() {
+    use aether_desktop_lib::settings::storage::AetherPersistenceSnapshot;
+
+    let temp_dir = std::env::temp_dir().join(format!("aether_test_gen_t_{}", Uuid::new_v4()));
+    let _ = std::fs::create_dir_all(&temp_dir);
+
+    let lastconn_file = temp_dir.join("lastconn.json");
+    let original_bytes = b"{\"endpoint\":\"162.159.192.1:2408\",\"rtt\":45}";
+    std::fs::write(&lastconn_file, original_bytes).unwrap();
+
+    // 1. Snapshot native lastconn state
+    let snapshot = AetherPersistenceSnapshot::create(&temp_dir).unwrap();
+    assert_eq!(snapshot.snapshotted_files.len(), 1);
+
+    // 2. Simulate fresh scan modifying or writing new failed/intermediate lastconn
+    let modified_bytes = b"{\"endpoint\":\"162.159.193.99:500\",\"rtt\":999}";
+    std::fs::write(&lastconn_file, modified_bytes).unwrap();
+    assert_eq!(std::fs::read(&lastconn_file).unwrap(), modified_bytes);
+
+    // 3. Rollback: restore snapshot
+    snapshot.restore().unwrap();
+    assert_eq!(std::fs::read(&lastconn_file).unwrap(), original_bytes);
+
+    // 4. Cleanup
+    snapshot.cleanup();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+fn test_u_snapshot_commit_retains_new_lastconn() {
+    use aether_desktop_lib::settings::storage::AetherPersistenceSnapshot;
+
+    let temp_dir = std::env::temp_dir().join(format!("aether_test_gen_u_{}", Uuid::new_v4()));
+    let _ = std::fs::create_dir_all(&temp_dir);
+
+    let lastconn_file = temp_dir.join("lastconn.json");
+    let initial_bytes = b"{\"endpoint\":\"162.159.192.1:2408\",\"rtt\":95}";
+    std::fs::write(&lastconn_file, initial_bytes).unwrap();
+
+    // 1. Snapshot initial state
+    let snapshot = AetherPersistenceSnapshot::create(&temp_dir).unwrap();
+    let snapshot_dir = snapshot.snapshot_dir.clone();
+    assert!(snapshot_dir.exists());
+
+    // 2. Optimization succeeds and writes faster working candidate
+    let optimized_bytes = b"{\"endpoint\":\"162.159.192.5:2408\",\"rtt\":38}";
+    std::fs::write(&lastconn_file, optimized_bytes).unwrap();
+
+    // 3. Commit: cleanup snapshot
+    snapshot.cleanup();
+    assert!(!snapshot_dir.exists());
+
+    // 4. Optimized bytes remain intact
+    assert_eq!(std::fs::read(&lastconn_file).unwrap(), optimized_bytes);
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+fn test_v_tun_teardown_wait_polling() {
+    use aether_desktop_lib::health::HealthProber;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Arc;
+
+    let tokio_rt = tokio::runtime::Runtime::new().unwrap();
+
+    // 1. Success case: adapter disappears after 2 polls
+    let attempts = Arc::new(AtomicU32::new(0));
+    let attempts_clone = attempts.clone();
+    let check_fn = move || {
+        let current = attempts_clone.fetch_add(1, Ordering::SeqCst);
+        current < 2
+    };
+
+    let res = tokio_rt.block_on(HealthProber::wait_for_tun_teardown_with_check(
+        check_fn,
+        Duration::from_millis(500),
+        Duration::from_millis(20),
+    ));
+    assert!(res.is_ok(), "TUN teardown wait should succeed when adapter is released");
+    assert!(attempts.load(Ordering::SeqCst) >= 2);
+
+    // 2. Timeout case: adapter never disappears
+    let check_fn_timeout = || true;
+    let res_timeout = tokio_rt.block_on(HealthProber::wait_for_tun_teardown_with_check(
+        check_fn_timeout,
+        Duration::from_millis(60),
+        Duration::from_millis(15),
+    ));
+    assert!(res_timeout.is_err(), "TUN teardown wait must time out if adapter remains present");
+}
+
+fn test_w_restore_deadline_bounded_to_25s() {
+    use aether_desktop_lib::models::settings::{
+        aether_startup_timeout, AetherLaunchOptions, AetherScanMode, AETHER_RESTORE_TIMEOUT,
+    };
+
+    let restore_options = AetherLaunchOptions {
+        quick_reconnect_override: Some(true),
+        scan_mode_override: None,
+    };
+    let effective_scan_mode = AetherScanMode::Thorough;
+    let startup_deadline = if restore_options.quick_reconnect_override == Some(true) {
+        AETHER_RESTORE_TIMEOUT
+    } else {
+        aether_startup_timeout(&effective_scan_mode)
+    };
+
+    assert_eq!(startup_deadline, Duration::from_secs(25), "Rollback restoration deadline must be bounded to 25s");
+    assert!(startup_deadline < Duration::from_secs(60));
 }

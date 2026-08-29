@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Power,
   Globe,
@@ -14,6 +14,7 @@ import {
   X,
 } from "lucide-react";
 import { ConnectionState, HealthStatus, RouteOptimizationResult } from "../../types";
+import { api } from "../../services/api";
 
 interface ConnectionHeroProps {
   connectionState: ConnectionState;
@@ -38,6 +39,8 @@ export const ConnectionHero: React.FC<ConnectionHeroProps> = ({
   const [isOptimizing, setIsOptimizing] = useState<boolean>(false);
   const [optimizationResult, setOptimizationResult] = useState<RouteOptimizationResult | null>(null);
   const [optimizationError, setOptimizationError] = useState<string | null>(null);
+  const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
+  const [bestCandidateRtt, setBestCandidateRtt] = useState<number | null>(null);
 
   const isConnected = connectionState === "CONNECTED";
   const isDisconnected = connectionState === "DISCONNECTED";
@@ -68,6 +71,47 @@ export const ConnectionHero: React.FC<ConnectionHeroProps> = ({
     } finally {
       setIsOptimizing(false);
     }
+  };
+
+  useEffect(() => {
+    let timer: any = null;
+    let pollTimer: any = null;
+
+    if (isTransitioning) {
+      setElapsedSeconds(0);
+      setBestCandidateRtt(null);
+
+      timer = setInterval(() => {
+        setElapsedSeconds((prev) => prev + 1);
+      }, 1000);
+
+      const pollCandidate = async () => {
+        try {
+          const rtt = await api.getBestCandidateRtt();
+          if (rtt) {
+            setBestCandidateRtt(rtt);
+          }
+        } catch (_) {}
+      };
+      pollCandidate();
+      pollTimer = setInterval(pollCandidate, 1500);
+    } else {
+      setElapsedSeconds(0);
+      setBestCandidateRtt(null);
+    }
+
+    return () => {
+      if (timer) clearInterval(timer);
+      if (pollTimer) clearInterval(pollTimer);
+    };
+  }, [isTransitioning]);
+
+  const formatElapsed = (seconds: number) => {
+    const m = Math.floor(seconds / 60)
+      .toString()
+      .padStart(2, "0");
+    const s = (seconds % 60).toString().padStart(2, "0");
+    return `${m}:${s}`;
   };
 
   const getSubStatusText = () => {
@@ -101,28 +145,6 @@ export const ConnectionHero: React.FC<ConnectionHeroProps> = ({
     }
     return "Routing engine standby · Ready to establish isolated TUN tunnel";
   };
-
-  const getStageStep = () => {
-    switch (connectionState) {
-      case "STARTING_AETHER":
-      case "WAITING_FOR_AETHER":
-        return 1;
-      case "SCANNING_AETHER":
-        return 2;
-      case "TESTING_AETHER":
-        return 3;
-      case "STARTING_ROUTER":
-        return 4;
-      case "TESTING_ROUTING":
-        return 5;
-      case "CONNECTED":
-        return 6;
-      default:
-        return 0;
-    }
-  };
-
-  const activeStep = getStageStep();
 
   return (
     <div className="flex flex-col items-center px-4 pt-2 pb-1 select-none">
@@ -318,18 +340,48 @@ export const ConnectionHero: React.FC<ConnectionHeroProps> = ({
               </div>
             </div>
 
-            {/* Transition Progress Stage Indicators */}
+            {/* Real Transition Progress & Telemetry */}
             {isTransitioning && (
-              <div className="mb-3 p-2 bg-app-inset rounded-sm border border-app-border-subtle">
-                <div className="flex items-center justify-between text-[10px] font-mono text-ink-400 mb-1.5">
-                  <span className="text-signal-cyan font-semibold">STAGE {activeStep} OF 5</span>
-                  <span>{Math.round((activeStep / 5) * 100)}%</span>
+              <div className="mb-3 p-2.5 bg-app-inset rounded-sm border border-signal-cyan/30 shadow-inner">
+                <div className="flex items-center justify-between text-[10px] font-mono text-ink-300 mb-1">
+                  <span className="text-signal-cyan font-bold tracking-wider flex items-center gap-1.5">
+                    <Activity className="w-3 h-3 animate-pulse text-signal-cyan" />
+                    {connectionState === "SCANNING_AETHER" || isOptimizing
+                      ? "GATEWAY SCAN"
+                      : connectionState === "STARTING_AETHER" || connectionState === "WAITING_FOR_AETHER"
+                      ? "GATEWAY INITIALIZATION"
+                      : connectionState === "STARTING_ROUTER"
+                      ? "ROUTER SETUP"
+                      : connectionState === "TESTING_ROUTING"
+                      ? "VERIFICATION"
+                      : "NETWORK TRANSITION"}
+                  </span>
+                  <span className="text-ink-400 font-mono">
+                    Elapsed: <strong className="text-ink-200 font-semibold">{formatElapsed(elapsedSeconds)}</strong>
+                  </span>
                 </div>
-                <div className="w-full bg-app-panel h-1.5 rounded-xs overflow-hidden">
-                  <div
-                    className="bg-signal-cyan h-full transition-all duration-300"
-                    style={{ width: `${Math.min(100, Math.max(15, (activeStep / 5) * 100))}%` }}
-                  />
+
+                <div className="flex items-center justify-between text-[11px] font-mono text-ink-400 mt-1">
+                  <span className="truncate pr-2">
+                    {connectionState === "SCANNING_AETHER" || isOptimizing
+                      ? "Searching for a faster gateway..."
+                      : connectionState === "STARTING_ROUTER"
+                      ? "Configuring Wintun adapter..."
+                      : connectionState === "TESTING_ROUTING"
+                      ? "Validating 3-stage routing..."
+                      : "Starting managed Aether daemon..."}
+                  </span>
+                  <span className="shrink-0 text-ink-300 text-[10px]">
+                    Best candidate:{" "}
+                    <strong className={bestCandidateRtt ? "text-signal-green font-bold" : "text-ink-500"}>
+                      {bestCandidateRtt ? `${bestCandidateRtt} ms` : "—"}
+                    </strong>
+                  </span>
+                </div>
+
+                {/* Subtle pulsing activity rail */}
+                <div className="w-full bg-app-panel h-1 rounded-xs overflow-hidden mt-2 relative">
+                  <div className="absolute inset-0 bg-gradient-to-r from-signal-cyan/10 via-signal-cyan to-signal-cyan/10 animate-[pulse_1.5s_ease-in-out_infinite]" />
                 </div>
               </div>
             )}

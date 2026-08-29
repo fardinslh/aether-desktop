@@ -252,3 +252,8 @@ pub async fn install_aether_dependency(app: AppHandle) -> Result<String, String>
 pub async fn install_singbox_dependency(app: AppHandle) -> Result<String, String> {
     DependencyManager::install_singbox(Some(&app)).await
 }
+
+#[tauri::command]
+pub async fn get_best_candidate_rtt(state: State<'_, AppState>) -> Result<Option<u32>, String> {
+    Ok(state.orchestrator.get_best_candidate_rtt().await)
+}

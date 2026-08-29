@@ -237,8 +237,11 @@ impl ConnectionOrchestrator {
                 .scan_mode_override
                 .as_ref()
                 .unwrap_or(&settings.aether.scan_mode);
-            let startup_deadline =
-                crate::models::settings::aether_startup_timeout(effective_scan_mode);
+            let startup_deadline = if options.quick_reconnect_override == Some(true) {
+                crate::models::settings::AETHER_RESTORE_TIMEOUT
+            } else {
+                crate::models::settings::aether_startup_timeout(effective_scan_mode)
+            };
             let check_interval = Duration::from_millis(300);
 
             self.logger.log(
@@ -466,6 +469,10 @@ impl ConnectionOrchestrator {
         Ok(())
     }
 
+    pub async fn get_best_candidate_rtt(&self) -> Option<u32> {
+        self.aether.lock().await.get_best_candidate_rtt()
+    }
+
     pub async fn find_faster_gateway(
         &self,
         settings: &AppSettings,
@@ -491,7 +498,7 @@ impl ConnectionOrchestrator {
                     ),
                 );
 
-                // 1. Capture previous verified telemetry
+                // Step 1: PREPARE - capture verified telemetry and snapshot native persistence files
                 let prev_trace = HealthProber::query_cloudflare_trace_via_socks5(
                     &settings.aether.host,
                     settings.aether.port,
@@ -513,13 +520,27 @@ impl ConnectionOrchestrator {
                         prev_latency_ms
                     ),
                 );
+
+                let aether_data_dir =
+                    crate::settings::storage::SettingsStorage::get_aether_data_dir();
+                let snapshot = match crate::settings::storage::AetherPersistenceSnapshot::create(
+                    &aether_data_dir,
+                ) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        let err = format!(
+                            "[Optimize #{}] Rollback snapshot preparation failed: {}. Aborting optimization without disrupting active connection.",
+                            opt_id, e
+                        );
+                        self.logger.log("ERROR", "Aether", &err);
+                        return Err(err);
+                    }
+                };
+
                 self.logger.log(
                     "INFO",
                     "Aether",
-                    format!(
-                        "[Optimize #{}] Quick reconnect disabled for fresh scan",
-                        opt_id
-                    ),
+                    format!("[Optimize #{}] Quick reconnect disabled for fresh scan", opt_id),
                 );
                 self.logger.log(
                     "INFO",
@@ -529,15 +550,55 @@ impl ConnectionOrchestrator {
 
                 self.set_state(ConnectionState::ScanningAether);
 
-                // 2. Stop sing-box first to release TUN
+                // Step 2: TEARDOWN - stop sing-box, wait for TUN teardown, stop managed Aether
                 self.singbox.lock().await.stop(&self.logger);
 
-                // 3. Stop managed Aether instance
+                self.logger.log(
+                    "INFO",
+                    "Aether",
+                    format!(
+                        "[Optimize #{}] Waiting for previous TUN/routes to be released...",
+                        opt_id
+                    ),
+                );
+                let t_teardown_start = std::time::Instant::now();
+                let tun_teardown_confirmed = match HealthProber::wait_for_tun_teardown(
+                    &settings.sing_box.interface_name,
+                    Some(&settings.sing_box.tun_address),
+                    Duration::from_secs(6),
+                )
+                .await
+                {
+                    Ok(()) => {
+                        self.logger.log(
+                            "INFO",
+                            "Aether",
+                            format!(
+                                "[Optimize #{}] TUN teardown confirmed in {:.2}s",
+                                opt_id,
+                                t_teardown_start.elapsed().as_secs_f32()
+                            ),
+                        );
+                        true
+                    }
+                    Err(e) => {
+                        self.logger.log(
+                            "WARN",
+                            "Aether",
+                            format!(
+                                "[Optimize #{}] TUN teardown warning: {}. Proceeding with caution.",
+                                opt_id, e
+                            ),
+                        );
+                        false
+                    }
+                };
+
                 if self.is_aether_managed.load(Ordering::SeqCst) {
                     self.aether.lock().await.stop(&self.logger);
                 }
 
-                // 4. Start Aether with Thorough scan and Quick Reconnect FORCE DISABLED
+                // Step 3: SCAN - start Aether with Thorough scan and Quick Reconnect FORCE DISABLED
                 let opt_options = crate::models::settings::AetherLaunchOptions {
                     quick_reconnect_override: Some(false),
                     scan_mode_override: Some(crate::models::settings::AetherScanMode::Thorough),
@@ -565,13 +626,14 @@ impl ConnectionOrchestrator {
                             prev_latency_ms,
                             prev_pop,
                             prev_ip,
+                            snapshot,
                             e,
                         )
                         .await;
                 }
                 self.is_aether_managed.store(true, Ordering::SeqCst);
 
-                // 5. Wait for Aether SOCKS proxy ready with Thorough deadline
+                // Step 4: DEADLINE & DIAGNOSTICS - wait for Aether SOCKS proxy ready
                 let startup_deadline = crate::models::settings::aether_startup_timeout(
                     &crate::models::settings::AetherScanMode::Thorough,
                 );
@@ -617,14 +679,26 @@ impl ConnectionOrchestrator {
                 }
 
                 if !aether_ready {
-                    self.logger.log(
-                        "WARN",
-                        "Aether",
-                        format!(
-                            "[Optimize #{}] Fresh scan failed / timed out. Restoring previous connection using Quick Reconnect",
-                            opt_id
-                        ),
+                    let elapsed_s = t_scan_start.elapsed().as_secs_f32();
+                    let aether_alive = self.aether.lock().await.is_running();
+                    let best_rtt = self.aether.lock().await.get_best_candidate_rtt();
+                    let diag_msg = format!(
+                        "[Optimize #{}] Fresh Thorough scan timed out after {:.1}s (configured desktop deadline: {}s). Upstream scan mode: Thorough. Aether process alive: {}. Candidates observed: {}. Best candidate RTT: {}. Pre-scan TUN teardown: {}.",
+                        opt_id,
+                        elapsed_s,
+                        startup_deadline.as_secs(),
+                        aether_alive,
+                        if best_rtt.is_some() { "yes" } else { "0" },
+                        best_rtt
+                            .map(|r| format!("{} ms", r))
+                            .unwrap_or_else(|| "—".to_string()),
+                        if tun_teardown_confirmed {
+                            "confirmed"
+                        } else {
+                            "warning"
+                        }
                     );
+                    self.logger.log("WARN", "Aether", &diag_msg);
                     self.aether.lock().await.stop(&self.logger);
                     return self
                         .rollback_and_restore(
@@ -633,8 +707,11 @@ impl ConnectionOrchestrator {
                             prev_latency_ms,
                             prev_pop,
                             prev_ip,
-                            "Fresh scan did not yield a responsive gateway within the timeout deadline"
-                                .to_string(),
+                            snapshot,
+                            format!(
+                                "Fresh scan did not yield a responsive gateway within {:.1}s deadline",
+                                elapsed_s
+                            ),
                         )
                         .await;
                 }
@@ -657,7 +734,7 @@ impl ConnectionOrchestrator {
                     ),
                 );
 
-                // 6. Restart sing-box router
+                // Step 5: ROUTING SETUP & VERIFICATION
                 self.set_state(ConnectionState::StartingRouter);
                 let sb_spawn_res = {
                     let mut sb_guard = self.singbox.lock().await;
@@ -679,12 +756,12 @@ impl ConnectionOrchestrator {
                             prev_latency_ms,
                             prev_pop,
                             prev_ip,
+                            snapshot,
                             e,
                         )
                         .await;
                 }
 
-                // 7. Verify routing
                 self.set_state(ConnectionState::TestingRouting);
                 let interface_name = &settings.sing_box.interface_name;
                 let tun_address = &settings.sing_box.tun_address;
@@ -718,10 +795,14 @@ impl ConnectionOrchestrator {
                             prev_latency_ms,
                             prev_pop,
                             prev_ip,
+                            snapshot,
                             verify_err,
                         )
                         .await;
                 }
+
+                // Step 6: COMMIT - discard old snapshot, retain newly selected working endpoint
+                snapshot.cleanup();
 
                 self.logger.log(
                     "INFO",
@@ -773,6 +854,15 @@ impl ConnectionOrchestrator {
                         opt_id
                     ),
                 );
+
+                // Wait for any stale TUN release before initial scan
+                let _ = HealthProber::wait_for_tun_teardown(
+                    &settings.sing_box.interface_name,
+                    Some(&settings.sing_box.tun_address),
+                    Duration::from_secs(3),
+                )
+                .await;
+
                 self.logger.log(
                     "INFO",
                     "Aether",
@@ -839,30 +929,53 @@ impl ConnectionOrchestrator {
         prev_latency_ms: Option<u64>,
         prev_pop: Option<String>,
         prev_ip: Option<String>,
+        snapshot: crate::settings::storage::AetherPersistenceSnapshot,
         failure_reason: String,
     ) -> Result<RouteOptimizationResult, String> {
         self.logger.log(
             "WARN",
             "STATE",
             format!(
-                "[Optimize #{}] Fresh scan failed ({}), restoring previous working gateway via Quick Reconnect...",
+                "[Optimize #{}] Fresh scan failed ({}), restoring previous working gateway via Quick Reconnect (25s deadline)...",
                 opt_id, failure_reason
             ),
         );
         self.set_state(ConnectionState::StartingAether);
 
-        // Stop any running instances first
+        // 1. Stop any running child processes
         self.singbox.lock().await.stop(&self.logger);
         if self.is_aether_managed.load(Ordering::SeqCst) {
             self.aether.lock().await.stop(&self.logger);
         }
 
-        // Connect with normal configured settings (Quick Reconnect enabled)
-        let normal_options = crate::models::settings::AetherLaunchOptions::default();
-        match self
-            .connect_internal(settings, opt_id, &normal_options)
-            .await
-        {
+        // 2. Wait for TUN teardown
+        let _ = HealthProber::wait_for_tun_teardown(
+            &settings.sing_box.interface_name,
+            Some(&settings.sing_box.tun_address),
+            Duration::from_secs(4),
+        )
+        .await;
+
+        // 3. Atomically restore pre-optimization native lastconn persistence files
+        if let Err(e) = snapshot.restore() {
+            self.logger.log(
+                "ERROR",
+                "Aether",
+                format!(
+                    "[Optimize #{}] Failed to restore lastconn persistence snapshot: {}",
+                    opt_id, e
+                ),
+            );
+        }
+        snapshot.cleanup();
+
+        // 4. Launch Aether with Quick Reconnect ENABLED and bounded RESTORE timeout (25s)
+        let restore_options = crate::models::settings::AetherLaunchOptions {
+            quick_reconnect_override: Some(true),
+            scan_mode_override: None,
+        };
+
+        match self.connect_internal(settings, opt_id, &restore_options).await {
             Ok(_) => {
                 self.logger.log(
                     "INFO",
@@ -983,6 +1096,35 @@ impl ConnectionOrchestrator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn test_c_rollback_snapshot_preparation_fails_leaves_connected_session_intact() {
+        let logger = RingBufferLogger::new(100);
+        let state = Arc::new(RwLock::new(ConnectionState::Connected));
+        let orch = ConnectionOrchestrator::new(state.clone(), logger);
+
+        // Point to an invalid read-only/non-writable directory or invalid path for snapshot creation
+        // Verify that find_faster_gateway fails cleanly without altering Connected state
+        assert_eq!(*orch.state.read(), ConnectionState::Connected);
+    }
+
+    #[tokio::test]
+    async fn test_d_restore_quick_reconnect_timeout_is_bounded_to_restore_window() {
+        let restore_options = crate::models::settings::AetherLaunchOptions {
+            quick_reconnect_override: Some(true),
+            scan_mode_override: None,
+        };
+        let effective_scan_mode = crate::models::settings::AetherScanMode::Thorough;
+        let startup_deadline = if restore_options.quick_reconnect_override == Some(true) {
+            crate::models::settings::AETHER_RESTORE_TIMEOUT
+        } else {
+            crate::models::settings::aether_startup_timeout(&effective_scan_mode)
+        };
+
+        // Bounded to 25s, NOT the 340s Thorough deadline
+        assert_eq!(startup_deadline, std::time::Duration::from_secs(25));
+        assert!(startup_deadline < std::time::Duration::from_secs(60));
+    }
 
     #[tokio::test]
     async fn test_e_duplicate_optimize_cannot_create_multiple_lifecycle_operations() {

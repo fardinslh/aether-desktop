@@ -686,6 +686,54 @@ impl HealthProber {
         (false, None, all_adapters)
     }
 
+    /// Polls until the configured TUN interface is no longer present in the Windows network stack.
+    /// Used before starting a fresh scan or rollback to avoid adapter/route collisions.
+    pub async fn wait_for_tun_teardown(
+        interface_name: &str,
+        configured_tun_address: Option<&str>,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        let start = Instant::now();
+        let poll_interval = Duration::from_millis(200);
+
+        while start.elapsed() < timeout {
+            let (exists, _, _) =
+                Self::check_tun_interface_exists(interface_name, configured_tun_address);
+            if !exists {
+                return Ok(());
+            }
+            tokio::time::sleep(poll_interval).await;
+        }
+
+        Err(format!(
+            "TUN interface '{}' was not released by Windows within {:.1}s",
+            interface_name,
+            timeout.as_secs_f32()
+        ))
+    }
+
+    /// Parameterized helper for deterministic unit testing of TUN teardown polling
+    pub async fn wait_for_tun_teardown_with_check<F>(
+        mut check_fn: F,
+        timeout: Duration,
+        poll_interval: Duration,
+    ) -> Result<(), String>
+    where
+        F: FnMut() -> bool + Send,
+    {
+        let start = Instant::now();
+        while start.elapsed() < timeout {
+            if !check_fn() {
+                return Ok(());
+            }
+            tokio::time::sleep(poll_interval).await;
+        }
+        Err(format!(
+            "TUN teardown timed out after {:.1}s",
+            timeout.as_secs_f32()
+        ))
+    }
+
     /// Checks if current process token has elevated administrator privileges
     #[cfg(windows)]
     pub fn is_process_elevated() -> bool {
@@ -857,5 +905,50 @@ impl HealthProber {
             cloudflare_trace: trace_opt,
             last_checked_epoch_ms: now_ms,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn test_e_tun_teardown_wait_succeeds_when_adapter_is_released() {
+        let attempts = Arc::new(AtomicU32::new(0));
+        let attempts_clone = attempts.clone();
+
+        // Simulate adapter present for first 2 polls then disappearing
+        let check_fn = move || {
+            let current = attempts_clone.fetch_add(1, Ordering::SeqCst);
+            current < 2
+        };
+
+        let res = HealthProber::wait_for_tun_teardown_with_check(
+            check_fn,
+            Duration::from_millis(500),
+            Duration::from_millis(20),
+        )
+        .await;
+
+        assert!(res.is_ok());
+        assert!(attempts.load(Ordering::SeqCst) >= 2);
+    }
+
+    #[tokio::test]
+    async fn test_f_tun_teardown_wait_times_out_when_adapter_remains() {
+        // Simulate adapter never disappearing
+        let check_fn = || true;
+
+        let res = HealthProber::wait_for_tun_teardown_with_check(
+            check_fn,
+            Duration::from_millis(60),
+            Duration::from_millis(15),
+        )
+        .await;
+
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("TUN teardown timed out"));
     }
 }

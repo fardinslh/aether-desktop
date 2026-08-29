@@ -41,6 +41,10 @@ export const api = {
     return invoke<RouteOptimizationResult>("find_faster_gateway");
   },
 
+  async getBestCandidateRtt(): Promise<number | null> {
+    return invoke<number | null>("get_best_candidate_rtt");
+  },
+
   async disconnect(): Promise<void> {
     return invoke<void>("disconnect_tunnel");
   },

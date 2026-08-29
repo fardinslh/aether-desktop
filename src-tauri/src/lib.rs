@@ -63,7 +63,8 @@ pub fn run() {
             commands::validate_binaries,
             commands::check_dependencies,
             commands::install_aether_dependency,
-            commands::install_singbox_dependency
+            commands::install_singbox_dependency,
+            commands::get_best_candidate_rtt
         ])
         .build(tauri::generate_context!())
         .expect("error while building aether desktop application")

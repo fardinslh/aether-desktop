@@ -150,21 +150,27 @@ impl AetherSettings {
     }
 }
 
-/// Returns the Aether startup and scan deadline budget based on official upstream Aether strategy budgets + margin:
-/// - Turbo: official scan budget = 30s -> desktop deadline = 45s
-/// - Balanced: official scan budget = 80s -> desktop deadline = 100s
-/// - Thorough: official scan budget = 250s -> desktop deadline = 285s
-/// - Stealth: official scan budget = 150s -> desktop deadline = 180s
-/// - Ironclad: official scan budget = 180s -> desktop deadline = 210s
+/// Returns the Aether startup and scan deadline budget based on official upstream Aether strategy budgets + safety margin.
+/// Current upstream Aether source defines approximately:
+/// - Turbo: upstream overall_deadline = 45s  -> desktop deadline = 60s
+/// - Balanced: upstream overall_deadline = 120s -> desktop deadline = 150s
+/// - Thorough: upstream overall_deadline = 300s -> desktop deadline = 340s
+/// - Stealth: upstream overall_deadline = 180s  -> desktop deadline = 210s
+/// - Ironclad: upstream overall_deadline = 180s -> desktop deadline = 210s
 pub fn aether_startup_timeout(scan_mode: &AetherScanMode) -> std::time::Duration {
     match scan_mode {
-        AetherScanMode::Turbo => std::time::Duration::from_secs(45),
-        AetherScanMode::Balanced => std::time::Duration::from_secs(100),
-        AetherScanMode::Thorough => std::time::Duration::from_secs(285),
-        AetherScanMode::Stealth => std::time::Duration::from_secs(180),
+        AetherScanMode::Turbo => std::time::Duration::from_secs(60),
+        AetherScanMode::Balanced => std::time::Duration::from_secs(150),
+        AetherScanMode::Thorough => std::time::Duration::from_secs(340),
+        AetherScanMode::Stealth => std::time::Duration::from_secs(210),
         AetherScanMode::Ironclad => std::time::Duration::from_secs(210),
     }
 }
+
+/// Dedicated bounded restore deadline for Quick Reconnect during optimization rollback.
+/// When restoring the pre-optimization working endpoint, Aether should connect in under 20-30s.
+/// Rollback must NEVER enter another 300-second Thorough scan.
+pub const AETHER_RESTORE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -379,5 +385,42 @@ mod tests {
         assert!(normal_args.contains(&"--quick-reconnect".to_string()));
         assert!(normal_args.contains(&"--balanced".to_string()));
         assert!(!normal_args.contains(&"--thorough".to_string()));
+    }
+
+    #[test]
+    fn test_deadline_mapping_strictly_exceeds_upstream_budgets() {
+        // Upstream observed budgets: Turbo: 45s, Balanced: 120s, Thorough: 300s, Stealth: 180s, Ironclad: 180s
+        assert!(aether_startup_timeout(&AetherScanMode::Turbo) > std::time::Duration::from_secs(45));
+        assert_eq!(
+            aether_startup_timeout(&AetherScanMode::Turbo),
+            std::time::Duration::from_secs(60)
+        );
+
+        assert!(aether_startup_timeout(&AetherScanMode::Balanced) > std::time::Duration::from_secs(120));
+        assert_eq!(
+            aether_startup_timeout(&AetherScanMode::Balanced),
+            std::time::Duration::from_secs(150)
+        );
+
+        assert!(aether_startup_timeout(&AetherScanMode::Thorough) > std::time::Duration::from_secs(300));
+        assert_eq!(
+            aether_startup_timeout(&AetherScanMode::Thorough),
+            std::time::Duration::from_secs(340)
+        );
+
+        assert!(aether_startup_timeout(&AetherScanMode::Stealth) > std::time::Duration::from_secs(180));
+        assert_eq!(
+            aether_startup_timeout(&AetherScanMode::Stealth),
+            std::time::Duration::from_secs(210)
+        );
+
+        assert!(aether_startup_timeout(&AetherScanMode::Ironclad) > std::time::Duration::from_secs(180));
+        assert_eq!(
+            aether_startup_timeout(&AetherScanMode::Ironclad),
+            std::time::Duration::from_secs(210)
+        );
+
+        // Restore timeout is bounded to quick reconnect
+        assert_eq!(AETHER_RESTORE_TIMEOUT, std::time::Duration::from_secs(25));
     }
 }
