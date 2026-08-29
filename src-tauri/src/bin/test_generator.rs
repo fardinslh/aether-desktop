@@ -103,8 +103,8 @@ fn main() {
     test_q_concurrent_connect_atomic_single_attempt();
     println!("✓ TEST Q [UNIT / MOCKED INTEGRATION]: Two simultaneous Connect requests result in only ONE backend connection attempt (PASSED)");
 
-    test_r_single_launch_per_component_on_connection();
-    println!("✓ TEST R [UNIT / MOCKED INTEGRATION]: Successful connection attempt launches each managed component at most once (PASSED)");
+    test_r_op_lock_held_preserves_disconnected_state();
+    println!("✓ TEST R [UNIT / MOCKED INTEGRATION]: Operation lock acquisition failure cleanly rejects connect and preserves Disconnected state without fake transitions (PASSED)");
 
     println!("\n==================================================================");
     println!("ALL 28 VERIFICATION & RELIABILITY TESTS PASSED!");
@@ -836,11 +836,14 @@ fn test_q_concurrent_connect_atomic_single_attempt() {
     let (res1, res2) =
         tokio_rt.block_on(async move { tokio::join!(orch1.connect(&set1), orch2.connect(&set2)) });
 
-    // Exactly one must be rejected immediately with "Connection already in progress"
+    // Exactly one must be rejected immediately with operation or connection in progress
     let rejected_count = [res1, res2]
         .iter()
         .filter(|r| match r {
-            Err(e) => e.contains("Connection already in progress"),
+            Err(e) => {
+                e.contains("Connection operation already in progress")
+                    || e.contains("Connection already in progress")
+            }
             _ => false,
         })
         .count();
@@ -851,7 +854,7 @@ fn test_q_concurrent_connect_atomic_single_attempt() {
     );
 }
 
-fn test_r_single_launch_per_component_on_connection() {
+fn test_r_op_lock_held_preserves_disconnected_state() {
     use aether_desktop_lib::logging::RingBufferLogger;
     use aether_desktop_lib::models::ConnectionState;
     use aether_desktop_lib::process::orchestrator::ConnectionOrchestrator;
@@ -862,14 +865,25 @@ fn test_r_single_launch_per_component_on_connection() {
     let logger = RingBufferLogger::new(100);
     let orchestrator = ConnectionOrchestrator::new(state.clone(), logger);
 
-    // Initial attempt ID must start at 1
-    assert_eq!(
-        orchestrator
-            .next_attempt_id
-            .load(std::sync::atomic::Ordering::SeqCst),
-        1
+    let tokio_rt = tokio::runtime::Runtime::new().unwrap();
+
+    // Lock op_lock manually to simulate concurrent operation in progress
+    let _held_guard = orchestrator.op_lock.try_lock().unwrap();
+
+    let settings = AppSettings::default();
+    let res = tokio_rt.block_on(orchestrator.connect(&settings));
+
+    assert!(res.is_err(), "Connect must fail when op_lock is held");
+    assert!(
+        res.unwrap_err()
+            .contains("Connection operation already in progress"),
+        "Error message must specify operation in progress"
     );
 
-    // When Disconnected, state is idle
-    assert_eq!(*orchestrator.state.read(), ConnectionState::Disconnected);
+    // CRITICAL REGRESSION ASSERTION: State must remain Disconnected and NOT mutate to StartingAether
+    assert_eq!(
+        *orchestrator.state.read(),
+        ConnectionState::Disconnected,
+        "Connection state must remain Disconnected when op_lock acquisition fails"
+    );
 }

@@ -68,7 +68,13 @@ impl ConnectionOrchestrator {
     }
 
     pub async fn connect(&self, settings: &AppSettings) -> Result<(), String> {
-        // Synchronous atomic entry check and state transition BEFORE any await
+        // 1. Acquire operation lock FIRST to guard against concurrent lifecycle operations
+        let _op_guard = match self.op_lock.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => return Err("Connection operation already in progress".to_string()),
+        };
+
+        // 2. Synchronous atomic entry check and state transition under write lock
         let attempt_id = self.next_attempt_id.fetch_add(1, Ordering::SeqCst);
         {
             let mut state = self.state.write();
@@ -80,7 +86,7 @@ impl ConnectionOrchestrator {
             }
         }
 
-        // Emit StartingAether event & log attempt start immediately
+        // 3. Emit StartingAether event & log attempt start immediately
         self.logger.log(
             "INFO",
             "STATE",
@@ -92,11 +98,6 @@ impl ConnectionOrchestrator {
         if let Some(ref handle) = *self.app_handle.read() {
             let _ = handle.emit("connection-state-changed", ConnectionState::StartingAether);
         }
-
-        let _op_guard = match self.op_lock.try_lock() {
-            Ok(guard) => guard,
-            Err(_) => return Err("Connection operation already in progress".to_string()),
-        };
 
         let t_connect_start = std::time::Instant::now();
         *self.last_error.write() = None;
