@@ -122,6 +122,8 @@ impl ProcessHandle {
 pub struct AetherRunner {
     handle: Option<ProcessHandle>,
     best_candidate_rtt: Arc<AtomicU32>,
+    cached_endpoint_reused: Arc<AtomicBool>,
+    fresh_scan_observed: Arc<AtomicBool>,
 }
 
 impl AetherRunner {
@@ -129,6 +131,8 @@ impl AetherRunner {
         Self {
             handle: None,
             best_candidate_rtt: Arc::new(AtomicU32::new(0)),
+            cached_endpoint_reused: Arc::new(AtomicBool::new(false)),
+            fresh_scan_observed: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -161,6 +165,14 @@ impl AetherRunner {
         }
     }
 
+    pub fn was_cached_endpoint_reused(&self) -> bool {
+        self.cached_endpoint_reused.load(Ordering::SeqCst)
+    }
+
+    pub fn was_fresh_scan_observed(&self) -> bool {
+        self.fresh_scan_observed.load(Ordering::SeqCst)
+    }
+
     pub fn start(
         &mut self,
         settings: &AppSettings,
@@ -187,6 +199,8 @@ impl AetherRunner {
         }
 
         self.best_candidate_rtt.store(0, Ordering::SeqCst);
+        self.cached_endpoint_reused.store(false, Ordering::SeqCst);
+        self.fresh_scan_observed.store(false, Ordering::SeqCst);
 
         let aether_config_path = SettingsStorage::get_aether_config_path();
         let cli_args = settings
@@ -225,12 +239,16 @@ impl AetherRunner {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let interactive_prompt_detected = Arc::new(AtomicBool::new(false));
         let best_rtt_clone = self.best_candidate_rtt.clone();
+        let cached_reused_clone = self.cached_endpoint_reused.clone();
+        let fresh_scan_clone = self.fresh_scan_observed.clone();
 
         if let Some(stdout) = child.stdout.take() {
             let log_clone = logger.clone();
             let stop_clone = stop_flag.clone();
             let interactive_clone = interactive_prompt_detected.clone();
             let best_rtt_loop = best_rtt_clone.clone();
+            let cached_reused_loop = cached_reused_clone.clone();
+            let fresh_scan_loop = fresh_scan_clone.clone();
             thread::spawn(move || {
                 let reader = BufReader::new(stdout);
                 for line in reader.lines() {
@@ -243,6 +261,8 @@ impl AetherRunner {
                             false,
                             &interactive_clone,
                             &best_rtt_loop,
+                            &cached_reused_loop,
+                            &fresh_scan_loop,
                             &log_clone,
                         );
                     }
@@ -255,6 +275,8 @@ impl AetherRunner {
             let stop_clone = stop_flag.clone();
             let interactive_clone = interactive_prompt_detected.clone();
             let best_rtt_loop = best_rtt_clone.clone();
+            let cached_reused_loop = cached_reused_clone.clone();
+            let fresh_scan_loop = fresh_scan_clone.clone();
             thread::spawn(move || {
                 let reader = BufReader::new(stderr);
                 for line in reader.lines() {
@@ -267,6 +289,8 @@ impl AetherRunner {
                             true,
                             &interactive_clone,
                             &best_rtt_loop,
+                            &cached_reused_loop,
+                            &fresh_scan_loop,
                             &log_clone,
                         );
                     }
@@ -957,16 +981,51 @@ impl SingBoxRunner {
     }
 }
 
+pub fn is_cached_endpoint_reuse_line(line: &str) -> bool {
+    let lower = line.to_lowercase();
+    (lower.contains("cached endpoint")
+        || lower.contains("cached wireguard endpoint")
+        || lower.contains("cached masque endpoint")
+        || lower.contains("reusing cached")
+        || lower.contains("verifying cached"))
+        && (lower.contains("skipping scan")
+            || lower.contains("still works")
+            || lower.contains("before reuse")
+            || lower.contains("reused"))
+}
+
+pub fn is_fresh_scan_progress_line(line: &str) -> bool {
+    let lower = line.to_lowercase();
+    lower.contains("scanning")
+        || lower.contains("hunting")
+        || lower.contains("testing endpoint")
+        || lower.contains("probing")
+        || lower.contains("benchmarking")
+        || lower.contains("candidate ok")
+        || lower.contains("[+] candidate")
+        || (lower.contains("candidate") && (lower.contains("rtt") || lower.contains("latency") || lower.contains("ping")))
+}
+
 pub fn process_aether_line(
     line: &str,
     is_stderr: bool,
     interactive_flag: &AtomicBool,
     best_rtt: &AtomicU32,
+    cached_reused: &AtomicBool,
+    fresh_scan: &AtomicBool,
     logger: &RingBufferLogger,
 ) {
     if line.trim().is_empty() {
         return;
     }
+
+    if is_cached_endpoint_reuse_line(line) {
+        cached_reused.store(true, Ordering::SeqCst);
+    }
+    if is_fresh_scan_progress_line(line) {
+        fresh_scan.store(true, Ordering::SeqCst);
+    }
+
     let lower = line.to_lowercase();
     if lower.contains("protocol:")
         || lower.contains("[1] masque")
@@ -1029,40 +1088,50 @@ mod tests {
     }
 
     #[test]
-    fn test_process_aether_line_updates_best_candidate_from_both_stdout_and_stderr() {
+    fn test_process_aether_line_detects_cached_reuse_and_fresh_scan() {
         let logger = RingBufferLogger::new(50);
         let interactive = AtomicBool::new(false);
         let best_rtt = AtomicU32::new(0);
+        let cached_reused = AtomicBool::new(false);
+        let fresh_scan = AtomicBool::new(false);
 
-        // 1. Candidate line on stdout (is_stderr = false)
+        // 1. Cached endpoint reuse line
         process_aether_line(
-            "candidate ok 162.159.192.1:2408 rtt=85ms",
+            "verifying cached WireGuard endpoint 188.114.96.226:1701 before reuse",
             false,
             &interactive,
             &best_rtt,
+            &cached_reused,
+            &fresh_scan,
             &logger,
         );
-        assert_eq!(best_rtt.load(Ordering::SeqCst), 85);
-        assert!(!interactive.load(Ordering::SeqCst));
+        assert!(cached_reused.load(Ordering::SeqCst));
 
-        // 2. Faster candidate line on stderr (is_stderr = true)
+        // 2. Skipping scan line
+        let cached_reused_2 = AtomicBool::new(false);
+        process_aether_line(
+            "cached endpoint 188.114.96.226:1701 still works ... skipping scan",
+            true,
+            &interactive,
+            &best_rtt,
+            &cached_reused_2,
+            &fresh_scan,
+            &logger,
+        );
+        assert!(cached_reused_2.load(Ordering::SeqCst));
+
+        // 3. Fresh scanning progress line
+        assert!(!fresh_scan.load(Ordering::SeqCst));
         process_aether_line(
             "[+] candidate 162.159.192.5:2408 OK (rtt: 42ms)",
             true,
             &interactive,
             &best_rtt,
+            &cached_reused,
+            &fresh_scan,
             &logger,
         );
-        assert_eq!(best_rtt.load(Ordering::SeqCst), 42);
-
-        // 3. Slower candidate on stderr does not overwrite faster
-        process_aether_line(
-            "Endpoint 162.159.193.10:500 ok (rtt: 65ms)",
-            true,
-            &interactive,
-            &best_rtt,
-            &logger,
-        );
+        assert!(fresh_scan.load(Ordering::SeqCst));
         assert_eq!(best_rtt.load(Ordering::SeqCst), 42);
     }
 }

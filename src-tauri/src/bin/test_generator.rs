@@ -188,8 +188,14 @@ fn main() {
     test_as_tun_stabilization_window_guarantees_adapter_persistence();
     println!("✓ TEST AS [UNIT / STABILIZATION]: TUN stabilization window enforces continuous adapter and child liveness (PASSED)");
 
+    test_at_quick_reconnect_cli_tri_state_and_forced_fresh_scan();
+    println!("✓ TEST AT [UNIT / CLI]: Tri-state Quick Reconnect CLI generation (--quick-reconnect vs --no-quick-reconnect) (PASSED)");
+
+    test_au_cached_endpoint_reuse_rejected_during_forced_fresh_scan();
+    println!("✓ TEST AU [UNIT / SCAN]: Output stream parser detects and rejects cached endpoint reuse during forced fresh scan (PASSED)");
+
     println!("\n==================================================================");
-    println!("ALL 54 VERIFICATION & RELIABILITY TESTS PASSED!");
+    println!("ALL 56 VERIFICATION & RELIABILITY TESTS PASSED!");
     println!("==================================================================");
 }
 
@@ -1257,6 +1263,8 @@ fn test_z_candidate_rtt_processing_works_for_both_stdout_and_stderr() {
     let logger = RingBufferLogger::new(50);
     let interactive = AtomicBool::new(false);
     let best_rtt = AtomicU32::new(0);
+    let cached_reused = AtomicBool::new(false);
+    let fresh_scan = AtomicBool::new(false);
 
     // 1. Candidate line on stdout (is_stderr = false)
     process_aether_line(
@@ -1264,6 +1272,8 @@ fn test_z_candidate_rtt_processing_works_for_both_stdout_and_stderr() {
         false,
         &interactive,
         &best_rtt,
+        &cached_reused,
+        &fresh_scan,
         &logger,
     );
     assert_eq!(best_rtt.load(Ordering::SeqCst), 85);
@@ -1275,6 +1285,8 @@ fn test_z_candidate_rtt_processing_works_for_both_stdout_and_stderr() {
         true,
         &interactive,
         &best_rtt,
+        &cached_reused,
+        &fresh_scan,
         &logger,
     );
     assert_eq!(best_rtt.load(Ordering::SeqCst), 42);
@@ -1285,6 +1297,8 @@ fn test_z_candidate_rtt_processing_works_for_both_stdout_and_stderr() {
         true,
         &interactive,
         &best_rtt,
+        &cached_reused,
+        &fresh_scan,
         &logger,
     );
     assert_eq!(best_rtt.load(Ordering::SeqCst), 42);
@@ -1292,15 +1306,13 @@ fn test_z_candidate_rtt_processing_works_for_both_stdout_and_stderr() {
 
 fn test_aa_restore_deadline_bounded_to_25s() {
     use aether_desktop_lib::models::settings::{
-        aether_startup_timeout, AetherLaunchOptions, AetherScanMode, AETHER_RESTORE_TIMEOUT,
+        aether_startup_timeout, AetherLaunchOptions, AetherScanMode, QuickReconnectOption,
+        AETHER_RESTORE_TIMEOUT,
     };
 
-    let restore_options = AetherLaunchOptions {
-        quick_reconnect_override: Some(true),
-        scan_mode_override: None,
-    };
+    let restore_options = AetherLaunchOptions::force_quick_reconnect();
     let effective_scan_mode = AetherScanMode::Thorough;
-    let startup_deadline = if restore_options.quick_reconnect_override == Some(true) {
+    let startup_deadline = if restore_options.quick_reconnect == QuickReconnectOption::ForceEnabled {
         AETHER_RESTORE_TIMEOUT
     } else {
         aether_startup_timeout(&effective_scan_mode)
@@ -2127,4 +2139,71 @@ fn test_as_tun_stabilization_window_guarantees_adapter_persistence() {
         "Error must identify adapter drop: {}",
         err_tun
     );
+}
+
+fn test_at_quick_reconnect_cli_tri_state_and_forced_fresh_scan() {
+    use aether_desktop_lib::models::settings::{
+        AetherLaunchOptions, AetherScanMode, AppSettings,
+    };
+    use std::path::PathBuf;
+
+    let config_path = PathBuf::from("C:\\Users\\User\\AppData\\Local\\AetherDesktop\\aether\\aether.toml");
+
+    // 1. Normal Connect + Quick Reconnect ON:
+    let mut settings_qr_on = AppSettings::default();
+    settings_qr_on.aether.quick_reconnect = true;
+    let args_qr_on = settings_qr_on.aether.build_cli_arguments(Some(&config_path));
+    assert!(args_qr_on.contains(&"--quick-reconnect".to_string()), "Quick Reconnect ON must emit --quick-reconnect");
+    assert!(!args_qr_on.contains(&"--no-quick-reconnect".to_string()), "Quick Reconnect ON must NOT emit --no-quick-reconnect");
+
+    // 2. Normal Connect + Quick Reconnect OFF:
+    let mut settings_qr_off = AppSettings::default();
+    settings_qr_off.aether.quick_reconnect = false;
+    let args_qr_off = settings_qr_off.aether.build_cli_arguments(Some(&config_path));
+    assert!(args_qr_off.contains(&"--no-quick-reconnect".to_string()), "Quick Reconnect OFF must emit --no-quick-reconnect");
+    assert!(!args_qr_off.contains(&"--quick-reconnect".to_string()), "Quick Reconnect OFF must NOT emit --quick-reconnect");
+
+    // 3. Find Faster / Force Fresh Scan:
+    let opt_fresh = AetherLaunchOptions::force_fresh(Some(AetherScanMode::Thorough));
+    let args_find_faster = settings_qr_on.aether.build_cli_arguments_with_options(Some(&config_path), &opt_fresh);
+    assert!(args_find_faster.contains(&"--thorough".to_string()), "Find Faster must emit --thorough");
+    assert!(args_find_faster.contains(&"--no-quick-reconnect".to_string()), "Find Faster must emit --no-quick-reconnect");
+    assert!(!args_find_faster.contains(&"--quick-reconnect".to_string()), "Find Faster must NOT emit --quick-reconnect");
+
+    // 4. Rollback / Force Quick Reconnect:
+    let opt_rollback = AetherLaunchOptions::force_quick_reconnect();
+    let args_rollback = settings_qr_off.aether.build_cli_arguments_with_options(Some(&config_path), &opt_rollback);
+    assert!(args_rollback.contains(&"--quick-reconnect".to_string()), "Rollback must emit --quick-reconnect");
+    assert!(!args_rollback.contains(&"--no-quick-reconnect".to_string()), "Rollback must NOT emit --no-quick-reconnect");
+
+    // 5. Neither mode ever emits both flags:
+    for args in &[&args_qr_on, &args_qr_off, &args_find_faster, &args_rollback] {
+        let has_qr = args.contains(&"--quick-reconnect".to_string());
+        let has_no_qr = args.contains(&"--no-quick-reconnect".to_string());
+        assert!(!(has_qr && has_no_qr), "Launch arguments must NEVER contain both --quick-reconnect and --no-quick-reconnect simultaneously");
+    }
+}
+
+fn test_au_cached_endpoint_reuse_rejected_during_forced_fresh_scan() {
+    use aether_desktop_lib::process::runner::{is_cached_endpoint_reuse_line, is_fresh_scan_progress_line};
+
+    // 1. Real-Windows observed cached endpoint reuse lines:
+    let line1 = "verifying cached WireGuard endpoint 188.114.96.226:1701 before reuse";
+    let line2 = "cached endpoint 188.114.96.226:1701 still works ... skipping scan";
+    let line3 = "[INF] reusing cached masque endpoint 162.159.192.1:443 (reused)";
+
+    assert!(is_cached_endpoint_reuse_line(line1), "Line 1 must be recognized as cached endpoint reuse");
+    assert!(is_cached_endpoint_reuse_line(line2), "Line 2 must be recognized as cached endpoint reuse");
+    assert!(is_cached_endpoint_reuse_line(line3), "Line 3 must be recognized as cached endpoint reuse");
+
+    // 2. Fresh scan progress lines:
+    let fresh1 = "Scanning 256 endpoints across 4 regions...";
+    let fresh2 = "[+] candidate 162.159.192.5:2408 OK (rtt: 42ms)";
+    let fresh3 = "hunting lowest latency WireGuard peer...";
+
+    assert!(is_fresh_scan_progress_line(fresh1));
+    assert!(is_fresh_scan_progress_line(fresh2));
+    assert!(is_fresh_scan_progress_line(fresh3));
+    assert!(!is_cached_endpoint_reuse_line(fresh1));
+    assert!(!is_cached_endpoint_reuse_line(fresh2));
 }

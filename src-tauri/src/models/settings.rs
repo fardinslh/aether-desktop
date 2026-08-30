@@ -76,10 +76,42 @@ pub struct AetherSettings {
     pub launch_arguments: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuickReconnectOption {
+    /// Inherit persistent user settings: Quick Reconnect ON -> `--quick-reconnect`, Quick Reconnect OFF -> `--no-quick-reconnect`
+    InheritSettings,
+    /// Force Quick Reconnect enabled -> `--quick-reconnect` (and never `--no-quick-reconnect`)
+    ForceEnabled,
+    /// Force Quick Reconnect disabled / Fresh scan -> `--no-quick-reconnect` (and never `--quick-reconnect`)
+    ForceFreshScan,
+}
+
+impl Default for QuickReconnectOption {
+    fn default() -> Self {
+        QuickReconnectOption::InheritSettings
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AetherLaunchOptions {
-    pub quick_reconnect_override: Option<bool>,
+    pub quick_reconnect: QuickReconnectOption,
     pub scan_mode_override: Option<AetherScanMode>,
+}
+
+impl AetherLaunchOptions {
+    pub fn force_fresh(scan_mode: Option<AetherScanMode>) -> Self {
+        Self {
+            quick_reconnect: QuickReconnectOption::ForceFreshScan,
+            scan_mode_override: scan_mode,
+        }
+    }
+
+    pub fn force_quick_reconnect() -> Self {
+        Self {
+            quick_reconnect: QuickReconnectOption::ForceEnabled,
+            scan_mode_override: None,
+        }
+    }
 }
 
 impl AetherSettings {
@@ -131,12 +163,21 @@ impl AetherSettings {
             AetherScanMode::Ironclad => args.push("--ironclad".to_string()),
         }
 
-        // 6. Quick Reconnect (override if specified for optimization, without changing persistent settings)
-        let effective_quick_reconnect = options
-            .quick_reconnect_override
-            .unwrap_or(self.quick_reconnect);
-        if effective_quick_reconnect {
-            args.push("--quick-reconnect".to_string());
+        // 6. Quick Reconnect launch argument handling
+        match options.quick_reconnect {
+            QuickReconnectOption::ForceEnabled => {
+                args.push("--quick-reconnect".to_string());
+            }
+            QuickReconnectOption::ForceFreshScan => {
+                args.push("--no-quick-reconnect".to_string());
+            }
+            QuickReconnectOption::InheritSettings => {
+                if self.quick_reconnect {
+                    args.push("--quick-reconnect".to_string());
+                } else {
+                    args.push("--no-quick-reconnect".to_string());
+                }
+            }
         }
 
         // 7. Additional developer arguments

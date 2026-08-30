@@ -330,7 +330,7 @@ impl ConnectionOrchestrator {
                 .scan_mode_override
                 .as_ref()
                 .unwrap_or(&settings.aether.scan_mode);
-            let startup_deadline = if options.quick_reconnect_override == Some(true) {
+            let startup_deadline = if options.quick_reconnect == crate::models::settings::QuickReconnectOption::ForceEnabled {
                 crate::models::settings::AETHER_RESTORE_TIMEOUT
             } else {
                 crate::models::settings::aether_startup_timeout(effective_scan_mode)
@@ -701,7 +701,7 @@ impl ConnectionOrchestrator {
                 self.logger.log(
                     "INFO",
                     "Aether",
-                    format!("[Optimize #{}] Thorough scan started", opt_id),
+                    format!("[Optimize #{}] Fresh Thorough scan requested", opt_id),
                 );
 
                 self.set_state(ConnectionState::ScanningAether);
@@ -769,11 +769,10 @@ impl ConnectionOrchestrator {
                     self.aether.lock().await.stop(&self.logger);
                 }
 
-                // Step 3: SCAN - start Aether with Thorough scan and Quick Reconnect FORCE DISABLED
-                let opt_options = crate::models::settings::AetherLaunchOptions {
-                    quick_reconnect_override: Some(false),
-                    scan_mode_override: Some(crate::models::settings::AetherScanMode::Thorough),
-                };
+                // Step 3: SCAN - start Aether with Thorough scan and Quick Reconnect FORCE DISABLED (--no-quick-reconnect)
+                let opt_options = crate::models::settings::AetherLaunchOptions::force_fresh(
+                    Some(crate::models::settings::AetherScanMode::Thorough),
+                );
 
                 let t_scan_start = std::time::Instant::now();
                 let aether_spawn_res = {
@@ -894,6 +893,44 @@ impl ConnectionOrchestrator {
                 }
 
                 // Step 5: MEASURE CANDIDATE PATH (5 samples)
+                let (was_cached_reuse, was_fresh_scan) = {
+                    let aether_guard = self.aether.lock().await;
+                    (
+                        aether_guard.was_cached_endpoint_reused(),
+                        aether_guard.was_fresh_scan_observed(),
+                    )
+                };
+
+                if was_cached_reuse {
+                    let err_msg = "Fresh scan was bypassed by cached endpoint reuse; restoring previous path.".to_string();
+                    self.logger.log("ERROR", "Aether", format!("[Optimize #{}] {}", opt_id, err_msg));
+                    return self
+                        .rollback_and_restore(
+                            settings,
+                            opt_id,
+                            prev_latency_ms,
+                            prev_jitter_ms,
+                            prev_pop,
+                            prev_ip,
+                            None,
+                            None,
+                            None,
+                            None,
+                            snapshot,
+                            "FreshScanBypassed".to_string(),
+                            err_msg,
+                        )
+                        .await;
+                }
+
+                if was_fresh_scan {
+                    self.logger.log(
+                        "INFO",
+                        "Aether",
+                        format!("[Optimize #{}] Fresh Thorough scan active: endpoint discovery observed", opt_id),
+                    );
+                }
+
                 self.logger.log(
                     "INFO",
                     "Aether",
@@ -1206,15 +1243,14 @@ impl ConnectionOrchestrator {
                 self.logger.log(
                     "INFO",
                     "Aether",
-                    format!("[Optimize #{}] Thorough scan started", opt_id),
+                    format!("[Optimize #{}] Fresh Thorough scan requested", opt_id),
                 );
 
                 self.set_state(ConnectionState::StartingAether);
 
-                let opt_options = crate::models::settings::AetherLaunchOptions {
-                    quick_reconnect_override: Some(false),
-                    scan_mode_override: Some(crate::models::settings::AetherScanMode::Thorough),
-                };
+                let opt_options = crate::models::settings::AetherLaunchOptions::force_fresh(
+                    Some(crate::models::settings::AetherScanMode::Thorough),
+                );
 
                 // Run connection with opt_options
                 self.connect_internal(settings, opt_id, &opt_options).await?;
@@ -1326,10 +1362,7 @@ impl ConnectionOrchestrator {
         snapshot.cleanup();
 
         // 4. Launch Aether with Quick Reconnect ENABLED and bounded RESTORE timeout (25s)
-        let restore_options = crate::models::settings::AetherLaunchOptions {
-            quick_reconnect_override: Some(true),
-            scan_mode_override: None,
-        };
+        let restore_options = crate::models::settings::AetherLaunchOptions::force_quick_reconnect();
 
         match self.connect_internal(settings, opt_id, &restore_options).await {
             Ok(_) => {
