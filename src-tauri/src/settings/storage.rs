@@ -74,8 +74,22 @@ impl SettingsStorage {
             .unwrap_or_else(|| PathBuf::from("./aether_data"))
     }
 
+    pub fn get_aether_config_path_for_protocol(protocol: &crate::models::settings::AetherProtocol) -> PathBuf {
+        match protocol {
+            crate::models::settings::AetherProtocol::Masque => {
+                Self::get_aether_data_dir().join("aether-masque.toml")
+            }
+            _ => Self::get_aether_data_dir().join("aether.toml"),
+        }
+    }
+
     pub fn get_aether_config_path() -> PathBuf {
         Self::get_aether_data_dir().join("aether.toml")
+    }
+
+    pub fn get_active_aether_lastconn_paths(settings: &AppSettings) -> Vec<PathBuf> {
+        let config_path = Self::get_aether_config_path_for_protocol(&settings.aether.protocol);
+        vec![lastconn_path(&config_path)]
     }
 
     pub fn get_config_file_path() -> PathBuf {
@@ -173,36 +187,30 @@ impl SettingsStorage {
     }
 }
 
-const KNOWN_LASTCONN_FILENAMES: &[&str] = &[
-    "lastconn",
-    "lastconn.json",
-    "last_connection.json",
-    "last_connection",
-    "last_endpoint.json",
-    "last_endpoint",
-    "lastconn.bin",
-    "lastconn.dat",
-    "endpoints.json",
-];
+/// Derives a sibling path matching upstream Aether's `derive_sibling_path(config_path, suffix)`.
+/// E.g. `aether.toml` + `"lastconn"` -> `aether-lastconn.toml`
+/// E.g. `aether-masque.toml` + `"lastconn"` -> `aether-masque-lastconn.toml`
+pub fn derive_sibling_path(config_path: &Path, suffix: &str) -> PathBuf {
+    let parent = config_path.parent().unwrap_or_else(|| Path::new("."));
+    let file_stem = config_path
+        .file_stem()
+        .map(|s| s.to_string_lossy())
+        .unwrap_or_default();
+    let extension = config_path
+        .extension()
+        .map(|s| s.to_string_lossy());
 
-pub fn is_lastconn_persistence_file(name: &str) -> bool {
-    let lower = name.to_lowercase();
-    // Strictly exclude identity, private keys, certificates, and configuration files
-    if lower == "aether.toml"
-        || lower.ends_with(".toml")
-        || lower.contains("identity")
-        || lower.contains("key")
-        || lower.contains("cert")
-        || lower.contains("config")
-    {
-        return false;
-    }
+    let new_file_name = match extension {
+        Some(ext) if !ext.is_empty() => format!("{}-{}.{}", file_stem, suffix, ext),
+        _ => format!("{}-{}", file_stem, suffix),
+    };
 
-    if KNOWN_LASTCONN_FILENAMES.iter().any(|k| lower == *k) {
-        return true;
-    }
+    parent.join(new_file_name)
+}
 
-    lower.contains("lastconn") || lower.contains("last_conn") || lower.contains("last_endpoint")
+/// Derives the native lastconn persistence path for a given Aether configuration file.
+pub fn lastconn_path(config_path: &Path) -> PathBuf {
+    derive_sibling_path(config_path, "lastconn")
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -217,24 +225,32 @@ pub enum LastconnEntryState {
 }
 
 /// Transactional snapshot manager for native upstream Aether last-connection persistence state ONLY.
-/// Preserves native byte-for-byte endpoint state before optimization and restores it atomically upon failure.
+/// Targets exact native lastconn path(s) derived from active Aether configuration.
 /// Excludes all identity, private keys, and configuration files.
 #[derive(Debug)]
 pub struct AetherPersistenceSnapshot {
     pub snapshot_dir: PathBuf,
-    pub target_dir: PathBuf,
     pub entries: Vec<LastconnEntryState>,
 }
 
 impl AetherPersistenceSnapshot {
-    pub fn create(aether_data_dir: &Path) -> Result<Self, String> {
-        if !aether_data_dir.exists() {
-            std::fs::create_dir_all(aether_data_dir)
-                .map_err(|e| format!("Failed to create Aether data directory: {}", e))?;
+    /// Creates a transactional snapshot for explicit target lastconn paths.
+    /// Does NOT scan or enumerate arbitrary files from the directory.
+    pub fn create_for_targets(target_paths: &[PathBuf]) -> Result<Self, String> {
+        if target_paths.is_empty() {
+            return Err("Cannot create snapshot: no target lastconn paths provided".to_string());
         }
 
-        let snapshot_dir =
-            aether_data_dir.join(format!(".rollback_snapshot_{}", Uuid::new_v4()));
+        let parent_dir = target_paths[0]
+            .parent()
+            .unwrap_or_else(|| Path::new("."));
+
+        if !parent_dir.exists() {
+            std::fs::create_dir_all(parent_dir)
+                .map_err(|e| format!("Failed to create Aether data directory {:?}: {}", parent_dir, e))?;
+        }
+
+        let snapshot_dir = parent_dir.join(format!(".rollback_snapshot_{}", Uuid::new_v4()));
         std::fs::create_dir_all(&snapshot_dir).map_err(|e| {
             format!(
                 "Failed to create snapshot directory {:?}: {}",
@@ -243,49 +259,52 @@ impl AetherPersistenceSnapshot {
         })?;
 
         let mut entries = Vec::new();
-        let mut tracked_names = std::collections::HashSet::new();
 
-        // 1. Check existing files in aether_data_dir
-        if let Ok(dir_entries) = std::fs::read_dir(aether_data_dir) {
-            for entry in dir_entries.flatten() {
-                let path = entry.path();
-                if path.is_file() {
-                    let file_name = entry.file_name();
-                    let file_name_str = file_name.to_string_lossy();
-                    if is_lastconn_persistence_file(&file_name_str) {
-                        let backup_path = snapshot_dir.join(&file_name);
-                        std::fs::copy(&path, &backup_path).map_err(|e| {
-                            format!(
-                                "Failed to snapshot lastconn persistence file {:?} to {:?}: {}",
-                                path, backup_path, e
-                            )
-                        })?;
-                        entries.push(LastconnEntryState::Existed {
-                            target_path: path,
-                            backup_path,
-                        });
-                        tracked_names.insert(file_name_str.to_string());
-                    }
+        for target_path in target_paths {
+            let file_name = match target_path.file_name() {
+                Some(name) => name,
+                None => {
+                    let _ = std::fs::remove_dir_all(&snapshot_dir);
+                    return Err(format!("Invalid target path with no filename: {:?}", target_path));
                 }
-            }
-        }
+            };
 
-        // 2. Track known lastconn candidate names that were ABSENT before optimization
-        for &known_name in KNOWN_LASTCONN_FILENAMES {
-            if !tracked_names.contains(known_name) {
-                let target_path = aether_data_dir.join(known_name);
-                if !target_path.exists() {
-                    entries.push(LastconnEntryState::Absent { target_path });
-                    tracked_names.insert(known_name.to_string());
+            if target_path.exists() {
+                let backup_path = snapshot_dir.join(file_name);
+                if let Err(e) = std::fs::copy(target_path, &backup_path) {
+                    let _ = std::fs::remove_dir_all(&snapshot_dir);
+                    return Err(format!(
+                        "Failed to snapshot lastconn persistence file {:?} to {:?}: {}",
+                        target_path, backup_path, e
+                    ));
                 }
+                entries.push(LastconnEntryState::Existed {
+                    target_path: target_path.clone(),
+                    backup_path,
+                });
+            } else {
+                entries.push(LastconnEntryState::Absent {
+                    target_path: target_path.clone(),
+                });
             }
         }
 
         Ok(Self {
             snapshot_dir,
-            target_dir: aether_data_dir.to_path_buf(),
             entries,
         })
+    }
+
+    /// Convenience constructor using active settings
+    pub fn create_for_settings(settings: &AppSettings) -> Result<Self, String> {
+        let targets = SettingsStorage::get_active_aether_lastconn_paths(settings);
+        Self::create_for_targets(&targets)
+    }
+
+    /// Backwards-compatible helper for directory-based tests
+    pub fn create(aether_data_dir: &Path) -> Result<Self, String> {
+        let target = lastconn_path(&aether_data_dir.join("aether.toml"));
+        Self::create_for_targets(&[target])
     }
 
     pub fn restore(&self) -> Result<(), String> {
@@ -295,45 +314,43 @@ impl AetherPersistenceSnapshot {
                     target_path,
                     backup_path,
                 } => {
-                    if backup_path.exists() {
-                        let bytes = std::fs::read(backup_path).map_err(|e| {
-                            format!(
-                                "Failed to read backup persistence file {:?}: {}",
-                                backup_path, e
-                            )
-                        })?;
+                    let bytes = std::fs::read(backup_path).map_err(|e| {
+                        format!(
+                            "Failed to read backup persistence file {:?}: {}",
+                            backup_path, e
+                        )
+                    })?;
 
-                        let parent = target_path
-                            .parent()
-                            .unwrap_or_else(|| Path::new("."));
-                        let temp_path = parent.join(format!(
-                            "{}.tmp.{}",
-                            target_path
-                                .file_name()
-                                .unwrap_or_default()
-                                .to_string_lossy(),
-                            Uuid::new_v4()
-                        ));
+                    let parent = target_path
+                        .parent()
+                        .unwrap_or_else(|| Path::new("."));
+                    let temp_path = parent.join(format!(
+                        "{}.tmp.{}",
+                        target_path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy(),
+                        Uuid::new_v4()
+                    ));
 
-                        let mut file = File::create(&temp_path).map_err(|e| {
-                            format!("Failed to create temp file for atomic restore: {}", e)
-                        })?;
-                        file.write_all(&bytes).map_err(|e| {
-                            format!("Failed to write bytes to temp file: {}", e)
-                        })?;
-                        file.sync_all().map_err(|e| {
-                            format!("Failed to sync temp file: {}", e)
-                        })?;
-                        drop(file);
+                    let mut file = File::create(&temp_path).map_err(|e| {
+                        format!("Failed to create temp file for atomic restore: {}", e)
+                    })?;
+                    file.write_all(&bytes).map_err(|e| {
+                        format!("Failed to write bytes to temp file: {}", e)
+                    })?;
+                    file.sync_all().map_err(|e| {
+                        format!("Failed to sync temp file: {}", e)
+                    })?;
+                    drop(file);
 
-                        atomic_replace_file(&temp_path, target_path).map_err(|e| {
-                            let _ = std::fs::remove_file(&temp_path);
-                            format!(
-                                "Atomic replacement failed during lastconn restore: {}",
-                                e
-                            )
-                        })?;
-                    }
+                    atomic_replace_file(&temp_path, target_path).map_err(|e| {
+                        let _ = std::fs::remove_file(&temp_path);
+                        format!(
+                            "Atomic replacement failed during lastconn restore from {:?} to {:?}: {}",
+                            temp_path, target_path, e
+                        )
+                    })?;
                 }
                 LastconnEntryState::Absent { target_path } => {
                     // If a new lastconn file was created during failed scan, remove it on rollback
@@ -361,40 +378,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_a_identity_and_config_files_never_included_in_snapshot() {
+    fn test_a_aether_toml_is_not_included_in_snapshot() {
         let temp_dir =
-            std::env::temp_dir().join(format!("aether_test_snap_filter_{}", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("aether_test_snap_filter_a_{}", Uuid::new_v4()));
         let _ = std::fs::create_dir_all(&temp_dir);
 
-        // 1. Create identity, config, and lastconn files in data directory
         let toml_file = temp_dir.join("aether.toml");
-        let identity_file = temp_dir.join("identity.json");
-        let key_file = temp_dir.join("client.key");
-        let lastconn_file = temp_dir.join("lastconn.json");
+        let lastconn_file = temp_dir.join("aether-lastconn.toml");
 
-        std::fs::write(&toml_file, b"scan_mode = 'Thorough'").unwrap();
-        std::fs::write(&identity_file, b"{\"private_key\":\"SECRET\"}").unwrap();
-        std::fs::write(&key_file, b"PRIVATE_KEY_BYTES").unwrap();
-        std::fs::write(&lastconn_file, b"{\"endpoint\":\"162.159.192.1:2408\",\"rtt\":45}").unwrap();
+        std::fs::write(&toml_file, b"private_key = 'SECRET_IDENTITY'").unwrap();
+        std::fs::write(&lastconn_file, b"endpoint = '162.159.192.1:2408'\nrtt = 45").unwrap();
 
-        // 2. Snapshot
-        let snapshot = AetherPersistenceSnapshot::create(&temp_dir).unwrap();
+        let mut settings = AppSettings::default();
+        settings.aether.protocol = crate::models::settings::AetherProtocol::Wireguard;
 
-        // 3. Verify snapshot entries strictly exclude config and identity files
+        // Snapshot explicitly derived target paths for WireGuard config
+        let lastconn_target = lastconn_path(&toml_file);
+        let snapshot = AetherPersistenceSnapshot::create_for_targets(&[lastconn_target]).unwrap();
+
         for entry in &snapshot.entries {
             match entry {
-                LastconnEntryState::Existed { target_path, .. } => {
+                LastconnEntryState::Existed { target_path, .. }
+                | LastconnEntryState::Absent { target_path } => {
                     let name = target_path.file_name().unwrap().to_string_lossy();
-                    assert_ne!(name, "aether.toml");
-                    assert_ne!(name, "identity.json");
-                    assert_ne!(name, "client.key");
-                    assert_eq!(name, "lastconn.json");
-                }
-                LastconnEntryState::Absent { target_path } => {
-                    let name = target_path.file_name().unwrap().to_string_lossy();
-                    assert_ne!(name, "aether.toml");
-                    assert_ne!(name, "identity.json");
-                    assert_ne!(name, "client.key");
+                    assert_ne!(name, "aether.toml", "aether.toml (identity/config) must NOT be included in lastconn snapshot");
                 }
             }
         }
@@ -404,20 +411,111 @@ mod tests {
     }
 
     #[test]
-    fn test_b_previous_lastconn_existed_restores_original_bytes_atomically() {
+    fn test_b_aether_lastconn_toml_is_included_in_snapshot() {
         let temp_dir =
-            std::env::temp_dir().join(format!("aether_test_snap_b_{}", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("aether_test_snap_filter_b_{}", Uuid::new_v4()));
         let _ = std::fs::create_dir_all(&temp_dir);
 
-        let lastconn_file = temp_dir.join("lastconn.json");
-        let original_bytes = b"{\"endpoint\":\"162.159.192.1:2408\",\"rtt\":45}";
+        let toml_file = temp_dir.join("aether.toml");
+        let lastconn_file = temp_dir.join("aether-lastconn.toml");
+
+        std::fs::write(&toml_file, b"private_key = 'SECRET_IDENTITY'").unwrap();
+        std::fs::write(&lastconn_file, b"endpoint = '162.159.192.1:2408'\nrtt = 45").unwrap();
+
+        let lastconn_target = lastconn_path(&toml_file);
+        assert_eq!(lastconn_target.file_name().unwrap().to_string_lossy(), "aether-lastconn.toml");
+
+        let snapshot = AetherPersistenceSnapshot::create_for_targets(&[lastconn_target]).unwrap();
+        assert_eq!(snapshot.entries.len(), 1);
+
+        match &snapshot.entries[0] {
+            LastconnEntryState::Existed { target_path, backup_path } => {
+                assert_eq!(target_path.file_name().unwrap().to_string_lossy(), "aether-lastconn.toml");
+                assert!(backup_path.exists());
+            }
+            _ => panic!("Expected aether-lastconn.toml to be marked as Existed"),
+        }
+
+        snapshot.cleanup();
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_c_aether_masque_toml_is_not_included_in_snapshot() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("aether_test_snap_filter_c_{}", Uuid::new_v4()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        let masque_config = temp_dir.join("aether-masque.toml");
+        let masque_lastconn = temp_dir.join("aether-masque-lastconn.toml");
+
+        std::fs::write(&masque_config, b"auth_token = 'MASQUE_SECRET'").unwrap();
+        std::fs::write(&masque_lastconn, b"endpoint = '162.159.193.1:443'").unwrap();
+
+        let target = lastconn_path(&masque_config);
+        let snapshot = AetherPersistenceSnapshot::create_for_targets(&[target]).unwrap();
+
+        for entry in &snapshot.entries {
+            match entry {
+                LastconnEntryState::Existed { target_path, .. }
+                | LastconnEntryState::Absent { target_path } => {
+                    let name = target_path.file_name().unwrap().to_string_lossy();
+                    assert_ne!(name, "aether-masque.toml", "aether-masque.toml must NOT be included in lastconn snapshot");
+                }
+            }
+        }
+
+        snapshot.cleanup();
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_d_aether_masque_lastconn_toml_is_included_when_masque_is_active() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("aether_test_snap_filter_d_{}", Uuid::new_v4()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        let masque_config = temp_dir.join("aether-masque.toml");
+        let masque_lastconn = temp_dir.join("aether-masque-lastconn.toml");
+
+        std::fs::write(&masque_config, b"auth_token = 'MASQUE_SECRET'").unwrap();
+        std::fs::write(&masque_lastconn, b"endpoint = '162.159.193.1:443'\nrtt = 55").unwrap();
+
+        let target = lastconn_path(&masque_config);
+        assert_eq!(target.file_name().unwrap().to_string_lossy(), "aether-masque-lastconn.toml");
+
+        let snapshot = AetherPersistenceSnapshot::create_for_targets(&[target]).unwrap();
+        assert_eq!(snapshot.entries.len(), 1);
+
+        match &snapshot.entries[0] {
+            LastconnEntryState::Existed { target_path, backup_path } => {
+                assert_eq!(target_path.file_name().unwrap().to_string_lossy(), "aether-masque-lastconn.toml");
+                assert!(backup_path.exists());
+            }
+            _ => panic!("Expected aether-masque-lastconn.toml to be marked as Existed"),
+        }
+
+        snapshot.cleanup();
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_e_preexisting_aether_lastconn_toml_is_restored_byte_for_byte() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("aether_test_snap_e_{}", Uuid::new_v4()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        let toml_file = temp_dir.join("aether.toml");
+        let lastconn_file = temp_dir.join("aether-lastconn.toml");
+        let original_bytes = b"endpoint = '162.159.192.1:2408'\nrtt = 45\n";
         std::fs::write(&lastconn_file, original_bytes).unwrap();
 
         // 1. Snapshot native lastconn state
-        let snapshot = AetherPersistenceSnapshot::create(&temp_dir).unwrap();
+        let target = lastconn_path(&toml_file);
+        let snapshot = AetherPersistenceSnapshot::create_for_targets(&[target]).unwrap();
 
         // 2. Simulate fresh scan modifying or writing new failed lastconn
-        let modified_bytes = b"{\"endpoint\":\"162.159.193.99:500\",\"rtt\":999}";
+        let modified_bytes = b"endpoint = '162.159.193.99:500'\nrtt = 999\n";
         std::fs::write(&lastconn_file, modified_bytes).unwrap();
         assert_eq!(std::fs::read(&lastconn_file).unwrap(), modified_bytes);
 
@@ -431,46 +529,50 @@ mod tests {
     }
 
     #[test]
-    fn test_c_previous_lastconn_absent_removes_newly_created_file_on_rollback() {
+    fn test_f_previously_absent_aether_lastconn_toml_created_by_failed_scan_is_removed() {
         let temp_dir =
-            std::env::temp_dir().join(format!("aether_test_snap_c_{}", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("aether_test_snap_f_{}", Uuid::new_v4()));
         let _ = std::fs::create_dir_all(&temp_dir);
 
-        let lastconn_file = temp_dir.join("lastconn.json");
+        let toml_file = temp_dir.join("aether.toml");
+        let lastconn_file = temp_dir.join("aether-lastconn.toml");
         assert!(!lastconn_file.exists());
 
         // 1. Snapshot with no existing lastconn
-        let snapshot = AetherPersistenceSnapshot::create(&temp_dir).unwrap();
+        let target = lastconn_path(&toml_file);
+        let snapshot = AetherPersistenceSnapshot::create_for_targets(&[target]).unwrap();
 
         // 2. Fresh scan creates a new lastconn file
-        std::fs::write(&lastconn_file, b"{\"endpoint\":\"162.159.192.9:2408\"}").unwrap();
+        std::fs::write(&lastconn_file, b"endpoint = '162.159.192.9:2408'\nrtt = 80\n").unwrap();
         assert!(lastconn_file.exists());
 
         // 3. Rollback: newly created lastconn file must be removed
         snapshot.restore().unwrap();
-        assert!(!lastconn_file.exists(), "Newly created lastconn file must be removed on rollback");
+        assert!(!lastconn_file.exists(), "Newly created aether-lastconn.toml file must be removed on rollback");
 
         snapshot.cleanup();
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
-    fn test_d_optimization_succeeds_new_lastconn_remains_and_old_backup_discarded() {
+    fn test_g_optimization_success_preserves_new_lastconn_and_discards_backup() {
         let temp_dir =
-            std::env::temp_dir().join(format!("aether_test_snap_d_{}", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("aether_test_snap_g_{}", Uuid::new_v4()));
         let _ = std::fs::create_dir_all(&temp_dir);
 
-        let lastconn_file = temp_dir.join("lastconn.json");
-        let initial_bytes = b"{\"endpoint\":\"162.159.192.1:2408\",\"rtt\":95}";
+        let toml_file = temp_dir.join("aether.toml");
+        let lastconn_file = temp_dir.join("aether-lastconn.toml");
+        let initial_bytes = b"endpoint = '162.159.192.1:2408'\nrtt = 95\n";
         std::fs::write(&lastconn_file, initial_bytes).unwrap();
 
         // 1. Snapshot initial state
-        let snapshot = AetherPersistenceSnapshot::create(&temp_dir).unwrap();
+        let target = lastconn_path(&toml_file);
+        let snapshot = AetherPersistenceSnapshot::create_for_targets(&[target]).unwrap();
         let snapshot_dir = snapshot.snapshot_dir.clone();
         assert!(snapshot_dir.exists());
 
         // 2. Optimization succeeds and writes faster working candidate
-        let optimized_bytes = b"{\"endpoint\":\"162.159.192.5:2408\",\"rtt\":38}";
+        let optimized_bytes = b"endpoint = '162.159.192.5:2408'\nrtt = 38\n";
         std::fs::write(&lastconn_file, optimized_bytes).unwrap();
 
         // 3. Commit: cleanup snapshot

@@ -521,10 +521,8 @@ impl ConnectionOrchestrator {
                     ),
                 );
 
-                let aether_data_dir =
-                    crate::settings::storage::SettingsStorage::get_aether_data_dir();
-                let snapshot = match crate::settings::storage::AetherPersistenceSnapshot::create(
-                    &aether_data_dir,
+                let snapshot = match crate::settings::storage::AetherPersistenceSnapshot::create_for_settings(
+                    settings,
                 ) {
                     Ok(s) => s,
                     Err(e) => {
@@ -927,7 +925,7 @@ impl ConnectionOrchestrator {
         }
     }
 
-    async fn rollback_and_restore(
+    pub async fn rollback_and_restore(
         &self,
         settings: &AppSettings,
         opt_id: u64,
@@ -1199,11 +1197,14 @@ mod tests {
         let settings = AppSettings::default();
 
         let temp_dir =
-            std::env::temp_dir().join(format!("aether_test_orch_h_{}", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("aether_test_orch_h_{}", uuid::Uuid::new_v4()));
         let _ = std::fs::create_dir_all(&temp_dir);
 
+        let lastconn_file = temp_dir.join("aether-lastconn.toml");
+        std::fs::write(&lastconn_file, b"endpoint = '162.159.192.1:2408'\nrtt = 45\n").unwrap();
+
         let snapshot = crate::settings::storage::AetherPersistenceSnapshot::create(&temp_dir).unwrap();
-        // Delete snapshot directory behind its back to force snapshot.restore() failure
+        // Delete snapshot backup file behind its back to force snapshot.restore() failure
         let _ = std::fs::remove_dir_all(&snapshot.snapshot_dir);
 
         let res = orch
