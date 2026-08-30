@@ -13,6 +13,7 @@
     "core:window:allow-is-maximized",
     "core:window:allow-close",
     "core:event:default",
-    "opener:default"
+    "opener:default",
+    "dialog:default"
   ]
 }

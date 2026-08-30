@@ -15,8 +15,8 @@ pub fn get_default_rules() -> Vec<ApplicationRule> {
         ApplicationRule::preset("Dota 2", "dota2.exe", RouteDestination::Direct),
         ApplicationRule::preset("Rust Client", "RustClient.exe", RouteDestination::Direct),
         ApplicationRule::preset("Rust", "Rust.exe", RouteDestination::Direct),
-        // HIGH PRIORITY SECONDARY PROXY PRESET (Discord Voice STUN/TURN Override)
-        ApplicationRule::preset_high("Discord", "Discord.exe", RouteDestination::SecondaryProxy),
+        // HIGH PRIORITY AETHER PRESET (Discord Voice STUN/TURN Override)
+        ApplicationRule::preset_high("Discord", "Discord.exe", RouteDestination::Aether),
         // NORMAL PRIORITY SECONDARY PROXY PRESETS (V2Ray / Xray)
         ApplicationRule::preset(
             "Google Chrome",

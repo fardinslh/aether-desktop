@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Download, RefreshCw, FileCode, CheckCircle2, Copy, X, ArrowDown } from "lucide-react";
+import { save } from "@tauri-apps/plugin-dialog";
 import { LogEntry } from "../../types";
 import { api } from "../../services/api";
 
@@ -14,6 +15,7 @@ export const DiagnosticsView: React.FC<DiagnosticsViewProps> = ({ logs, onRefres
   const [showConfigModal, setShowConfigModal] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
   const [selectedSource, setSelectedSource] = useState<string>("ALL");
+  const [exportStatus, setExportStatus] = useState<"idle" | "exporting" | "saved">("idle");
 
   const logContainerRef = useRef<HTMLDivElement>(null);
   const shouldAutoScrollRef = useRef<boolean>(true);
@@ -50,16 +52,40 @@ export const DiagnosticsView: React.FC<DiagnosticsViewProps> = ({ logs, onRefres
   };
 
   const handleExportLogs = async () => {
+    if (exportStatus === "exporting") return;
+    setExportStatus("exporting");
     try {
-      const data = await api.exportLogs();
-      const blob = new Blob([data], { type: "text/plain" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `aether-logs-${new Date().toISOString().replace(/[:.]/g, "-")}.log`;
-      a.click();
-    } catch (e) {
-      alert("Failed to export logs: " + e);
+      const now = new Date();
+      const yyyy = now.getFullYear();
+      const mm = String(now.getMonth() + 1).padStart(2, "0");
+      const dd = String(now.getDate()).padStart(2, "0");
+      const hh = String(now.getHours()).padStart(2, "0");
+      const min = String(now.getMinutes()).padStart(2, "0");
+      const ss = String(now.getSeconds()).padStart(2, "0");
+      const defaultFilename = `aether-logs-${yyyy}-${mm}-${dd}T${hh}-${min}-${ss}.log`;
+
+      const filePath = await save({
+        title: "Export Raw Diagnostics Log",
+        defaultPath: defaultFilename,
+        filters: [
+          { name: "Log Files", extensions: ["log"] },
+          { name: "Text Files", extensions: ["txt"] },
+          { name: "All Files", extensions: ["*"] },
+        ],
+      });
+
+      if (!filePath) {
+        // User cancelled native dialog -> silently return to idle
+        setExportStatus("idle");
+        return;
+      }
+
+      await api.saveExportedLogs(filePath);
+      setExportStatus("saved");
+      setTimeout(() => setExportStatus("idle"), 2500);
+    } catch (e: any) {
+      setExportStatus("idle");
+      alert("Failed to export logs: " + (e?.message || e));
     }
   };
 
@@ -119,10 +145,26 @@ export const DiagnosticsView: React.FC<DiagnosticsViewProps> = ({ logs, onRefres
           </button>
           <button
             onClick={handleExportLogs}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-sm bg-app-surface hover:bg-app-elevated border border-app-border text-ink-200 text-xs font-medium transition-colors cursor-pointer"
+            disabled={exportStatus === "exporting"}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-sm bg-app-surface hover:bg-app-elevated border border-app-border text-ink-200 text-xs font-medium transition-colors cursor-pointer disabled:opacity-60"
+            title="Export all runtime logs to a native file"
           >
-            <Download className="w-3.5 h-3.5" />
-            <span>Export Raw Log</span>
+            {exportStatus === "saved" ? (
+              <>
+                <CheckCircle2 className="w-3.5 h-3.5 text-signal-green" />
+                <span className="text-signal-green font-semibold">Saved</span>
+              </>
+            ) : exportStatus === "exporting" ? (
+              <>
+                <Download className="w-3.5 h-3.5 animate-bounce text-signal-cyan" />
+                <span>Exporting...</span>
+              </>
+            ) : (
+              <>
+                <Download className="w-3.5 h-3.5" />
+                <span>Export Raw Log</span>
+              </>
+            )}
           </button>
           <button
             onClick={onRefreshLogs}

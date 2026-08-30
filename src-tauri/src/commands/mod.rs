@@ -223,6 +223,19 @@ pub fn export_logs(state: State<'_, AppState>) -> Result<String, String> {
 }
 
 #[tauri::command]
+pub fn save_exported_logs(path: String, state: State<'_, AppState>) -> Result<(), String> {
+    let raw_logs = state.logger.export_as_string();
+    let formatted_logs = if raw_logs.contains("\r\n") {
+        raw_logs
+    } else {
+        raw_logs.replace('\n', "\r\n")
+    };
+    std::fs::write(&path, formatted_logs.as_bytes())
+        .map_err(|e| format!("Failed to write log file to '{}': {}", path, e))?;
+    Ok(())
+}
+
+#[tauri::command]
 pub fn validate_binaries() -> Result<BinaryValidationResult, String> {
     let settings = SettingsStorage::load();
     let aether_exists = !settings.aether.executable_path.is_empty()

@@ -661,10 +661,11 @@ impl HealthProber {
                 }
             }
 
-            // Match 3: Wintun description with active status or IP
-            if (d_lower.contains("wintun")
-                || d_lower.contains("singbox")
-                || f_lower.contains("singbox"))
+            // Match 3: Wintun description with active status or IP (only if looking for a singbox/wintun interface)
+            if (target_name.contains("wintun") || target_name.contains("singbox"))
+                && (d_lower.contains("wintun")
+                    || d_lower.contains("singbox")
+                    || f_lower.contains("singbox"))
                 && (adapter.is_up || !adapter.ip_addresses.is_empty())
             {
                 return (true, Some(adapter.clone()), all_adapters);
@@ -676,8 +677,8 @@ impl HealthProber {
         for (name, _) in &networks {
             let n_lower = name.to_lowercase();
             if n_lower == target_name
-                || n_lower.contains(&target_name)
-                || n_lower.contains("singbox")
+                || (!target_name.is_empty() && n_lower.contains(&target_name))
+                || (target_name.contains("singbox") && n_lower.contains("singbox"))
             {
                 return (true, None, all_adapters);
             }

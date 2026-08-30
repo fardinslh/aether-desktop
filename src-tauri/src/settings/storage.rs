@@ -124,6 +124,18 @@ impl SettingsStorage {
                             needs_migration = true;
                         }
 
+                        // Migrate Discord factory preset from SecondaryProxy to Aether if matching old factory preset
+                        for rule in &mut settings.application_rules {
+                            if rule.source == crate::models::RuleSource::Preset
+                                && rule.process_name.eq_ignore_ascii_case("discord.exe")
+                                && rule.priority == crate::models::RulePriority::High
+                                && rule.destination == crate::models::RouteDestination::SecondaryProxy
+                            {
+                                rule.destination = crate::models::RouteDestination::Aether;
+                                needs_migration = true;
+                            }
+                        }
+
                         if needs_migration {
                             let _ = Self::save(&settings);
                         }

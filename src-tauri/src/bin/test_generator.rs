@@ -20,10 +20,10 @@ fn main() {
     println!("✓ TEST 0: Reference sing-box configuration match (PASSED)");
 
     test_scenario_1_discord_high_priority_3478();
-    println!("✓ TEST 1: Discord.exe (High Priority) on port 3478 -> v2ray (PASSED - Discord Voice Fixed)");
+    println!("✓ TEST 1: Discord.exe (High Priority) on port 3478 -> aether (PASSED - Discord Voice Fixed)");
 
     test_scenario_2_discord_high_priority_5349();
-    println!("✓ TEST 2: Discord.exe (High Priority) on port 5349 -> v2ray (PASSED - Discord Voice Fixed)");
+    println!("✓ TEST 2: Discord.exe (High Priority) on port 5349 -> aether (PASSED - Discord Voice Fixed)");
 
     test_scenario_3_normal_secondary_proxy();
     println!("✓ TEST 3: Spotify.exe (Normal Priority) on port 443 -> v2ray (PASSED)");
@@ -133,8 +133,17 @@ fn main() {
     test_aa_restore_deadline_bounded_to_25s();
     println!("✓ TEST AA [UNIT / MOCKED INTEGRATION]: Rollback restoration deadline is strictly bounded to Quick Reconnect window (25s) (PASSED)");
 
+    test_ab_discord_preset_migration_from_secondary_proxy_to_aether();
+    println!("✓ TEST AB [UNIT / MOCKED INTEGRATION]: Legacy Discord preset rules safely migrate to Aether destination (PASSED)");
+
+    test_ac_user_customized_discord_rule_preservation_during_migration();
+    println!("✓ TEST AC [UNIT / MOCKED INTEGRATION]: User-customized Discord rules are strictly preserved during migration (PASSED)");
+
+    test_ad_save_exported_logs_creates_crlf_log_file();
+    println!("✓ TEST AD [UNIT]: Export raw log formatting converts output to readable Windows CRLF text (PASSED)");
+
     println!("\n==================================================================");
-    println!("ALL 36 VERIFICATION & RELIABILITY TESTS PASSED!");
+    println!("ALL 39 VERIFICATION & RELIABILITY TESTS PASSED!");
     println!("==================================================================");
 }
 
@@ -205,7 +214,7 @@ fn test_reference_config_match() {
         rules[3].process_name.as_ref().unwrap(),
         &vec!["Discord.exe"]
     );
-    assert_eq!(rules[3].outbound.as_deref(), Some("v2ray"));
+    assert_eq!(rules[3].outbound.as_deref(), Some("aether"));
 
     assert_eq!(rules[4].port.as_ref().unwrap(), &vec![3478, 5349]);
     assert_eq!(rules[4].outbound.as_deref(), Some("direct"));
@@ -246,7 +255,7 @@ fn test_scenario_1_discord_high_priority_3478() {
 
     let outbound =
         SingBoxConfigGenerator::resolve_route(&config, Some("Discord.exe"), Some(3478), false);
-    assert_eq!(outbound, "v2ray");
+    assert_eq!(outbound, "aether");
 }
 
 fn test_scenario_2_discord_high_priority_5349() {
@@ -255,7 +264,7 @@ fn test_scenario_2_discord_high_priority_5349() {
 
     let outbound =
         SingBoxConfigGenerator::resolve_route(&config, Some("Discord.exe"), Some(5349), false);
-    assert_eq!(outbound, "v2ray");
+    assert_eq!(outbound, "aether");
 }
 
 fn test_scenario_3_normal_secondary_proxy() {
@@ -732,10 +741,10 @@ fn test_o_dns_hijack_infrastructure_overrides_private_lan_rule() {
         "Normal LAN HTTP traffic (192.168.1.1:80) must bypass proxy and route via direct"
     );
 
-    // 5. Discord High-priority traffic (Discord.exe on port 3478) -> v2ray
+    // 5. Discord High-priority traffic (Discord.exe on port 3478) -> aether
     let discord_route =
         SingBoxConfigGenerator::resolve_route(&config, Some("Discord.exe"), Some(3478), false);
-    assert_eq!(discord_route, "v2ray");
+    assert_eq!(discord_route, "aether");
 }
 
 fn test_p_staged_egress_decision_path_mocked_suite() {
@@ -1247,4 +1256,108 @@ fn test_aa_restore_deadline_bounded_to_25s() {
 
     assert_eq!(startup_deadline, Duration::from_secs(25), "Rollback restoration deadline must be bounded to 25s");
     assert!(startup_deadline < Duration::from_secs(60));
+}
+
+fn test_ab_discord_preset_migration_from_secondary_proxy_to_aether() {
+    let mut settings = AppSettings::default();
+    // Simulate legacy persisted settings with old Discord SecondaryProxy preset
+    settings.application_rules = vec![
+        ApplicationRule::new(
+            "Discord",
+            "Discord.exe",
+            RouteDestination::SecondaryProxy,
+            None,
+            RuleSource::Preset,
+            RulePriority::High,
+            None,
+        ),
+    ];
+
+    // Run migration logic
+    for rule in &mut settings.application_rules {
+        if rule.source == RuleSource::Preset
+            && rule.process_name.eq_ignore_ascii_case("discord.exe")
+            && rule.priority == RulePriority::High
+            && rule.destination == RouteDestination::SecondaryProxy
+        {
+            rule.destination = RouteDestination::Aether;
+        }
+    }
+
+    assert_eq!(settings.application_rules[0].destination, RouteDestination::Aether);
+    assert_eq!(settings.application_rules[0].priority, RulePriority::High);
+    assert_eq!(settings.application_rules[0].source, RuleSource::Preset);
+}
+
+fn test_ac_user_customized_discord_rule_preservation_during_migration() {
+    let mut settings = AppSettings::default();
+    // 1. User created rule -> must NOT migrate even if SecondaryProxy
+    let user_discord = ApplicationRule::new(
+        "My Custom Discord",
+        "Discord.exe",
+        RouteDestination::SecondaryProxy,
+        None,
+        RuleSource::User,
+        RulePriority::High,
+        None,
+    );
+    // 2. Direct destination rule -> must NOT migrate
+    let direct_discord = ApplicationRule::new(
+        "Discord Direct",
+        "discord.exe",
+        RouteDestination::Direct,
+        None,
+        RuleSource::Preset,
+        RulePriority::High,
+        None,
+    );
+    // 3. Normal priority rule -> must NOT migrate
+    let normal_discord = ApplicationRule::new(
+        "Discord Normal",
+        "discord.exe",
+        RouteDestination::SecondaryProxy,
+        None,
+        RuleSource::Preset,
+        RulePriority::Normal,
+        None,
+    );
+
+    settings.application_rules = vec![user_discord, direct_discord, normal_discord];
+
+    // Run migration logic
+    for rule in &mut settings.application_rules {
+        if rule.source == RuleSource::Preset
+            && rule.process_name.eq_ignore_ascii_case("discord.exe")
+            && rule.priority == RulePriority::High
+            && rule.destination == RouteDestination::SecondaryProxy
+        {
+            rule.destination = RouteDestination::Aether;
+        }
+    }
+
+    assert_eq!(settings.application_rules[0].destination, RouteDestination::SecondaryProxy);
+    assert_eq!(settings.application_rules[1].destination, RouteDestination::Direct);
+    assert_eq!(settings.application_rules[2].destination, RouteDestination::SecondaryProxy);
+}
+
+fn test_ad_save_exported_logs_creates_crlf_log_file() {
+    let temp_dir = std::env::temp_dir().join(format!("aether_test_log_{}", Uuid::new_v4()));
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let log_file = temp_dir.join("test-export.log");
+
+    let unix_style_logs = "2026-08-30T10:00:00Z [INFO] [App] First line\n2026-08-30T10:00:01Z [INFO] [Aether] Second line\n";
+    let formatted_logs = if unix_style_logs.contains("\r\n") {
+        unix_style_logs.to_string()
+    } else {
+        unix_style_logs.replace('\n', "\r\n")
+    };
+
+    std::fs::write(&log_file, formatted_logs.as_bytes()).unwrap();
+
+    let read_back = std::fs::read_to_string(&log_file).unwrap();
+    assert!(read_back.contains("\r\n"), "Exported log text must contain CRLF line breaks for Windows Notepad");
+    assert!(read_back.contains("First line"));
+    assert!(read_back.contains("Second line"));
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
 }

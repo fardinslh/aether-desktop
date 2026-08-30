@@ -78,6 +78,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(app_state)
         .setup(move |app| {
             orchestrator_setup.set_app_handle(app.handle().clone());
@@ -102,6 +103,7 @@ pub fn run() {
             commands::test_aether_proxy,
             commands::get_logs,
             commands::export_logs,
+            commands::save_exported_logs,
             commands::validate_binaries,
             commands::check_dependencies,
             commands::install_aether_dependency,

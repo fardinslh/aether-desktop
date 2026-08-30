@@ -112,6 +112,10 @@ export const api = {
     return invoke<string>("export_logs");
   },
 
+  async saveExportedLogs(filePath: string): Promise<void> {
+    return invoke<void>("save_exported_logs", { path: filePath });
+  },
+
   async getSingBoxConfigPreview(): Promise<string> {
     return invoke<string>("generate_singbox_config_preview");
   },

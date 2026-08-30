@@ -15,7 +15,7 @@ impl SingBoxConfigGenerator {
     /// 0. DNS INFRASTRUCTURE HIJACK: DNS protocol & port 53 -> hijack-dns (intercepted into sing-box DNS engine)
     /// 1. CORE LOOP PREVENTION: Proxy binaries (aether.exe, xray.exe, v2ray.exe, v2rayN.exe) -> DIRECT
     /// 2. APP-SCOPED COMPATIBILITY: Specific overrides requiring (Process + Ports/Protocol) -> Destination
-    /// 3. HIGH-PRIORITY APPLICATION OVERRIDES: (e.g. Discord.exe -> v2ray)
+    /// 3. HIGH-PRIORITY APPLICATION OVERRIDES: (e.g. Discord.exe -> aether)
     /// 4. GENERIC COMPATIBILITY FALLBACK: Generals Online STUN/TURN (ports 3478, 5349) -> DIRECT
     /// 5. NORMAL-PRIORITY APPLICATION ROUTING:
     ///    - Normal Direct apps (dota2.exe, Rust.exe, etc.) -> DIRECT
@@ -218,7 +218,7 @@ impl SingBoxConfigGenerator {
             }
         }
 
-        // 5.3 Priority 3: HIGH-PRIORITY Application Overrides (e.g. Discord.exe -> v2ray)
+        // 5.3 Priority 3: HIGH-PRIORITY Application Overrides (e.g. Discord.exe -> aether)
         if !high_direct_apps.is_empty() {
             rules.push(RouteRule {
                 protocol: None,
