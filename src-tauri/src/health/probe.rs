@@ -91,6 +91,53 @@ impl HealthProber {
         })
     }
 
+    /// Measures multiple SOCKS5 latency samples across identical bounded intervals and computes median and jitter MAD
+    pub async fn measure_socks5_latency_samples(
+        host: &str,
+        port: u16,
+        target_samples: usize,
+        interval: Duration,
+    ) -> Result<crate::models::health::LatencyProfile, String> {
+        let mut samples_ms = Vec::new();
+        let mut latest_trace = None;
+        let mut last_err = String::new();
+
+        for i in 0..target_samples {
+            if i > 0 {
+                tokio::time::sleep(interval).await;
+            }
+            match Self::query_cloudflare_trace_via_socks5(host, port).await {
+                Ok(trace) => {
+                    samples_ms.push(trace.latency_ms);
+                    latest_trace = Some(trace);
+                }
+                Err(e) => {
+                    last_err = e;
+                }
+            }
+        }
+
+        if samples_ms.len() < 4 {
+            let detail = if last_err.is_empty() {
+                String::new()
+            } else {
+                format!(": {}", last_err)
+            };
+            return Err(format!(
+                "Insufficient valid latency samples ({}/{} succeeded, minimum 4 required){}",
+                samples_ms.len(),
+                target_samples,
+                detail
+            ));
+        }
+
+        crate::models::health::LatencyProfile::compute_from_samples(
+            &samples_ms,
+            target_samples,
+            latest_trace,
+        )
+    }
+
     /// Formats a detailed reqwest error breakdown including connection/timeout flags and underlying source error chain
     pub fn format_reqwest_error(prefix: &str, err: &reqwest::Error) -> String {
         use std::error::Error;

@@ -58,7 +58,7 @@ pub fn run() {
         }
     }));
 
-    let logger = RingBufferLogger::new(1000);
+    let logger = RingBufferLogger::new(10000);
     logger.log("INFO", "App", "Aether Desktop initialized");
 
     let connection_state = Arc::new(RwLock::new(ConnectionState::Disconnected));

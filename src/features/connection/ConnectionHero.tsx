@@ -206,54 +206,84 @@ export const ConnectionHero: React.FC<ConnectionHeroProps> = ({
         {optimizationResult && (
           <div
             className={`w-full max-w-md my-1.5 p-2.5 rounded-sm border text-xs font-mono flex items-start justify-between gap-2 transition-all shadow-sm ${
-              optimizationResult.success
-                ? (optimizationResult.latencyDeltaMs ?? 0) > 0
-                  ? "bg-signal-green-dim border-signal-green/40 text-signal-green"
-                  : "bg-signal-cyan-dim border-signal-cyan/40 text-signal-cyan"
+              optimizationResult.decision === "KeptFaster" ||
+              (optimizationResult.success && (optimizationResult.latencyDeltaMs ?? 0) > 0)
+                ? "bg-signal-green-dim border-signal-green/40 text-signal-green"
+                : optimizationResult.decision === "InitialConnected"
+                ? "bg-signal-cyan-dim border-signal-cyan/40 text-signal-cyan"
                 : "bg-signal-amber-dim border-signal-amber/40 text-signal-amber"
             }`}
           >
-            <div className="flex items-start gap-2">
-              {optimizationResult.success ? (
+            <div className="flex items-start gap-2 flex-1 min-w-0">
+              {optimizationResult.decision === "KeptFaster" ||
+              (optimizationResult.success && (optimizationResult.latencyDeltaMs ?? 0) > 0) ? (
                 <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0" />
+              ) : optimizationResult.decision === "InitialConnected" ? (
+                <Zap className="w-4 h-4 mt-0.5 shrink-0 text-signal-cyan" />
               ) : (
                 <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
               )}
-              <div>
+              <div className="flex-1 min-w-0">
                 <div className="font-bold uppercase tracking-wider text-[10px]">
-                  {optimizationResult.success
-                    ? (optimizationResult.latencyDeltaMs ?? 0) > 0
-                      ? "Gateway Optimized"
-                      : "Fresh Scan Complete"
-                    : "Previous Working Gateway Restored"}
+                  {optimizationResult.decision === "KeptFaster"
+                    ? "New Faster Gateway Kept"
+                    : optimizationResult.decision === "RolledBackSlowerOrEqual"
+                    ? "Candidate Not Faster · Previous Path Restored"
+                    : optimizationResult.decision === "InitialConnected"
+                    ? "Gateway Connected"
+                    : optimizationResult.success
+                    ? "Gateway Evaluated"
+                    : "Previous Gateway Restored"}
                 </div>
-                <div className="text-[11px] mt-0.5 text-ink-200">
+                <div className="text-[11px] mt-1 text-ink-200 space-y-1">
                   {optimizationResult.previousLatencyMs !== undefined &&
                   optimizationResult.previousLatencyMs !== null ? (
-                    <span>
-                      Previous:{" "}
-                      <span className="text-ink-400 font-semibold">
-                        {optimizationResult.previousLatencyMs} ms
-                        {optimizationResult.previousPop && ` (${optimizationResult.previousPop})`}
-                      </span>
+                    <div className="space-y-0.5">
+                      <div className="flex items-center justify-between text-[10px]">
+                        <span className="text-ink-400">Previous path:</span>
+                        <span className="font-semibold text-ink-300">
+                          Median: {optimizationResult.previousLatencyMs} ms
+                          {optimizationResult.previousJitterMs !== undefined &&
+                            optimizationResult.previousJitterMs !== null &&
+                            ` · Jitter: ${optimizationResult.previousJitterMs} ms`}
+                        </span>
+                      </div>
                       {optimizationResult.newLatencyMs !== undefined &&
                         optimizationResult.newLatencyMs !== null && (
-                          <span>
-                            {" "}→ New:{" "}
-                            <span className="font-bold text-ink-100">
-                              {optimizationResult.newLatencyMs} ms
-                              {optimizationResult.newPop && ` (${optimizationResult.newPop})`}
+                          <div className="flex items-center justify-between text-[10px]">
+                            <span className="text-ink-400">Candidate path:</span>
+                            <span className="font-semibold text-ink-100">
+                              Median: {optimizationResult.newLatencyMs} ms
+                              {optimizationResult.newJitterMs !== undefined &&
+                                optimizationResult.newJitterMs !== null &&
+                                ` · Jitter: ${optimizationResult.newJitterMs} ms`}
                             </span>
-                          </span>
+                          </div>
                         )}
                       {optimizationResult.latencyDeltaMs !== undefined &&
-                        optimizationResult.latencyDeltaMs !== null &&
-                        optimizationResult.latencyDeltaMs > 0 && (
-                          <span className="text-signal-green font-bold ml-1">
-                            (+{optimizationResult.latencyDeltaMs} ms faster)
-                          </span>
+                        optimizationResult.latencyDeltaMs !== null && (
+                          <div className="flex items-center justify-between text-[10px] pt-0.5 border-t border-app-border-subtle">
+                            <span className="text-ink-400">Difference:</span>
+                            <span
+                              className={`font-bold ${
+                                optimizationResult.latencyDeltaMs > 0
+                                  ? "text-signal-green"
+                                  : "text-signal-amber"
+                              }`}
+                            >
+                              {optimizationResult.latencyDeltaMs > 0
+                                ? `+${optimizationResult.latencyDeltaMs} ms faster`
+                                : `${optimizationResult.latencyDeltaMs} ms slower / equal`}
+                            </span>
+                          </div>
                         )}
-                    </span>
+                      {optimizationResult.newIp && (
+                        <div className="text-[9px] text-ink-400 font-sans truncate pt-0.5">
+                          Supplemental Egress: {optimizationResult.newIp}
+                          {optimizationResult.newPop && ` (${optimizationResult.newPop})`}
+                        </div>
+                      )}
+                    </div>
                   ) : (
                     <span>{optimizationResult.message}</span>
                   )}
@@ -262,7 +292,7 @@ export const ConnectionHero: React.FC<ConnectionHeroProps> = ({
             </div>
             <button
               onClick={() => setOptimizationResult(null)}
-              className="text-ink-400 hover:text-ink-100 p-0.5 cursor-pointer"
+              className="text-ink-400 hover:text-ink-100 p-0.5 cursor-pointer shrink-0"
               title="Dismiss notification"
             >
               <X className="w-3.5 h-3.5" />

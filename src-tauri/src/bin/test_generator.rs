@@ -158,8 +158,23 @@ fn main() {
     test_ai_repeated_saves_do_not_duplicate_dota_sdr_rule();
     println!("✓ TEST AI [UNIT / SETTINGS]: Repeated saves of Dota 2 settings do not duplicate the compatibility rule (PASSED)");
 
+    test_aj_dota2_mode_direct_routes_to_direct();
+    println!("✓ TEST AJ [UNIT / ROUTING]: Dota 2 Valve SDR UDP mode Direct routes traffic to direct (PASSED)");
+
+    test_ak_user_compatibility_rules_preserved_on_dota_save();
+    println!("✓ TEST AK [UNIT / SETTINGS]: User-defined compatibility rules are preserved when saving or clearing Dota SDR settings (PASSED)");
+
+    test_al_gateway_optimization_evaluation_decision_logic();
+    println!("✓ TEST AL [UNIT / DECISION]: Gateway optimization evaluation enforces anti-noise threshold and correct keep/rollback decisions (PASSED)");
+
+    test_am_latency_profile_median_mad_and_insufficient_samples();
+    println!("✓ TEST AM [UNIT / STATS]: Multi-sample latency calculation accurately evaluates median, MAD jitter, and rejects insufficient sample sets (PASSED)");
+
+    test_an_ring_buffer_logger_10000_capacity_and_eviction();
+    println!("✓ TEST AN [UNIT / LOGGING]: RingBufferLogger enforces 10,000 entry capacity with FIFO oldest-entry eviction (PASSED)");
+
     println!("\n==================================================================");
-    println!("ALL 44 VERIFICATION & RELIABILITY TESTS PASSED!");
+    println!("ALL 49 VERIFICATION & RELIABILITY TESTS PASSED!");
     println!("==================================================================");
 }
 
@@ -1193,9 +1208,15 @@ fn test_y_snapshot_restore_failure_is_fatal_to_rollback() {
         &settings,
         1,
         Some(50),
+        Some(5),
         Some("FRA".to_string()),
         Some("1.1.1.1".to_string()),
+        None,
+        None,
+        None,
+        None,
         snapshot,
+        "SimulatedScanFailure".to_string(),
         "Simulated scan failure".to_string(),
     ));
 
@@ -1638,4 +1659,167 @@ fn test_ai_repeated_saves_do_not_duplicate_dota_sdr_rule() {
         settings.compatibility.custom_compatibility_rules[0].id,
         dota_rule_id
     );
+}
+
+fn test_aj_dota2_mode_direct_routes_to_direct() {
+    let mut settings = AppSettings::default();
+
+    // Dota 2 main application route: dota2.exe -> Aether
+    settings.application_rules = vec![ApplicationRule::new(
+        "Dota 2",
+        "dota2.exe",
+        RouteDestination::Aether,
+        None,
+        RuleSource::User,
+        RulePriority::Normal,
+        None,
+    )];
+
+    // Mode: Direct
+    let dota_compat = CompatibilityRule {
+        id: "compat-dota2-valve-sdr".to_string(),
+        name: "Valve SDR / Game UDP (Dota 2)".to_string(),
+        description: "Routes only Dota 2 Valve UDP traffic (27000-27250) Direct".to_string(),
+        enabled: true,
+        process_names: Some(vec!["dota2.exe".to_string()]),
+        ports: Some((27000..=27250).collect()),
+        port_ranges: Some(vec!["27000:27250".to_string()]),
+        network: Some(NetworkProtocol::Udp),
+        destination: RouteDestination::Direct,
+        scope: CompatibilityScope::AppScoped,
+    };
+    settings.compatibility.custom_compatibility_rules.push(dota_compat);
+
+    let config = SingBoxConfigGenerator::generate(&settings);
+
+    let route_direct = SingBoxConfigGenerator::resolve_route_with_network(
+        &config,
+        Some("dota2.exe"),
+        Some(27036),
+        Some("udp"),
+        false,
+    );
+    assert_eq!(route_direct, "direct", "dota2.exe UDP :27036 with mode Direct must route to direct");
+}
+
+fn test_ak_user_compatibility_rules_preserved_on_dota_save() {
+    let mut settings = AppSettings::default();
+
+    // User created custom compatibility rule (must be preserved untouched)
+    let user_rule = CompatibilityRule {
+        id: "user-custom-compat".to_string(),
+        name: "User Custom Rule".to_string(),
+        description: "Custom user compatibility rule".to_string(),
+        enabled: true,
+        process_names: Some(vec!["custom-app.exe".to_string()]),
+        ports: Some(vec![9999]),
+        port_ranges: None,
+        network: Some(NetworkProtocol::Udp),
+        destination: RouteDestination::SecondaryProxy,
+        scope: CompatibilityScope::AppScoped,
+    };
+    settings.compatibility.custom_compatibility_rules.push(user_rule.clone());
+
+    // Simulate saving Dota with managed rule
+    let dota_rule = CompatibilityRule {
+        id: "compat-dota2-valve-sdr".to_string(),
+        name: "Valve SDR / Game UDP (Dota 2)".to_string(),
+        description: "Routes only Dota 2 Valve UDP traffic".to_string(),
+        enabled: true,
+        process_names: Some(vec!["dota2.exe".to_string()]),
+        ports: Some((27000..=27250).collect()),
+        port_ranges: Some(vec!["27000:27250".to_string()]),
+        network: Some(NetworkProtocol::Udp),
+        destination: RouteDestination::SecondaryProxy,
+        scope: CompatibilityScope::AppScoped,
+    };
+
+    let mut rules = settings.compatibility.custom_compatibility_rules.clone();
+    rules.retain(|r| r.id != "compat-dota2-valve-sdr");
+    rules.push(dota_rule);
+    settings.compatibility.custom_compatibility_rules = rules;
+
+    assert_eq!(settings.compatibility.custom_compatibility_rules.len(), 2);
+    assert!(settings.compatibility.custom_compatibility_rules.iter().any(|r| r.id == "user-custom-compat"));
+
+    // Simulate switching Dota to "Follow Main Route" (managed rule removed)
+    let mut rules_follow = settings.compatibility.custom_compatibility_rules.clone();
+    rules_follow.retain(|r| r.id != "compat-dota2-valve-sdr");
+    settings.compatibility.custom_compatibility_rules = rules_follow;
+
+    assert_eq!(settings.compatibility.custom_compatibility_rules.len(), 1);
+    assert_eq!(settings.compatibility.custom_compatibility_rules[0].id, "user-custom-compat");
+}
+
+fn test_al_gateway_optimization_evaluation_decision_logic() {
+    use aether_desktop_lib::process::orchestrator::evaluate_gateway_optimization;
+
+    // 1. Slower candidate (baseline 100ms, candidate 120ms) -> rollback
+    let (faster, required_diff, diff) = evaluate_gateway_optimization(100, 120);
+    assert!(!faster);
+    assert_eq!(required_diff, 10);
+    assert_eq!(diff, -20);
+
+    // 2. Equal / within noise margin (baseline 142ms, candidate 139ms -> diff 3ms < 10ms) -> rollback
+    let (faster, required_diff, diff) = evaluate_gateway_optimization(142, 139);
+    assert!(!faster);
+    assert_eq!(required_diff, 10);
+    assert_eq!(diff, 3);
+
+    // 3. Meaningfully faster candidate (baseline 142ms, candidate 111ms -> diff 31ms >= 10ms) -> keep
+    let (faster, required_diff, diff) = evaluate_gateway_optimization(142, 111);
+    assert!(faster);
+    assert_eq!(required_diff, 10);
+    assert_eq!(diff, 31);
+
+    // 4. Higher baseline 5% threshold (baseline 300ms, candidate 288ms -> required is 15ms, diff is 12ms) -> rollback
+    let (faster, required_diff, diff) = evaluate_gateway_optimization(300, 288);
+    assert!(!faster);
+    assert_eq!(required_diff, 15);
+    assert_eq!(diff, 12);
+
+    // 5. Higher baseline meeting 5% threshold (baseline 300ms, candidate 280ms -> required is 15ms, diff is 20ms) -> keep
+    let (faster, required_diff, diff) = evaluate_gateway_optimization(300, 280);
+    assert!(faster);
+    assert_eq!(required_diff, 15);
+    assert_eq!(diff, 20);
+}
+
+fn test_am_latency_profile_median_mad_and_insufficient_samples() {
+    use aether_desktop_lib::models::health::LatencyProfile;
+
+    // 1. Valid 5 samples
+    let samples = vec![140, 142, 145, 141, 142];
+    let profile = LatencyProfile::compute_from_samples(&samples, 5, None).unwrap();
+    assert_eq!(profile.successful_samples, 5);
+    assert_eq!(profile.median_ms, 142);
+    assert_eq!(profile.jitter_mad_ms, 1); // devs: |140-142|=2, |141-142|=1, |142-142|=0, |142-142|=0, |145-142|=3 -> sorted [0, 0, 1, 2, 3] -> median = 1
+
+    // 2. Samples with single outlier spike (robustness of median and MAD)
+    let samples_with_spike = vec![110, 112, 115, 250, 111];
+    let profile_spike = LatencyProfile::compute_from_samples(&samples_with_spike, 5, None).unwrap();
+    assert_eq!(profile_spike.median_ms, 112);
+    assert_eq!(profile_spike.jitter_mad_ms, 2);
+
+    // 3. Insufficient samples (3 samples < 4 required) -> Err
+    let insufficient_samples = vec![140, 142, 145];
+    let err = LatencyProfile::compute_from_samples(&insufficient_samples, 5, None);
+    assert!(err.is_err());
+    assert!(err.unwrap_err().contains("minimum 4 required"));
+}
+
+fn test_an_ring_buffer_logger_10000_capacity_and_eviction() {
+    let logger = aether_desktop_lib::logging::RingBufferLogger::new(10000);
+
+    for i in 0..10005 {
+        logger.log("INFO", "App", format!("Message {}", i));
+    }
+
+    let entries = logger.get_entries();
+    assert_eq!(entries.len(), 10000, "RingBufferLogger capacity must cap at exactly 10000 entries");
+    assert_eq!(entries[0].message, "Message 5", "Oldest 5 entries must have been evicted");
+    assert_eq!(entries[9999].message, "Message 10004", "Newest entry must be retained");
+
+    let exported = logger.export_as_string();
+    assert_eq!(exported.lines().count(), 10000);
 }

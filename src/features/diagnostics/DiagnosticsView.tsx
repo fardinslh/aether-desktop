@@ -99,6 +99,12 @@ export const DiagnosticsView: React.FC<DiagnosticsViewProps> = ({ logs, onRefres
     selectedSource === "ALL" ? true : l.source.toUpperCase() === selectedSource
   );
 
+  const DISPLAY_LOG_LIMIT = 1500;
+  const isDisplayTruncated = filteredLogs.length > DISPLAY_LOG_LIMIT;
+  const displayLogs = isDisplayTruncated
+    ? filteredLogs.slice(-DISPLAY_LOG_LIMIT)
+    : filteredLogs;
+
   // 1. When filter changes: snap to newest matching logs and restore live-follow mode
   useEffect(() => {
     shouldAutoScrollRef.current = true;
@@ -119,7 +125,7 @@ export const DiagnosticsView: React.FC<DiagnosticsViewProps> = ({ logs, onRefres
         }
       });
     }
-  }, [filteredLogs]);
+  }, [displayLogs]);
 
   return (
     <div className="flex flex-col h-full px-4 py-2.5 space-y-2.5 select-none">
@@ -200,31 +206,38 @@ export const DiagnosticsView: React.FC<DiagnosticsViewProps> = ({ logs, onRefres
           onScroll={handleScroll}
           className="flex-1 overflow-y-auto rounded-md border border-app-border bg-app-inset p-3 font-mono text-[11px] space-y-1 max-h-[380px]"
         >
-          {filteredLogs.length === 0 ? (
+          {displayLogs.length === 0 ? (
             <div className="text-ink-500 text-center py-10">No log telemetry events recorded in current runtime buffer.</div>
           ) : (
-            filteredLogs.map((l) => (
-              <div key={l.id} className="flex items-start gap-2 hover:bg-app-surface/40 px-1 py-0.5 rounded-xs">
-                <span className="text-ink-500 shrink-0 select-none text-[10px]">
-                  {new Date(l.timestamp).toLocaleTimeString()}
-                </span>
-                <span
-                  className={`px-1 py-0.1 rounded-xs text-[9px] font-bold shrink-0 select-none ${
-                    l.level === "ERROR"
-                      ? "bg-signal-red-dim text-signal-red border border-signal-red/30"
-                      : l.level === "WARN"
-                      ? "bg-signal-amber-dim text-signal-amber border border-signal-amber/30"
-                      : "bg-app-panel text-ink-400 border border-app-border-subtle"
-                  }`}
-                >
-                  {l.level}
-                </span>
-                <span className="text-signal-cyan shrink-0 font-medium select-none text-[10px]">
-                  [{l.source}]
-                </span>
-                <span className="text-ink-200 break-all leading-tight">{l.message}</span>
-              </div>
-            ))
+            <>
+              {isDisplayTruncated && (
+                <div className="text-[10px] text-ink-400 bg-app-surface/60 border border-app-border-subtle px-2 py-1 rounded-xs mb-1 text-center font-mono">
+                  Displaying latest {DISPLAY_LOG_LIMIT.toLocaleString()} of {filteredLogs.length.toLocaleString()} events · Complete {logs.length.toLocaleString()} log history exported via Export Raw Log
+                </div>
+              )}
+              {displayLogs.map((l) => (
+                <div key={l.id} className="flex items-start gap-2 hover:bg-app-surface/40 px-1 py-0.5 rounded-xs">
+                  <span className="text-ink-500 shrink-0 select-none text-[10px]">
+                    {new Date(l.timestamp).toLocaleTimeString()}
+                  </span>
+                  <span
+                    className={`px-1 py-0.1 rounded-xs text-[9px] font-bold shrink-0 select-none ${
+                      l.level === "ERROR"
+                        ? "bg-signal-red-dim text-signal-red border border-signal-red/30"
+                        : l.level === "WARN"
+                        ? "bg-signal-amber-dim text-signal-amber border border-signal-amber/30"
+                        : "bg-app-panel text-ink-400 border border-app-border-subtle"
+                    }`}
+                  >
+                    {l.level}
+                  </span>
+                  <span className="text-signal-cyan shrink-0 font-medium select-none text-[10px]">
+                    [{l.source}]
+                  </span>
+                  <span className="text-ink-200 break-all leading-tight">{l.message}</span>
+                </div>
+              ))}
+            </>
           )}
         </div>
 

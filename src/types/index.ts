@@ -187,12 +187,15 @@ export interface DownloadProgress {
 export interface RouteOptimizationResult {
   success: boolean;
   previousLatencyMs?: number | null;
+  previousJitterMs?: number | null;
   previousPop?: string | null;
   previousIp?: string | null;
   newLatencyMs?: number | null;
+  newJitterMs?: number | null;
   newPop?: string | null;
   newIp?: string | null;
   latencyDeltaMs?: number | null;
+  decision?: string | null;
   message: string;
 }
 

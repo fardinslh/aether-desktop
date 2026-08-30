@@ -17,13 +17,31 @@ use tokio::sync::Mutex;
 pub struct RouteOptimizationResult {
     pub success: bool,
     pub previous_latency_ms: Option<u64>,
+    pub previous_jitter_ms: Option<u64>,
     pub previous_pop: Option<String>,
     pub previous_ip: Option<String>,
     pub new_latency_ms: Option<u64>,
+    pub new_jitter_ms: Option<u64>,
     pub new_pop: Option<String>,
     pub new_ip: Option<String>,
     pub latency_delta_ms: Option<i64>,
+    pub decision: String,
     pub message: String,
+}
+
+/// Evaluates candidate gateway latency against baseline with a bounded anti-noise threshold
+pub fn evaluate_gateway_optimization(
+    baseline_median_ms: u64,
+    candidate_median_ms: u64,
+) -> (bool, u64, i64) {
+    let required_improvement_ms = (10u64).max((baseline_median_ms as f64 * 0.05).round() as u64);
+    let is_faster = candidate_median_ms + required_improvement_ms <= baseline_median_ms;
+    let improvement_ms = if baseline_median_ms >= candidate_median_ms {
+        (baseline_median_ms - candidate_median_ms) as i64
+    } else {
+        -((candidate_median_ms - baseline_median_ms) as i64)
+    };
+    (is_faster, required_improvement_ms, improvement_ms)
 }
 
 pub struct ConnectionOrchestrator {
@@ -498,26 +516,51 @@ impl ConnectionOrchestrator {
                     ),
                 );
 
-                // Step 1: PREPARE - capture verified telemetry and snapshot native persistence files
-                let prev_trace = HealthProber::query_cloudflare_trace_via_socks5(
+                // Step 1: PREPARE - measure multi-sample baseline latency before disruption
+                self.logger.log(
+                    "INFO",
+                    "Aether",
+                    format!(
+                        "[Optimize #{}] Measuring baseline path latency (5 samples)...",
+                        opt_id
+                    ),
+                );
+
+                let baseline_profile = match HealthProber::measure_socks5_latency_samples(
                     &settings.aether.host,
                     settings.aether.port,
+                    5,
+                    Duration::from_millis(150),
                 )
                 .await
-                .ok();
-                let prev_latency_ms = prev_trace.as_ref().map(|t| t.latency_ms);
-                let prev_pop = prev_trace.as_ref().map(|t| t.colo.clone());
-                let prev_ip = prev_trace.as_ref().map(|t| t.ip.clone());
+                {
+                    Ok(p) => p,
+                    Err(e) => {
+                        let err = format!(
+                            "[Optimize #{}] Baseline latency measurement failed: {}. Aborting optimization without disrupting active connection.",
+                            opt_id, e
+                        );
+                        self.logger.log("ERROR", "Aether", &err);
+                        return Err(err);
+                    }
+                };
+
+                let prev_latency_ms = Some(baseline_profile.median_ms);
+                let prev_jitter_ms = Some(baseline_profile.jitter_mad_ms);
+                let prev_pop = baseline_profile.latest_trace.as_ref().map(|t| t.colo.clone());
+                let prev_ip = baseline_profile.latest_trace.as_ref().map(|t| t.ip.clone());
 
                 self.logger.log(
                     "INFO",
                     "Aether",
                     format!(
-                        "[Optimize #{}] Previous gateway: POP: {}, IP: {}, Latency: {:?} ms",
+                        "[Optimize #{}] Baseline path: Median: {} ms, Jitter: {} ms ({} of 5 samples succeeded). Egress IP: {}, POP: {}",
                         opt_id,
-                        prev_pop.as_deref().unwrap_or("unknown"),
+                        baseline_profile.median_ms,
+                        baseline_profile.jitter_mad_ms,
+                        baseline_profile.successful_samples,
                         prev_ip.as_deref().unwrap_or("unknown"),
-                        prev_latency_ms
+                        prev_pop.as_deref().unwrap_or("unknown")
                     ),
                 );
 
@@ -592,9 +635,15 @@ impl ConnectionOrchestrator {
                                 settings,
                                 opt_id,
                                 prev_latency_ms,
+                                prev_jitter_ms,
                                 prev_pop,
                                 prev_ip,
+                                None,
+                                None,
+                                None,
+                                None,
                                 snapshot,
+                                "AbortTunTeardownFailed".to_string(),
                                 format!("TUN teardown could not be confirmed before fresh scan: {}", e),
                             )
                             .await;
@@ -631,22 +680,27 @@ impl ConnectionOrchestrator {
                             settings,
                             opt_id,
                             prev_latency_ms,
+                            prev_jitter_ms,
                             prev_pop,
                             prev_ip,
+                            None,
+                            None,
+                            None,
+                            None,
                             snapshot,
+                            "RollbackSpawnFailed".to_string(),
                             e,
                         )
                         .await;
                 }
                 self.is_aether_managed.store(true, Ordering::SeqCst);
 
-                // Step 4: DEADLINE & DIAGNOSTICS - wait for Aether SOCKS proxy ready
+                // Step 4: DEADLINE & SOCKS READY CHECK
                 let startup_deadline = crate::models::settings::aether_startup_timeout(
                     &crate::models::settings::AetherScanMode::Thorough,
                 );
                 let check_interval = Duration::from_millis(300);
                 let mut aether_ready = false;
-                let mut new_trace_opt = None;
 
                 while t_scan_start.elapsed() < startup_deadline {
                     tokio::time::sleep(check_interval).await;
@@ -676,7 +730,6 @@ impl ConnectionOrchestrator {
                         {
                             Ok(trace) => {
                                 *self.active_aether_ip.write() = Some(trace.ip.clone());
-                                new_trace_opt = Some(trace);
                                 aether_ready = true;
                                 break;
                             }
@@ -708,9 +761,15 @@ impl ConnectionOrchestrator {
                             settings,
                             opt_id,
                             prev_latency_ms,
+                            prev_jitter_ms,
                             prev_pop,
                             prev_ip,
+                            None,
+                            None,
+                            None,
+                            None,
                             snapshot,
+                            "RollbackTimeout".to_string(),
                             format!(
                                 "Fresh scan did not yield a responsive gateway within {:.1}s deadline",
                                 elapsed_s
@@ -719,25 +778,121 @@ impl ConnectionOrchestrator {
                         .await;
                 }
 
-                let new_trace = new_trace_opt.unwrap();
-                let new_latency_ms = new_trace.latency_ms;
-                let new_pop = new_trace.colo.clone();
-                let new_ip = new_trace.ip.clone();
+                // Step 5: MEASURE CANDIDATE PATH (5 samples)
+                self.logger.log(
+                    "INFO",
+                    "Aether",
+                    format!(
+                        "[Optimize #{}] SOCKS listener ready in {:.2}s. Measuring candidate path latency (5 samples)...",
+                        opt_id,
+                        t_scan_start.elapsed().as_secs_f32()
+                    ),
+                );
+
+                let candidate_profile = match HealthProber::measure_socks5_latency_samples(
+                    &settings.aether.host,
+                    settings.aether.port,
+                    5,
+                    Duration::from_millis(150),
+                )
+                .await
+                {
+                    Ok(p) => p,
+                    Err(e) => {
+                        self.logger.log(
+                            "WARN",
+                            "Aether",
+                            format!(
+                                "[Optimize #{}] Candidate path latency could not be measured reliably ({}). Rolling back to previous path.",
+                                opt_id, e
+                            ),
+                        );
+                        return self
+                            .rollback_and_restore(
+                                settings,
+                                opt_id,
+                                prev_latency_ms,
+                                prev_jitter_ms,
+                                prev_pop,
+                                prev_ip,
+                                None,
+                                None,
+                                None,
+                                None,
+                                snapshot,
+                                "RollbackCandidateFailed".to_string(),
+                                format!("Candidate latency measurement failed: {}", e),
+                            )
+                            .await;
+                    }
+                };
+
+                let new_latency_ms = candidate_profile.median_ms;
+                let new_jitter_ms = candidate_profile.jitter_mad_ms;
+                let new_pop = candidate_profile
+                    .latest_trace
+                    .as_ref()
+                    .map(|t| t.colo.clone())
+                    .unwrap_or_else(|| "unknown".to_string());
+                let new_ip = candidate_profile
+                    .latest_trace
+                    .as_ref()
+                    .map(|t| t.ip.clone())
+                    .unwrap_or_else(|| "unknown".to_string());
 
                 self.logger.log(
                     "INFO",
                     "Aether",
                     format!(
-                        "[Optimize #{}] Aether SOCKS ready in {:.2}s. New gateway: POP: {}, IP: {}, Latency: {:?} ms",
+                        "[Optimize #{}] Candidate path: Median: {} ms, Jitter: {} ms ({} of 5 samples succeeded). Egress IP: {}, POP: {}",
                         opt_id,
-                        t_scan_start.elapsed().as_secs_f32(),
-                        new_pop,
+                        new_latency_ms,
+                        new_jitter_ms,
+                        candidate_profile.successful_samples,
                         new_ip,
-                        new_latency_ms
+                        new_pop
                     ),
                 );
 
-                // Step 5: ROUTING SETUP & VERIFICATION
+                // Step 6: DECISION - evaluate whether candidate is meaningfully faster
+                let (is_faster, required_improvement_ms, latency_delta_ms) =
+                    evaluate_gateway_optimization(baseline_profile.median_ms, new_latency_ms);
+
+                if !is_faster {
+                    let reject_msg = format!(
+                        "Candidate path (Median: {} ms) was not meaningfully faster than previous path (Median: {} ms, required improvement: {} ms). Restoring previous gateway.",
+                        new_latency_ms, baseline_profile.median_ms, required_improvement_ms
+                    );
+                    self.logger.log("INFO", "Aether", format!("[Optimize #{}] {}", opt_id, reject_msg));
+                    return self
+                        .rollback_and_restore(
+                            settings,
+                            opt_id,
+                            prev_latency_ms,
+                            prev_jitter_ms,
+                            prev_pop,
+                            prev_ip,
+                            Some(new_latency_ms),
+                            Some(new_jitter_ms),
+                            Some(new_pop),
+                            Some(new_ip),
+                            snapshot,
+                            "RolledBackSlowerOrEqual".to_string(),
+                            reject_msg,
+                        )
+                        .await;
+                }
+
+                self.logger.log(
+                    "INFO",
+                    "Aether",
+                    format!(
+                        "[Optimize #{}] Candidate is genuinely faster (Median: {} ms vs {} ms, improved by {} ms >= {} ms threshold). Retaining new gateway.",
+                        opt_id, new_latency_ms, baseline_profile.median_ms, latency_delta_ms, required_improvement_ms
+                    ),
+                );
+
+                // Step 7: ROUTING SETUP & VERIFICATION
                 self.set_state(ConnectionState::StartingRouter);
                 let sb_spawn_res = {
                     let mut sb_guard = self.singbox.lock().await;
@@ -757,9 +912,15 @@ impl ConnectionOrchestrator {
                             settings,
                             opt_id,
                             prev_latency_ms,
+                            prev_jitter_ms,
                             prev_pop,
                             prev_ip,
+                            Some(new_latency_ms),
+                            Some(new_jitter_ms),
+                            Some(new_pop),
+                            Some(new_ip),
                             snapshot,
+                            "RollbackSingboxFailed".to_string(),
                             e,
                         )
                         .await;
@@ -796,15 +957,21 @@ impl ConnectionOrchestrator {
                             settings,
                             opt_id,
                             prev_latency_ms,
+                            prev_jitter_ms,
                             prev_pop,
                             prev_ip,
+                            Some(new_latency_ms),
+                            Some(new_jitter_ms),
+                            Some(new_pop),
+                            Some(new_ip),
                             snapshot,
+                            "RollbackRoutingVerificationFailed".to_string(),
                             verify_err,
                         )
                         .await;
                 }
 
-                // Step 6: COMMIT - discard old snapshot, retain newly selected working endpoint
+                // Step 8: COMMIT - discard old snapshot, retain newly selected faster gateway
                 snapshot.cleanup();
 
                 self.logger.log(
@@ -819,31 +986,23 @@ impl ConnectionOrchestrator {
                 );
                 self.set_state(ConnectionState::Connected);
 
-                let latency_delta_ms =
-                    prev_latency_ms.map(|prev| prev as i64 - new_latency_ms as i64);
-
-                let msg = match latency_delta_ms {
-                    Some(delta) if delta > 0 => {
-                        format!("Gateway optimized! Latency improved by {} ms.", delta)
-                    }
-                    Some(_) => {
-                        format!(
-                            "Fresh scan complete. Selected lowest current RTT candidate ({} ms).",
-                            new_latency_ms
-                        )
-                    }
-                    None => "Fresh scan complete. Connected to optimal gateway.".to_string(),
-                };
+                let msg = format!(
+                    "New faster gateway kept (Median: {} ms, Jitter: {} ms, improved by {} ms vs previous {} ms).",
+                    new_latency_ms, new_jitter_ms, latency_delta_ms, baseline_profile.median_ms
+                );
 
                 Ok(RouteOptimizationResult {
                     success: true,
                     previous_latency_ms: prev_latency_ms,
+                    previous_jitter_ms: prev_jitter_ms,
                     previous_pop: prev_pop,
                     previous_ip: prev_ip,
                     new_latency_ms: Some(new_latency_ms),
+                    new_jitter_ms: Some(new_jitter_ms),
                     new_pop: Some(new_pop),
                     new_ip: Some(new_ip),
-                    latency_delta_ms,
+                    latency_delta_ms: Some(latency_delta_ms),
+                    decision: "KeptFaster".to_string(),
                     message: msg,
                 })
             }
@@ -890,15 +1049,23 @@ impl ConnectionOrchestrator {
                 // Run connection with opt_options
                 self.connect_internal(settings, opt_id, &opt_options).await?;
 
-                let new_trace = HealthProber::query_cloudflare_trace_via_socks5(
+                let sample_profile = HealthProber::measure_socks5_latency_samples(
                     &settings.aether.host,
                     settings.aether.port,
+                    5,
+                    Duration::from_millis(150),
                 )
                 .await
                 .ok();
-                let new_latency_ms = new_trace.as_ref().map(|t| t.latency_ms);
-                let new_pop = new_trace.as_ref().map(|t| t.colo.clone());
-                let new_ip = new_trace.as_ref().map(|t| t.ip.clone());
+
+                let new_latency_ms = sample_profile.as_ref().map(|p| p.median_ms);
+                let new_jitter_ms = sample_profile.as_ref().map(|p| p.jitter_mad_ms);
+                let new_pop = sample_profile
+                    .as_ref()
+                    .and_then(|p| p.latest_trace.as_ref().map(|t| t.colo.clone()));
+                let new_ip = sample_profile
+                    .as_ref()
+                    .and_then(|p| p.latest_trace.as_ref().map(|t| t.ip.clone()));
 
                 self.logger.log(
                     "INFO",
@@ -909,16 +1076,26 @@ impl ConnectionOrchestrator {
                     ),
                 );
 
+                let msg = match (new_latency_ms, new_jitter_ms) {
+                    (Some(lat), Some(jit)) => {
+                        format!("Connected via fresh Thorough scan (Median: {} ms, Jitter: {} ms).", lat, jit)
+                    }
+                    _ => "Connected via fresh Thorough scan.".to_string(),
+                };
+
                 Ok(RouteOptimizationResult {
                     success: true,
                     previous_latency_ms: None,
+                    previous_jitter_ms: None,
                     previous_pop: None,
                     previous_ip: None,
                     new_latency_ms,
+                    new_jitter_ms,
                     new_pop,
                     new_ip,
                     latency_delta_ms: None,
-                    message: "Connected to best available gateway via Thorough scan.".to_string(),
+                    decision: "InitialConnected".to_string(),
+                    message: msg,
                 })
             }
             _ => Err("Connection operation already in progress".to_string()),
@@ -930,16 +1107,22 @@ impl ConnectionOrchestrator {
         settings: &AppSettings,
         opt_id: u64,
         prev_latency_ms: Option<u64>,
+        prev_jitter_ms: Option<u64>,
         prev_pop: Option<String>,
         prev_ip: Option<String>,
+        candidate_latency_ms: Option<u64>,
+        candidate_jitter_ms: Option<u64>,
+        candidate_pop: Option<String>,
+        candidate_ip: Option<String>,
         snapshot: crate::settings::storage::AetherPersistenceSnapshot,
+        decision: String,
         failure_reason: String,
     ) -> Result<RouteOptimizationResult, String> {
         self.logger.log(
             "WARN",
             "STATE",
             format!(
-                "[Optimize #{}] Fresh scan failed ({}), restoring previous working gateway via Quick Reconnect (25s deadline)...",
+                "[Optimize #{}] Restoring previous working gateway via Quick Reconnect (25s deadline)... Reason: {}",
                 opt_id, failure_reason
             ),
         );
@@ -988,24 +1171,28 @@ impl ConnectionOrchestrator {
                         opt_id
                     ),
                 );
+                let latency_delta_ms = match (prev_latency_ms, candidate_latency_ms) {
+                    (Some(prev), Some(cand)) => Some(prev as i64 - cand as i64),
+                    _ => None,
+                };
                 Ok(RouteOptimizationResult {
                     success: false,
                     previous_latency_ms: prev_latency_ms,
+                    previous_jitter_ms: prev_jitter_ms,
                     previous_pop: prev_pop,
                     previous_ip: prev_ip,
-                    new_latency_ms: None,
-                    new_pop: None,
-                    new_ip: None,
-                    latency_delta_ms: None,
-                    message: format!(
-                        "Fresh scan failed ({}). Restored previous working connection.",
-                        failure_reason
-                    ),
+                    new_latency_ms: candidate_latency_ms,
+                    new_jitter_ms: candidate_jitter_ms,
+                    new_pop: candidate_pop,
+                    new_ip: candidate_ip,
+                    latency_delta_ms,
+                    decision,
+                    message: failure_reason,
                 })
             }
             Err(restore_err) => {
                 let err = format!(
-                    "Fresh scan failed ({}) AND restoration of previous connection also failed ({})",
+                    "Optimization rollback failed ({}) AND restoration of previous connection also failed ({})",
                     failure_reason, restore_err
                 );
                 self.set_error(err.clone());
@@ -1212,9 +1399,15 @@ mod tests {
                 &settings,
                 1,
                 Some(50),
+                Some(5),
                 Some("FRA".to_string()),
                 Some("1.1.1.1".to_string()),
+                None,
+                None,
+                None,
+                None,
                 snapshot,
+                "SimulatedScanFailure".to_string(),
                 "Simulated scan failure".to_string(),
             )
             .await;
