@@ -227,6 +227,10 @@ export const ConnectionHero: React.FC<ConnectionHeroProps> = ({
                 <div className="font-bold uppercase tracking-wider text-[10px]">
                   {optimizationResult.decision === "KeptFaster"
                     ? "New Faster Gateway Kept"
+                    : optimizationResult.decision === "CandidateTooUnstable"
+                    ? "Candidate Too Unstable · Previous Path Restored"
+                    : optimizationResult.decision === "NotEnoughLatencyImprovement"
+                    ? "Not Enough Latency Improvement · Previous Path Restored"
                     : optimizationResult.decision === "RolledBackSlowerOrEqual"
                     ? "Candidate Not Faster · Previous Path Restored"
                     : optimizationResult.decision === "InitialConnected"

@@ -29,19 +29,65 @@ pub struct RouteOptimizationResult {
     pub message: String,
 }
 
-/// Evaluates candidate gateway latency against baseline with a bounded anti-noise threshold
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GatewayOptimizationDecision {
+    KeptFaster,
+    NotEnoughLatencyImprovement,
+    CandidateTooUnstable,
+}
+
+impl GatewayOptimizationDecision {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            GatewayOptimizationDecision::KeptFaster => "KeptFaster",
+            GatewayOptimizationDecision::NotEnoughLatencyImprovement => {
+                "NotEnoughLatencyImprovement"
+            }
+            GatewayOptimizationDecision::CandidateTooUnstable => "CandidateTooUnstable",
+        }
+    }
+
+    pub fn is_keep(&self) -> bool {
+        matches!(self, GatewayOptimizationDecision::KeptFaster)
+    }
+}
+
+/// Evaluates candidate gateway latency and jitter against baseline with bounded anti-noise
+/// and stability thresholds.
+///
+/// Returns:
+/// - decision: `GatewayOptimizationDecision` (`KeptFaster`, `NotEnoughLatencyImprovement`, `CandidateTooUnstable`)
+/// - required_improvement_ms: minimum required latency drop `max(10 ms, 5% of baseline median)`
+/// - latency_delta_ms: measured difference `(baseline_median - candidate_median)`
+/// - max_allowable_jitter_ms: maximum permitted candidate jitter `max(baseline_jitter + 10 ms, baseline_jitter * 2)`
 pub fn evaluate_gateway_optimization(
     baseline_median_ms: u64,
+    baseline_jitter_ms: u64,
     candidate_median_ms: u64,
-) -> (bool, u64, i64) {
+    candidate_jitter_ms: u64,
+) -> (GatewayOptimizationDecision, u64, i64, u64) {
     let required_improvement_ms = (10u64).max((baseline_median_ms as f64 * 0.05).round() as u64);
-    let is_faster = candidate_median_ms + required_improvement_ms <= baseline_median_ms;
-    let improvement_ms = if baseline_median_ms >= candidate_median_ms {
-        (baseline_median_ms - candidate_median_ms) as i64
+    let latency_delta_ms = (baseline_median_ms as i64) - (candidate_median_ms as i64);
+    let is_latency_sufficient =
+        candidate_median_ms + required_improvement_ms <= baseline_median_ms;
+
+    let max_allowable_jitter_ms = (baseline_jitter_ms + 10).max(baseline_jitter_ms * 2);
+    let is_jitter_acceptable = candidate_jitter_ms <= max_allowable_jitter_ms;
+
+    let decision = if !is_latency_sufficient {
+        GatewayOptimizationDecision::NotEnoughLatencyImprovement
+    } else if !is_jitter_acceptable {
+        GatewayOptimizationDecision::CandidateTooUnstable
     } else {
-        -((candidate_median_ms - baseline_median_ms) as i64)
+        GatewayOptimizationDecision::KeptFaster
     };
-    (is_faster, required_improvement_ms, improvement_ms)
+
+    (
+        decision,
+        required_improvement_ms,
+        latency_delta_ms,
+        max_allowable_jitter_ms,
+    )
 }
 
 pub struct ConnectionOrchestrator {
@@ -854,43 +900,87 @@ impl ConnectionOrchestrator {
                     ),
                 );
 
-                // Step 6: DECISION - evaluate whether candidate is meaningfully faster
-                let (is_faster, required_improvement_ms, latency_delta_ms) =
-                    evaluate_gateway_optimization(baseline_profile.median_ms, new_latency_ms);
-
-                if !is_faster {
-                    let reject_msg = format!(
-                        "Candidate path (Median: {} ms) was not meaningfully faster than previous path (Median: {} ms, required improvement: {} ms). Restoring previous gateway.",
-                        new_latency_ms, baseline_profile.median_ms, required_improvement_ms
-                    );
-                    self.logger.log("INFO", "Aether", format!("[Optimize #{}] {}", opt_id, reject_msg));
-                    return self
-                        .rollback_and_restore(
-                            settings,
-                            opt_id,
-                            prev_latency_ms,
-                            prev_jitter_ms,
-                            prev_pop,
-                            prev_ip,
-                            Some(new_latency_ms),
-                            Some(new_jitter_ms),
-                            Some(new_pop),
-                            Some(new_ip),
-                            snapshot,
-                            "RolledBackSlowerOrEqual".to_string(),
-                            reject_msg,
-                        )
-                        .await;
-                }
-
-                self.logger.log(
-                    "INFO",
-                    "Aether",
-                    format!(
-                        "[Optimize #{}] Candidate is genuinely faster (Median: {} ms vs {} ms, improved by {} ms >= {} ms threshold). Retaining new gateway.",
-                        opt_id, new_latency_ms, baseline_profile.median_ms, latency_delta_ms, required_improvement_ms
-                    ),
+                // Step 6: DECISION - evaluate whether candidate is meaningfully faster and stable
+                let (
+                    decision,
+                    required_improvement_ms,
+                    latency_delta_ms,
+                    max_allowable_jitter_ms,
+                ) = evaluate_gateway_optimization(
+                    baseline_profile.median_ms,
+                    baseline_profile.jitter_mad_ms,
+                    new_latency_ms,
+                    new_jitter_ms,
                 );
+
+                match decision {
+                    GatewayOptimizationDecision::NotEnoughLatencyImprovement => {
+                        let reject_msg = format!(
+                            "Candidate path (Median: {} ms) was not meaningfully faster than previous path (Median: {} ms, required improvement: {} ms). Restoring previous gateway.",
+                            new_latency_ms, baseline_profile.median_ms, required_improvement_ms
+                        );
+                        self.logger
+                            .log("INFO", "Aether", format!("[Optimize #{}] {}", opt_id, reject_msg));
+                        return self
+                            .rollback_and_restore(
+                                settings,
+                                opt_id,
+                                prev_latency_ms,
+                                prev_jitter_ms,
+                                prev_pop,
+                                prev_ip,
+                                Some(new_latency_ms),
+                                Some(new_jitter_ms),
+                                Some(new_pop),
+                                Some(new_ip),
+                                snapshot,
+                                "NotEnoughLatencyImprovement".to_string(),
+                                reject_msg,
+                            )
+                            .await;
+                    }
+                    GatewayOptimizationDecision::CandidateTooUnstable => {
+                        let reject_msg = format!(
+                            "Candidate path jitter ({} ms) exceeded maximum stability threshold ({} ms, baseline jitter: {} ms). Restoring previous gateway.",
+                            new_jitter_ms, max_allowable_jitter_ms, baseline_profile.jitter_mad_ms
+                        );
+                        self.logger
+                            .log("INFO", "Aether", format!("[Optimize #{}] {}", opt_id, reject_msg));
+                        return self
+                            .rollback_and_restore(
+                                settings,
+                                opt_id,
+                                prev_latency_ms,
+                                prev_jitter_ms,
+                                prev_pop,
+                                prev_ip,
+                                Some(new_latency_ms),
+                                Some(new_jitter_ms),
+                                Some(new_pop),
+                                Some(new_ip),
+                                snapshot,
+                                "CandidateTooUnstable".to_string(),
+                                reject_msg,
+                            )
+                            .await;
+                    }
+                    GatewayOptimizationDecision::KeptFaster => {
+                        self.logger.log(
+                            "INFO",
+                            "Aether",
+                            format!(
+                                "[Optimize #{}] Candidate is genuinely faster and stable (Median: {} ms vs {} ms, improved by {} ms >= {} ms threshold; Jitter: {} ms <= {} ms). Retaining new gateway.",
+                                opt_id,
+                                new_latency_ms,
+                                baseline_profile.median_ms,
+                                latency_delta_ms,
+                                required_improvement_ms,
+                                new_jitter_ms,
+                                max_allowable_jitter_ms
+                            ),
+                        );
+                    }
+                }
 
                 // Step 7: ROUTING SETUP & VERIFICATION
                 self.set_state(ConnectionState::StartingRouter);

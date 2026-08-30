@@ -1752,37 +1752,57 @@ fn test_ak_user_compatibility_rules_preserved_on_dota_save() {
 }
 
 fn test_al_gateway_optimization_evaluation_decision_logic() {
-    use aether_desktop_lib::process::orchestrator::evaluate_gateway_optimization;
+    use aether_desktop_lib::process::orchestrator::{
+        evaluate_gateway_optimization, GatewayOptimizationDecision,
+    };
 
-    // 1. Slower candidate (baseline 100ms, candidate 120ms) -> rollback
-    let (faster, required_diff, diff) = evaluate_gateway_optimization(100, 120);
-    assert!(!faster);
+    // 1. Example 1: Faster latency but candidate jitter is way too high (baseline 130/3 vs candidate 105/80) -> CandidateTooUnstable
+    let (decision, required_diff, diff, max_jitter) = evaluate_gateway_optimization(130, 3, 105, 80);
+    assert_eq!(decision, GatewayOptimizationDecision::CandidateTooUnstable);
+    assert_eq!(required_diff, 10);
+    assert_eq!(diff, 25);
+    assert_eq!(max_jitter, 13); // max(3+10=13, 3*2=6)
+
+    // 2. Example 2: Faster latency and acceptable jitter (baseline 130/3 vs candidate 105/5) -> KeptFaster
+    let (decision, required_diff, diff, max_jitter) = evaluate_gateway_optimization(130, 3, 105, 5);
+    assert_eq!(decision, GatewayOptimizationDecision::KeptFaster);
+    assert_eq!(required_diff, 10);
+    assert_eq!(diff, 25);
+    assert_eq!(max_jitter, 13);
+
+    // 3. Example 3: Meets 5% latency threshold and acceptable jitter (baseline 300/20 vs candidate 280/22) -> KeptFaster
+    let (decision, required_diff, diff, max_jitter) = evaluate_gateway_optimization(300, 20, 280, 22);
+    assert_eq!(decision, GatewayOptimizationDecision::KeptFaster);
+    assert_eq!(required_diff, 15);
+    assert_eq!(diff, 20);
+    assert_eq!(max_jitter, 40); // max(20+10=30, 20*2=40)
+
+    // 4. Example 4: Meets latency threshold but candidate jitter too high (baseline 300/20 vs candidate 270/55) -> CandidateTooUnstable
+    let (decision, required_diff, diff, max_jitter) = evaluate_gateway_optimization(300, 20, 270, 55);
+    assert_eq!(decision, GatewayOptimizationDecision::CandidateTooUnstable);
+    assert_eq!(required_diff, 15);
+    assert_eq!(diff, 30);
+    assert_eq!(max_jitter, 40);
+
+    // 5. Slower candidate (baseline 100/2 vs candidate 120/2) -> NotEnoughLatencyImprovement
+    let (decision, required_diff, diff, _) = evaluate_gateway_optimization(100, 2, 120, 2);
+    assert_eq!(decision, GatewayOptimizationDecision::NotEnoughLatencyImprovement);
     assert_eq!(required_diff, 10);
     assert_eq!(diff, -20);
 
-    // 2. Equal / within noise margin (baseline 142ms, candidate 139ms -> diff 3ms < 10ms) -> rollback
-    let (faster, required_diff, diff) = evaluate_gateway_optimization(142, 139);
-    assert!(!faster);
+    // 6. Equal / within noise margin (baseline 142/2 vs candidate 139/2) -> NotEnoughLatencyImprovement
+    let (decision, required_diff, diff, _) = evaluate_gateway_optimization(142, 2, 139, 2);
+    assert_eq!(decision, GatewayOptimizationDecision::NotEnoughLatencyImprovement);
     assert_eq!(required_diff, 10);
     assert_eq!(diff, 3);
 
-    // 3. Meaningfully faster candidate (baseline 142ms, candidate 111ms -> diff 31ms >= 10ms) -> keep
-    let (faster, required_diff, diff) = evaluate_gateway_optimization(142, 111);
-    assert!(faster);
-    assert_eq!(required_diff, 10);
-    assert_eq!(diff, 31);
+    // 7. Near-zero baseline jitter safety handling (baseline 100/0 vs candidate 80/8 vs candidate 80/15)
+    let (decision_ok, _, _, max_jitter_zero) = evaluate_gateway_optimization(100, 0, 80, 8);
+    assert_eq!(decision_ok, GatewayOptimizationDecision::KeptFaster);
+    assert_eq!(max_jitter_zero, 10); // max(0+10=10, 0*2=0)
 
-    // 4. Higher baseline 5% threshold (baseline 300ms, candidate 288ms -> required is 15ms, diff is 12ms) -> rollback
-    let (faster, required_diff, diff) = evaluate_gateway_optimization(300, 288);
-    assert!(!faster);
-    assert_eq!(required_diff, 15);
-    assert_eq!(diff, 12);
-
-    // 5. Higher baseline meeting 5% threshold (baseline 300ms, candidate 280ms -> required is 15ms, diff is 20ms) -> keep
-    let (faster, required_diff, diff) = evaluate_gateway_optimization(300, 280);
-    assert!(faster);
-    assert_eq!(required_diff, 15);
-    assert_eq!(diff, 20);
+    let (decision_unstable, _, _, _) = evaluate_gateway_optimization(100, 0, 80, 15);
+    assert_eq!(decision_unstable, GatewayOptimizationDecision::CandidateTooUnstable);
 }
 
 fn test_am_latency_profile_median_mad_and_insufficient_samples() {
