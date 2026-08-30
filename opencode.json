@@ -7,13 +7,12 @@
       "name": "AgentRouter",
 
       "options": {
-        "baseURL": "https://co.agentrouter.org/v1",
-        "apiKey": "{env:AGENTROUTER_API_KEY}"
+        "baseURL": "https://agentrouter.org/v1"
       },
 
       "models": {
-        "step3p5-code-alpha": {
-          "name": "Step 3.5 Code Alpha"
+        "gpt-5.6-sol": {
+          "name": "GPT-5.6 Sol"
         },
 
         "gpt-5.5": {
@@ -24,28 +23,20 @@
           "name": "Claude Opus 4.8"
         },
 
-        "claude-opus-4-7": {
-          "name": "Claude Opus 4.7"
-        },
-
         "claude-opus-4-6": {
           "name": "Claude Opus 4.6"
         },
 
-        "glm-5.2": {
-          "name": "GLM 5.2"
+        "glm-4.6": {
+          "name": "GLM 4.6"
         },
 
-        "glm-5.1": {
-          "name": "GLM 5.1"
-        },
-
-        "kimi-k2.6": {
-          "name": "Kimi K2.6"
+        "deepseek-v3.2": {
+          "name": "DeepSeek V3.2"
         }
       }
     }
   },
 
-  "model": "agentrouter/step3p5-code-alpha"
+  "model": "agentrouter/gpt-5.6-sol"
 }

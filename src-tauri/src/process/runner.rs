@@ -497,10 +497,9 @@ impl SingBoxRunner {
 
     /// Complete health and routing egress verification helper.
     /// Verifies process liveness, TUN interface presence, and checks that direct system egress
-    /// matches the expected Aether public IP (preventing false positive on native ISP egress).
     /// Complete health and routing egress verification helper.
-    /// Verifies process liveness, native TUN interface presence (name and/or IP), and checks that direct system egress
-    /// matches the expected Aether public IP (preventing false positive on native ISP egress).
+    /// Verifies process liveness, native TUN interface presence (name and/or IP), stabilization window,
+    /// and checks that direct system egress matches the expected Aether public IP (preventing false positive on native ISP egress).
     pub async fn verify_router_and_egress(
         &mut self,
         interface_name: &str,
@@ -514,15 +513,48 @@ impl SingBoxRunner {
         let mut matched_adapter_name = String::new();
         let mut last_detected_adapters = Vec::new();
 
+        // 1. Initial liveness check before waiting for adapter discovery
+        if !self.is_running() {
+            return Err("sing-box process exited before TUN discovery".to_string());
+        }
+
         while start.elapsed() < max_duration {
             if !self.is_running() {
-                return Err("sing-box process exited unexpectedly during verification".to_string());
+                return Err("sing-box process exited during TUN initialization".to_string());
             }
 
             let (found, matched_info, all_adapters) =
                 HealthProber::check_tun_interface_exists(interface_name, tun_address);
             last_detected_adapters = all_adapters;
             if found {
+                // Check liveness immediately upon detecting adapter
+                if !self.is_running() {
+                    return Err("sing-box process exited during TUN initialization".to_string());
+                }
+
+                // Stabilization window (400ms)
+                // Ensure the child process remains alive and the adapter remains present
+                let stab_start = std::time::Instant::now();
+                let mut stab_failed = false;
+                while stab_start.elapsed() < Duration::from_millis(400) {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    if !self.is_running() {
+                        return Err(
+                            "sing-box process exited during TUN stabilization window".to_string(),
+                        );
+                    }
+                    let (stab_found, _, _) =
+                        HealthProber::check_tun_interface_exists(interface_name, tun_address);
+                    if !stab_found {
+                        stab_failed = true;
+                        break;
+                    }
+                }
+
+                if stab_failed {
+                    continue;
+                }
+
                 tun_detected = true;
                 if let Some(info) = matched_info {
                     matched_adapter_name = format!(
@@ -538,6 +570,9 @@ impl SingBoxRunner {
         }
 
         if !tun_detected {
+            if !self.is_running() {
+                return Err("sing-box process exited during TUN initialization".to_string());
+            }
             let mut detected_summary = Vec::new();
             for a in &last_detected_adapters {
                 let ips = if a.ip_addresses.is_empty() {
@@ -574,6 +609,11 @@ impl SingBoxRunner {
             ));
         }
 
+        // Liveness check immediately before staged egress verification
+        if !self.is_running() {
+            return Err("sing-box process exited before staged egress verification".to_string());
+        }
+
         logger.log(
             "INFO",
             "sing-box",
@@ -598,6 +638,11 @@ impl SingBoxRunner {
             Some(&log_cb),
         )
         .await?;
+
+        // Authoritative liveness check AFTER all egress stages pass
+        if !self.is_running() {
+            return Err("sing-box process exited during routing verification".to_string());
+        }
 
         logger.log(
             "INFO",

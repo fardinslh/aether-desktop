@@ -429,7 +429,33 @@ impl ConnectionOrchestrator {
             return Err(err);
         }
 
-        // 2. Launch sing-box router
+        // 2. Pre-launch TUN Conflict Guard:
+        // Before spawning a NEW managed sing-box, verify that the configured TUN interface
+        // does not already exist in the Windows network stack from an external or orphaned instance.
+        let is_singbox_already_running = self.singbox.lock().await.is_running();
+        if !is_singbox_already_running {
+            let (tun_preexists, matched_info, _) = HealthProber::check_tun_interface_exists(
+                &settings.sing_box.interface_name,
+                Some(&settings.sing_box.tun_address),
+            );
+            if tun_preexists {
+                let adapter_desc = matched_info
+                    .map(|i| format!("'{}' ({})", i.friendly_name, i.description))
+                    .unwrap_or_else(|| settings.sing_box.interface_name.clone());
+                let err = format!(
+                    "[Attempt #{}] An existing '{}' interface is already active in the network stack (adapter: {}). Another Aether Desktop or sing-box instance may still be running. Close the other instance and retry.",
+                    attempt_id, settings.sing_box.interface_name, adapter_desc
+                );
+                self.logger.log("ERROR", "sing-box", &err);
+                if self.is_aether_managed.load(Ordering::SeqCst) {
+                    self.aether.lock().await.stop(&self.logger);
+                }
+                self.set_error(err.clone());
+                return Err(err);
+            }
+        }
+
+        // 3. Launch sing-box router
         self.set_state(ConnectionState::StartingRouter);
         let t_sb_start = std::time::Instant::now();
         let sb_pid = {
@@ -552,6 +578,16 @@ impl ConnectionOrchestrator {
 
         match current_state {
             ConnectionState::Connected => {
+                // Task D: External Aether Ownership Guard
+                // If the current connection is using an external Aether instance (is_aether_managed == false),
+                // abort optimization immediately without disrupting the active connection or touching TUN.
+                if !self.is_aether_managed.load(Ordering::SeqCst) {
+                    let err = "Gateway optimization requires an Aether instance managed by Aether Desktop. Close the external Aether instance and reconnect through Aether Desktop first.".to_string();
+                    self.logger
+                        .log("WARN", "Aether", format!("[Optimize #{}] {}", opt_id, err));
+                    return Err(err);
+                }
+
                 // Connected route optimization flow
                 self.logger.log(
                     "INFO",
@@ -1097,6 +1133,17 @@ impl ConnectionOrchestrator {
                 })
             }
             ConnectionState::Disconnected | ConnectionState::Error => {
+                // Task D: External Aether Ownership Guard
+                // If port 1819 is already in use by an external listener, fresh scan cannot control it.
+                let is_port_occupied =
+                    HealthProber::check_port_open(&settings.aether.host, settings.aether.port, 150).await;
+                if is_port_occupied {
+                    let err = "Gateway optimization requires an Aether instance managed by Aether Desktop. Port 1819 is in use by an external process. Close the external instance and try again.".to_string();
+                    self.logger
+                        .log("WARN", "Aether", format!("[Optimize #{}] {}", opt_id, err));
+                    return Err(err);
+                }
+
                 // Disconnected "Find Best Gateway" flow: connect using Thorough scan and Quick Reconnect disabled
                 self.logger.log(
                     "INFO",
