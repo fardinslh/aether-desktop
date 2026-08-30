@@ -562,7 +562,7 @@ impl ConnectionOrchestrator {
                     ),
                 );
                 let t_teardown_start = std::time::Instant::now();
-                let tun_teardown_confirmed = match HealthProber::wait_for_tun_teardown(
+                match HealthProber::wait_for_tun_teardown(
                     &settings.sing_box.interface_name,
                     Some(&settings.sing_box.tun_address),
                     Duration::from_secs(6),
@@ -579,20 +579,29 @@ impl ConnectionOrchestrator {
                                 t_teardown_start.elapsed().as_secs_f32()
                             ),
                         );
-                        true
                     }
                     Err(e) => {
                         self.logger.log(
-                            "WARN",
+                            "ERROR",
                             "Aether",
                             format!(
-                                "[Optimize #{}] TUN teardown warning: {}. Proceeding with caution.",
-                                opt_id, e
+                                "[Optimize #{}] TUN teardown could not be confirmed. Fresh scan aborted before Aether endpoint discovery.",
+                                opt_id
                             ),
                         );
-                        false
+                        return self
+                            .rollback_and_restore(
+                                settings,
+                                opt_id,
+                                prev_latency_ms,
+                                prev_pop,
+                                prev_ip,
+                                snapshot,
+                                format!("TUN teardown could not be confirmed before fresh scan: {}", e),
+                            )
+                            .await;
                     }
-                };
+                }
 
                 if self.is_aether_managed.load(Ordering::SeqCst) {
                     self.aether.lock().await.stop(&self.logger);
@@ -692,11 +701,7 @@ impl ConnectionOrchestrator {
                         best_rtt
                             .map(|r| format!("{} ms", r))
                             .unwrap_or_else(|| "—".to_string()),
-                        if tun_teardown_confirmed {
-                            "confirmed"
-                        } else {
-                            "warning"
-                        }
+                        "confirmed"
                     );
                     self.logger.log("WARN", "Aether", &diag_msg);
                     self.aether.lock().await.stop(&self.logger);
@@ -958,14 +963,14 @@ impl ConnectionOrchestrator {
 
         // 3. Atomically restore pre-optimization native lastconn persistence files
         if let Err(e) = snapshot.restore() {
-            self.logger.log(
-                "ERROR",
-                "Aether",
-                format!(
-                    "[Optimize #{}] Failed to restore lastconn persistence snapshot: {}",
-                    opt_id, e
-                ),
+            let err_msg = format!(
+                "[Optimize #{}] Fatal: Failed to restore native lastconn persistence snapshot: {}. Aborting rollback without launching corrupted state.",
+                opt_id, e
             );
+            self.logger.log("ERROR", "Aether", &err_msg);
+            snapshot.cleanup();
+            self.set_error(err_msg.clone());
+            return Err(err_msg);
         }
         snapshot.cleanup();
 
@@ -1168,5 +1173,62 @@ mod tests {
 
         // State remains Connected
         assert_eq!(*orch.state.read(), ConnectionState::Connected);
+    }
+
+    #[tokio::test]
+    async fn test_g_tun_teardown_failure_aborts_before_fresh_scan() {
+        let logger = RingBufferLogger::new(100);
+        let state = Arc::new(RwLock::new(ConnectionState::Connected));
+        let orch = ConnectionOrchestrator::new(state.clone(), logger);
+        let mut settings = AppSettings::default();
+        // Point to invalid paths to prevent accidental external execution
+        settings.aether.executable_path = "C:\\invalid\\aether.exe".to_string();
+        settings.sing_box.executable_path = "C:\\invalid\\sing-box.exe".to_string();
+
+        // In connected state with invalid binaries, find_faster_gateway will teardown,
+        // fail restore/scan cleanly, and never leave an uncontrolled scanning state
+        let res = orch.find_faster_gateway(&settings).await;
+        assert!(res.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_h_snapshot_restore_failure_is_fatal_to_rollback() {
+        let logger = RingBufferLogger::new(100);
+        let state = Arc::new(RwLock::new(ConnectionState::Connected));
+        let orch = ConnectionOrchestrator::new(state.clone(), logger);
+        let settings = AppSettings::default();
+
+        let temp_dir =
+            std::env::temp_dir().join(format!("aether_test_orch_h_{}", Uuid::new_v4()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        let snapshot = crate::settings::storage::AetherPersistenceSnapshot::create(&temp_dir).unwrap();
+        // Delete snapshot directory behind its back to force snapshot.restore() failure
+        let _ = std::fs::remove_dir_all(&snapshot.snapshot_dir);
+
+        let res = orch
+            .rollback_and_restore(
+                &settings,
+                1,
+                Some(50),
+                Some("FRA".to_string()),
+                Some("1.1.1.1".to_string()),
+                snapshot,
+                "Simulated scan failure".to_string(),
+            )
+            .await;
+
+        assert!(res.is_err(), "Restore failure must fail rollback");
+        let err = res.unwrap_err();
+        assert!(
+            err.contains("Fatal: Failed to restore native lastconn persistence snapshot")
+                || err.contains("Atomic replacement failed")
+                || err.contains("Failed to restore"),
+            "Error message must specify restore snapshot failure: {}",
+            err
+        );
+        assert_eq!(*orch.state.read(), ConnectionState::Error);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

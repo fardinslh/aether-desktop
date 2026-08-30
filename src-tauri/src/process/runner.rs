@@ -238,32 +238,13 @@ impl AetherRunner {
                         break;
                     }
                     if let Ok(l) = line {
-                        if !l.trim().is_empty() {
-                            let lower = l.to_lowercase();
-                            if lower.contains("protocol:")
-                                || lower.contains("[1] masque")
-                                || lower.contains("[2] wireguard")
-                                || lower.contains("scan mode:")
-                                || lower.contains("ip version:")
-                            {
-                                interactive_clone.store(true, Ordering::SeqCst);
-                                log_clone.log("ERROR", "Aether", format!("Interactive prompt detected: '{}'. Managed launch arguments were incomplete.", l.trim()));
-                            } else {
-                                if let Some(rtt) = parse_candidate_rtt_from_line(&l) {
-                                    let current_best = best_rtt_loop.load(Ordering::SeqCst);
-                                    if current_best == 0 || rtt < current_best {
-                                        best_rtt_loop.store(rtt, Ordering::SeqCst);
-                                        log_clone.log(
-                                            "INFO",
-                                            "Aether",
-                                            format!("Best candidate so far: {} ms", rtt),
-                                        );
-                                    }
-                                }
-                                let lvl = classify_log_level(&l, false);
-                                log_clone.log(lvl, "Aether", l);
-                            }
-                        }
+                        process_aether_line(
+                            &l,
+                            false,
+                            &interactive_clone,
+                            &best_rtt_loop,
+                            &log_clone,
+                        );
                     }
                 }
             });
@@ -273,6 +254,7 @@ impl AetherRunner {
             let log_clone = logger.clone();
             let stop_clone = stop_flag.clone();
             let interactive_clone = interactive_prompt_detected.clone();
+            let best_rtt_loop = best_rtt_clone.clone();
             thread::spawn(move || {
                 let reader = BufReader::new(stderr);
                 for line in reader.lines() {
@@ -280,21 +262,13 @@ impl AetherRunner {
                         break;
                     }
                     if let Ok(l) = line {
-                        if !l.trim().is_empty() {
-                            let lower = l.to_lowercase();
-                            if lower.contains("protocol:")
-                                || lower.contains("[1] masque")
-                                || lower.contains("[2] wireguard")
-                                || lower.contains("scan mode:")
-                                || lower.contains("ip version:")
-                            {
-                                interactive_clone.store(true, Ordering::SeqCst);
-                                log_clone.log("ERROR", "Aether", format!("Interactive prompt detected: '{}'. Managed launch arguments were incomplete.", l.trim()));
-                            } else {
-                                let lvl = classify_log_level(&l, true);
-                                log_clone.log(lvl, "Aether", l);
-                            }
-                        }
+                        process_aether_line(
+                            &l,
+                            true,
+                            &interactive_clone,
+                            &best_rtt_loop,
+                            &log_clone,
+                        );
                     }
                 }
             });
@@ -866,6 +840,49 @@ impl SingBoxRunner {
     }
 }
 
+pub fn process_aether_line(
+    line: &str,
+    is_stderr: bool,
+    interactive_flag: &AtomicBool,
+    best_rtt: &AtomicU32,
+    logger: &RingBufferLogger,
+) {
+    if line.trim().is_empty() {
+        return;
+    }
+    let lower = line.to_lowercase();
+    if lower.contains("protocol:")
+        || lower.contains("[1] masque")
+        || lower.contains("[2] wireguard")
+        || lower.contains("scan mode:")
+        || lower.contains("ip version:")
+    {
+        interactive_flag.store(true, Ordering::SeqCst);
+        logger.log(
+            "ERROR",
+            "Aether",
+            format!(
+                "Interactive prompt detected: '{}'. Managed launch arguments were incomplete.",
+                line.trim()
+            ),
+        );
+    } else {
+        if let Some(rtt) = parse_candidate_rtt_from_line(line) {
+            let current_best = best_rtt.load(Ordering::SeqCst);
+            if current_best == 0 || rtt < current_best {
+                best_rtt.store(rtt, Ordering::SeqCst);
+                logger.log(
+                    "INFO",
+                    "Aether",
+                    format!("Best candidate so far: {} ms", rtt),
+                );
+            }
+        }
+        let lvl = classify_log_level(line, is_stderr);
+        logger.log(lvl, "Aether", line);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -892,5 +909,43 @@ mod tests {
             parse_candidate_rtt_from_line("Random log line with no timing"),
             None
         );
+    }
+
+    #[test]
+    fn test_process_aether_line_updates_best_candidate_from_both_stdout_and_stderr() {
+        let logger = RingBufferLogger::new(50);
+        let interactive = AtomicBool::new(false);
+        let best_rtt = AtomicU32::new(0);
+
+        // 1. Candidate line on stdout (is_stderr = false)
+        process_aether_line(
+            "candidate ok 162.159.192.1:2408 rtt=85ms",
+            false,
+            &interactive,
+            &best_rtt,
+            &logger,
+        );
+        assert_eq!(best_rtt.load(Ordering::SeqCst), 85);
+        assert!(!interactive.load(Ordering::SeqCst));
+
+        // 2. Faster candidate line on stderr (is_stderr = true)
+        process_aether_line(
+            "[+] candidate 162.159.192.5:2408 OK (rtt: 42ms)",
+            true,
+            &interactive,
+            &best_rtt,
+            &logger,
+        );
+        assert_eq!(best_rtt.load(Ordering::SeqCst), 42);
+
+        // 3. Slower candidate on stderr does not overwrite faster
+        process_aether_line(
+            "Endpoint 162.159.193.10:500 ok (rtt: 65ms)",
+            true,
+            &interactive,
+            &best_rtt,
+            &logger,
+        );
+        assert_eq!(best_rtt.load(Ordering::SeqCst), 42);
     }
 }

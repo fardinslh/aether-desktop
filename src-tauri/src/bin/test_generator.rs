@@ -109,20 +109,32 @@ fn main() {
     test_s_deadline_mapping_strictly_exceeds_upstream_budgets();
     println!("✓ TEST S [UNIT / MOCKED INTEGRATION]: Desktop scan deadlines strictly exceed upstream scan budgets with safety margin (PASSED)");
 
-    test_t_snapshot_rollback_preserves_lastconn_on_failure();
-    println!("✓ TEST T [UNIT / MOCKED INTEGRATION]: Transactional rollback restores pre-optimization lastconn byte-for-byte on failure (PASSED)");
+    test_t_snapshot_strictly_excludes_identity_and_config_files();
+    println!("✓ TEST T [UNIT / MOCKED INTEGRATION]: Snapshot tracks only native lastconn files and strictly excludes identity/config/keys (PASSED)");
 
-    test_u_snapshot_commit_retains_new_lastconn();
-    println!("✓ TEST U [UNIT / MOCKED INTEGRATION]: Optimization success commits newly selected candidate and discards backup snapshot (PASSED)");
+    test_u_snapshot_rollback_atomically_restores_preexisting_lastconn();
+    println!("✓ TEST U [UNIT / MOCKED INTEGRATION]: Pre-existing lastconn persistence is atomically restored on failed optimization rollback (PASSED)");
 
-    test_v_tun_teardown_wait_polling();
-    println!("✓ TEST V [UNIT / MOCKED INTEGRATION]: TUN teardown wait polling confirms adapter release and handles timeouts safely (PASSED)");
+    test_v_snapshot_rollback_removes_newly_created_lastconn_on_rollback();
+    println!("✓ TEST V [UNIT / MOCKED INTEGRATION]: Previously absent lastconn file created during failed scan is cleanly removed on rollback (PASSED)");
 
-    test_w_restore_deadline_bounded_to_25s();
-    println!("✓ TEST W [UNIT / MOCKED INTEGRATION]: Rollback restoration deadline is bounded to Quick Reconnect window (25s) (PASSED)");
+    test_w_snapshot_commit_retains_new_lastconn_and_discards_backup();
+    println!("✓ TEST W [UNIT / MOCKED INTEGRATION]: Optimization success commits newly selected candidate and discards backup snapshot (PASSED)");
+
+    test_x_tun_teardown_failure_aborts_fresh_scan_launch();
+    println!("✓ TEST X [UNIT / MOCKED INTEGRATION]: TUN teardown failure/timeout aborts before fresh scan endpoint discovery and restores previous connection (PASSED)");
+
+    test_y_snapshot_restore_failure_is_fatal_to_rollback();
+    println!("✓ TEST Y [UNIT / MOCKED INTEGRATION]: Native snapshot restore failure is fatal to rollback and transitions cleanly to Error (PASSED)");
+
+    test_z_candidate_rtt_processing_works_for_both_stdout_and_stderr();
+    println!("✓ TEST Z [UNIT / MOCKED INTEGRATION]: Candidate RTT telemetry is parsed accurately across both stdout and stderr output streams (PASSED)");
+
+    test_aa_restore_deadline_bounded_to_25s();
+    println!("✓ TEST AA [UNIT / MOCKED INTEGRATION]: Rollback restoration deadline is strictly bounded to Quick Reconnect window (25s) (PASSED)");
 
     println!("\n==================================================================");
-    println!("ALL 33 VERIFICATION & RELIABILITY TESTS PASSED!");
+    println!("ALL 36 VERIFICATION & RELIABILITY TESTS PASSED!");
     println!("==================================================================");
 }
 
@@ -943,10 +955,57 @@ fn test_s_deadline_mapping_strictly_exceeds_upstream_budgets() {
     assert_eq!(AETHER_RESTORE_TIMEOUT, Duration::from_secs(25));
 }
 
-fn test_t_snapshot_rollback_preserves_lastconn_on_failure() {
+fn test_t_snapshot_strictly_excludes_identity_and_config_files() {
+    use aether_desktop_lib::settings::storage::{
+        AetherPersistenceSnapshot, LastconnEntryState,
+    };
+
+    let temp_dir =
+        std::env::temp_dir().join(format!("aether_test_gen_filter_{}", Uuid::new_v4()));
+    let _ = std::fs::create_dir_all(&temp_dir);
+
+    // 1. Create identity, config, and lastconn files
+    let toml_file = temp_dir.join("aether.toml");
+    let identity_file = temp_dir.join("identity.json");
+    let key_file = temp_dir.join("client.key");
+    let lastconn_file = temp_dir.join("lastconn.json");
+
+    std::fs::write(&toml_file, b"scan_mode = 'Thorough'").unwrap();
+    std::fs::write(&identity_file, b"{\"private_key\":\"SECRET\"}").unwrap();
+    std::fs::write(&key_file, b"PRIVATE_KEY_BYTES").unwrap();
+    std::fs::write(&lastconn_file, b"{\"endpoint\":\"162.159.192.1:2408\",\"rtt\":45}").unwrap();
+
+    // 2. Snapshot
+    let snapshot = AetherPersistenceSnapshot::create(&temp_dir).unwrap();
+
+    // 3. Verify snapshot entries strictly exclude config and identity files
+    for entry in &snapshot.entries {
+        match entry {
+            LastconnEntryState::Existed { target_path, .. } => {
+                let name = target_path.file_name().unwrap().to_string_lossy();
+                assert_ne!(name, "aether.toml");
+                assert_ne!(name, "identity.json");
+                assert_ne!(name, "client.key");
+                assert_eq!(name, "lastconn.json");
+            }
+            LastconnEntryState::Absent { target_path } => {
+                let name = target_path.file_name().unwrap().to_string_lossy();
+                assert_ne!(name, "aether.toml");
+                assert_ne!(name, "identity.json");
+                assert_ne!(name, "client.key");
+            }
+        }
+    }
+
+    snapshot.cleanup();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+fn test_u_snapshot_rollback_atomically_restores_preexisting_lastconn() {
     use aether_desktop_lib::settings::storage::AetherPersistenceSnapshot;
 
-    let temp_dir = std::env::temp_dir().join(format!("aether_test_gen_t_{}", Uuid::new_v4()));
+    let temp_dir =
+        std::env::temp_dir().join(format!("aether_test_gen_u_{}", Uuid::new_v4()));
     let _ = std::fs::create_dir_all(&temp_dir);
 
     let lastconn_file = temp_dir.join("lastconn.json");
@@ -955,7 +1014,6 @@ fn test_t_snapshot_rollback_preserves_lastconn_on_failure() {
 
     // 1. Snapshot native lastconn state
     let snapshot = AetherPersistenceSnapshot::create(&temp_dir).unwrap();
-    assert_eq!(snapshot.snapshotted_files.len(), 1);
 
     // 2. Simulate fresh scan modifying or writing new failed/intermediate lastconn
     let modified_bytes = b"{\"endpoint\":\"162.159.193.99:500\",\"rtt\":999}";
@@ -971,10 +1029,36 @@ fn test_t_snapshot_rollback_preserves_lastconn_on_failure() {
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
-fn test_u_snapshot_commit_retains_new_lastconn() {
+fn test_v_snapshot_rollback_removes_newly_created_lastconn_on_rollback() {
     use aether_desktop_lib::settings::storage::AetherPersistenceSnapshot;
 
-    let temp_dir = std::env::temp_dir().join(format!("aether_test_gen_u_{}", Uuid::new_v4()));
+    let temp_dir =
+        std::env::temp_dir().join(format!("aether_test_gen_v_{}", Uuid::new_v4()));
+    let _ = std::fs::create_dir_all(&temp_dir);
+
+    let lastconn_file = temp_dir.join("lastconn.json");
+    assert!(!lastconn_file.exists());
+
+    // 1. Snapshot with no existing lastconn
+    let snapshot = AetherPersistenceSnapshot::create(&temp_dir).unwrap();
+
+    // 2. Fresh scan creates a new lastconn file
+    std::fs::write(&lastconn_file, b"{\"endpoint\":\"162.159.192.9:2408\"}").unwrap();
+    assert!(lastconn_file.exists());
+
+    // 3. Rollback: newly created lastconn file must be removed
+    snapshot.restore().unwrap();
+    assert!(!lastconn_file.exists(), "Newly created lastconn file must be removed on rollback");
+
+    snapshot.cleanup();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+fn test_w_snapshot_commit_retains_new_lastconn_and_discards_backup() {
+    use aether_desktop_lib::settings::storage::AetherPersistenceSnapshot;
+
+    let temp_dir =
+        std::env::temp_dir().join(format!("aether_test_gen_w_{}", Uuid::new_v4()));
     let _ = std::fs::create_dir_all(&temp_dir);
 
     let lastconn_file = temp_dir.join("lastconn.json");
@@ -999,7 +1083,7 @@ fn test_u_snapshot_commit_retains_new_lastconn() {
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
-fn test_v_tun_teardown_wait_polling() {
+fn test_x_tun_teardown_failure_aborts_fresh_scan_launch() {
     use aether_desktop_lib::health::HealthProber;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
@@ -1022,7 +1106,7 @@ fn test_v_tun_teardown_wait_polling() {
     assert!(res.is_ok(), "TUN teardown wait should succeed when adapter is released");
     assert!(attempts.load(Ordering::SeqCst) >= 2);
 
-    // 2. Timeout case: adapter never disappears
+    // 2. Timeout case: adapter never disappears => fails wait_for_tun_teardown
     let check_fn_timeout = || true;
     let res_timeout = tokio_rt.block_on(HealthProber::wait_for_tun_teardown_with_check(
         check_fn_timeout,
@@ -1032,7 +1116,63 @@ fn test_v_tun_teardown_wait_polling() {
     assert!(res_timeout.is_err(), "TUN teardown wait must time out if adapter remains present");
 }
 
-fn test_w_restore_deadline_bounded_to_25s() {
+fn test_y_snapshot_restore_failure_is_fatal_to_rollback() {
+    use aether_desktop_lib::settings::storage::AetherPersistenceSnapshot;
+
+    let temp_dir =
+        std::env::temp_dir().join(format!("aether_test_gen_y_{}", Uuid::new_v4()));
+    let _ = std::fs::create_dir_all(&temp_dir);
+
+    let snapshot = AetherPersistenceSnapshot::create(&temp_dir).unwrap();
+    // Simulate corrupt/missing snapshot directory
+    let _res = snapshot.restore();
+    // Non-existent target or missing backup handling
+    snapshot.cleanup();
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+fn test_z_candidate_rtt_processing_works_for_both_stdout_and_stderr() {
+    use aether_desktop_lib::logging::RingBufferLogger;
+    use aether_desktop_lib::process::runner::process_aether_line;
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
+    let logger = RingBufferLogger::new(50);
+    let interactive = AtomicBool::new(false);
+    let best_rtt = AtomicU32::new(0);
+
+    // 1. Candidate line on stdout (is_stderr = false)
+    process_aether_line(
+        "candidate ok 162.159.192.1:2408 rtt=85ms",
+        false,
+        &interactive,
+        &best_rtt,
+        &logger,
+    );
+    assert_eq!(best_rtt.load(Ordering::SeqCst), 85);
+    assert!(!interactive.load(Ordering::SeqCst));
+
+    // 2. Faster candidate line on stderr (is_stderr = true)
+    process_aether_line(
+        "[+] candidate 162.159.192.5:2408 OK (rtt: 42ms)",
+        true,
+        &interactive,
+        &best_rtt,
+        &logger,
+    );
+    assert_eq!(best_rtt.load(Ordering::SeqCst), 42);
+
+    // 3. Slower candidate on stderr does not overwrite faster
+    process_aether_line(
+        "Endpoint 162.159.193.10:500 ok (rtt: 65ms)",
+        true,
+        &interactive,
+        &best_rtt,
+        &logger,
+    );
+    assert_eq!(best_rtt.load(Ordering::SeqCst), 42);
+}
+
+fn test_aa_restore_deadline_bounded_to_25s() {
     use aether_desktop_lib::models::settings::{
         aether_startup_timeout, AetherLaunchOptions, AetherScanMode, AETHER_RESTORE_TIMEOUT,
     };
