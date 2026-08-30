@@ -1,2 +1,2 @@
 pub mod probe;
-pub use probe::HealthProber;
+pub use probe::{DetectedAdapterInfo, HealthProber};

@@ -90,6 +90,35 @@ pub fn evaluate_gateway_optimization(
     )
 }
 
+/// Evaluates whether spawning a new sing-box TUN router conflicts with an existing network adapter.
+///
+/// If sing-box is already managed by the application, returns `Ok(())`.
+/// If sing-box is not running and an adapter with the configured interface name or IP already exists,
+/// returns `Err(String)` containing an actionable explanation to prevent false-positive connections over stale adapters.
+pub fn evaluate_prelaunch_tun_conflict(
+    is_singbox_already_running: bool,
+    tun_preexists: bool,
+    interface_name: &str,
+    _tun_address: &str,
+    matched_adapter_desc: Option<&str>,
+) -> Result<(), String> {
+    if is_singbox_already_running {
+        return Ok(());
+    }
+
+    if tun_preexists {
+        let adapter_str = matched_adapter_desc
+            .map(|s| format!(" (adapter: {})", s))
+            .unwrap_or_default();
+        return Err(format!(
+            "An existing '{}' interface is already active in the network stack{}. Another Aether Desktop or sing-box instance may still be running. Close the other instance and retry.",
+            interface_name, adapter_str
+        ));
+    }
+
+    Ok(())
+}
+
 pub struct ConnectionOrchestrator {
     pub aether: Mutex<AetherRunner>,
     pub singbox: Mutex<SingBoxRunner>,
@@ -433,26 +462,30 @@ impl ConnectionOrchestrator {
         // Before spawning a NEW managed sing-box, verify that the configured TUN interface
         // does not already exist in the Windows network stack from an external or orphaned instance.
         let is_singbox_already_running = self.singbox.lock().await.is_running();
-        if !is_singbox_already_running {
-            let (tun_preexists, matched_info, _) = HealthProber::check_tun_interface_exists(
+        let (tun_preexists, matched_info, _) = if !is_singbox_already_running {
+            HealthProber::check_tun_interface_exists(
                 &settings.sing_box.interface_name,
                 Some(&settings.sing_box.tun_address),
-            );
-            if tun_preexists {
-                let adapter_desc = matched_info
-                    .map(|i| format!("'{}' ({})", i.friendly_name, i.description))
-                    .unwrap_or_else(|| settings.sing_box.interface_name.clone());
-                let err = format!(
-                    "[Attempt #{}] An existing '{}' interface is already active in the network stack (adapter: {}). Another Aether Desktop or sing-box instance may still be running. Close the other instance and retry.",
-                    attempt_id, settings.sing_box.interface_name, adapter_desc
-                );
-                self.logger.log("ERROR", "sing-box", &err);
-                if self.is_aether_managed.load(Ordering::SeqCst) {
-                    self.aether.lock().await.stop(&self.logger);
-                }
-                self.set_error(err.clone());
-                return Err(err);
+            )
+        } else {
+            (false, None, Vec::new())
+        };
+        let matched_desc = matched_info.map(|i| format!("'{}' ({})", i.friendly_name, i.description));
+
+        if let Err(err_msg) = evaluate_prelaunch_tun_conflict(
+            is_singbox_already_running,
+            tun_preexists,
+            &settings.sing_box.interface_name,
+            &settings.sing_box.tun_address,
+            matched_desc.as_deref(),
+        ) {
+            let log_err = format!("[Attempt #{}] {}", attempt_id, err_msg);
+            self.logger.log("ERROR", "sing-box", &log_err);
+            if self.is_aether_managed.load(Ordering::SeqCst) {
+                self.aether.lock().await.stop(&self.logger);
             }
+            self.set_error(log_err);
+            return Err(err_msg);
         }
 
         // 3. Launch sing-box router

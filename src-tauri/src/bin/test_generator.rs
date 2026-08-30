@@ -1860,79 +1860,179 @@ fn test_an_ring_buffer_logger_10000_capacity_and_eviction() {
 }
 
 fn test_ao_preexisting_tun_conflict_guard() {
-    use aether_desktop_lib::health::HealthProber;
-    use aether_desktop_lib::models::settings::AppSettings;
+    use aether_desktop_lib::process::orchestrator::evaluate_prelaunch_tun_conflict;
 
-    let settings = AppSettings::default();
-    let is_singbox_already_running = false; // Simulating no managed child owned by app
+    // 1. Conflict Case: no managed singbox + existing TUN present -> Rejected with actionable remediation
+    let res_conflict = evaluate_prelaunch_tun_conflict(
+        false,
+        true,
+        "singbox-tun",
+        "172.19.0.1",
+        Some("'singbox-tun' (Wintun Userspace Tunnel)"),
+    );
+    assert!(res_conflict.is_err(), "Pre-existing TUN with no managed singbox must be rejected");
+    let err = res_conflict.unwrap_err();
+    assert!(err.contains("singbox-tun"), "Error must identify the conflicting interface name: {}", err);
+    assert!(err.contains("Close the other instance and retry"), "Error must give clear actionable guidance: {}", err);
 
-    // 1. When no adapter exists, pre-launch guard allows launch
-    let (tun_preexists, _, _) = HealthProber::check_tun_interface_exists("nonexistent-tun-12345", Some("172.19.0.99"));
-    assert!(!tun_preexists, "Non-existent adapter must not trigger pre-launch conflict");
+    // 2. Normal Clean Launch Case: no existing TUN in network stack -> Allowed
+    let res_clean = evaluate_prelaunch_tun_conflict(
+        false,
+        false,
+        "singbox-tun",
+        "172.19.0.1",
+        None,
+    );
+    assert!(res_clean.is_ok(), "Clean network stack without pre-existing TUN must be allowed");
 
-    // 2. Format conflict error message and verify it contains interface name and actionable user instructions
-    if !is_singbox_already_running {
-        let dummy_adapter_desc = "'singbox-tun' (Wintun Userspace Tunnel)";
-        let err = format!(
-            "An existing '{}' interface is already active in the network stack (adapter: {}). Another Aether Desktop or sing-box instance may still be running. Close the other instance and retry.",
-            settings.sing_box.interface_name, dummy_adapter_desc
-        );
-        assert!(err.contains("singbox-tun"));
-        assert!(err.contains("Close the other instance and retry"));
-    }
+    // 3. Managed Reuse Case: app already owns a running singbox lifecycle -> Allowed
+    let res_managed = evaluate_prelaunch_tun_conflict(
+        true,
+        true,
+        "singbox-tun",
+        "172.19.0.1",
+        Some("'singbox-tun' (Wintun Userspace Tunnel)"),
+    );
+    assert!(res_managed.is_ok(), "Intentional managed sing-box lifecycle must be allowed");
 }
 
 fn test_ap_singbox_liveness_failure_during_tun_detection() {
-    use aether_desktop_lib::process::SingBoxRunner;
-    use aether_desktop_lib::logging::RingBufferLogger;
+    use aether_desktop_lib::health::DetectedAdapterInfo;
+    use aether_desktop_lib::models::health::CloudflareTrace;
+    use aether_desktop_lib::process::runner::verify_router_and_egress_decision_path;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
     use std::time::Duration;
 
     let tokio_rt = tokio::runtime::Runtime::new().unwrap();
-    let mut runner = SingBoxRunner::new();
-    let logger = RingBufferLogger::new(100);
 
-    // Unspawned / exited runner has is_running() == false
-    assert!(!runner.is_running());
-
-    // verify_router_and_egress must fail immediately when runner is not alive
-    let res = tokio_rt.block_on(runner.verify_router_and_egress(
+    // 1. Case: Child process is already dead at discovery start
+    let res_dead_start = tokio_rt.block_on(verify_router_and_egress_decision_path(
+        || false,
+        |_name, _ip| (true, None, Vec::new()),
+        || async {
+            Ok(CloudflareTrace {
+                ip: "104.28.19.42".to_string(),
+                warp: "off".to_string(),
+                colo: "FRA".to_string(),
+                loc: "DE".to_string(),
+                latency_ms: 30,
+            })
+        },
         "singbox-tun",
         Some("172.19.0.1"),
-        Duration::from_millis(500),
-        Some("1.1.1.1"),
-        &logger,
+        Duration::from_millis(200),
+        Duration::from_millis(50),
+        Duration::from_millis(10),
+        None,
     ));
+    assert!(res_dead_start.is_err());
+    assert!(res_dead_start.unwrap_err().contains("sing-box process exited before TUN discovery"));
 
-    assert!(res.is_err(), "Inactive child process must cause verification to fail immediately");
-    let err = res.unwrap_err();
-    assert!(
-        err.contains("sing-box process exited"),
-        "Error message must indicate sing-box process exit: {}",
-        err
-    );
+    // 2. Case: Child process alive initially, but dies the instant TUN appears
+    let child_alive = Arc::new(AtomicBool::new(true));
+    let child_alive_clone = child_alive.clone();
+    let res_dies_on_tun = tokio_rt.block_on(verify_router_and_egress_decision_path(
+        move || child_alive_clone.load(Ordering::SeqCst),
+        move |_name, _ip| {
+            // Simulate child dying as adapter appears (e.g. fatal Wintun file already exists)
+            child_alive.store(false, Ordering::SeqCst);
+            (
+                true,
+                Some(DetectedAdapterInfo {
+                    friendly_name: "singbox-tun".to_string(),
+                    description: "Wintun".to_string(),
+                    adapter_name: "{12345678-1234-1234-1234-1234567890AB}".to_string(),
+                    if_index: 42,
+                    is_up: true,
+                    ip_addresses: vec!["172.19.0.1".to_string()],
+                }),
+                Vec::new(),
+            )
+        },
+        || async {
+            Ok(CloudflareTrace {
+                ip: "104.28.19.42".to_string(),
+                warp: "off".to_string(),
+                colo: "FRA".to_string(),
+                loc: "DE".to_string(),
+                latency_ms: 30,
+            })
+        },
+        "singbox-tun",
+        Some("172.19.0.1"),
+        Duration::from_millis(300),
+        Duration::from_millis(50),
+        Duration::from_millis(10),
+        None,
+    ));
+    assert!(res_dies_on_tun.is_err());
+    assert!(res_dies_on_tun.unwrap_err().contains("sing-box process exited during TUN initialization"));
 }
 
 fn test_aq_singbox_liveness_failure_during_staged_egress() {
-    use aether_desktop_lib::process::SingBoxRunner;
-    use aether_desktop_lib::logging::RingBufferLogger;
+    use aether_desktop_lib::health::DetectedAdapterInfo;
+    use aether_desktop_lib::models::health::CloudflareTrace;
+    use aether_desktop_lib::process::runner::verify_router_and_egress_decision_path;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
     use std::time::Duration;
 
     let tokio_rt = tokio::runtime::Runtime::new().unwrap();
-    let mut runner = SingBoxRunner::new();
-    let logger = RingBufferLogger::new(100);
 
-    // If runner is not running, verification fails before staged egress
-    let res = tokio_rt.block_on(runner.verify_router_and_egress(
-        "nonexistent-tun",
+    let child_alive = Arc::new(AtomicBool::new(true));
+    let child_alive_for_runner = child_alive.clone();
+    let child_alive_for_egress = child_alive.clone();
+
+    // Lifecycle simulated deterministically:
+    // 1. child_alive is true during discovery & stabilization
+    // 2. staged_egress starts, child dies during HTTPS probes (child_alive becomes false)
+    // 3. verify_router_and_egress must fail and reject connection even if probes returned Ok
+    let res = tokio_rt.block_on(verify_router_and_egress_decision_path(
+        move || child_alive_for_runner.load(Ordering::SeqCst),
+        |_name, _ip| {
+            (
+                true,
+                Some(DetectedAdapterInfo {
+                    friendly_name: "singbox-tun".to_string(),
+                    description: "Wintun".to_string(),
+                    adapter_name: "{12345678-1234-1234-1234-1234567890AB}".to_string(),
+                    if_index: 42,
+                    is_up: true,
+                    ip_addresses: vec!["172.19.0.1".to_string()],
+                }),
+                Vec::new(),
+            )
+        },
+        move || {
+            let flag = child_alive_for_egress.clone();
+            async move {
+                // Simulate child crashing/terminating during egress network tests
+                flag.store(false, Ordering::SeqCst);
+                Ok(CloudflareTrace {
+                    ip: "104.28.19.42".to_string(),
+                    warp: "off".to_string(),
+                    colo: "FRA".to_string(),
+                    loc: "DE".to_string(),
+                    latency_ms: 30,
+                })
+            }
+        },
+        "singbox-tun",
+        Some("172.19.0.1"),
+        Duration::from_millis(500),
+        Duration::from_millis(50),
+        Duration::from_millis(10),
         None,
-        Duration::from_millis(100),
-        None,
-        &logger,
     ));
 
-    assert!(res.is_err());
+    assert!(res.is_err(), "Child exit during staged egress must fail verification");
     let err = res.unwrap_err();
-    assert!(err.contains("sing-box process exited"));
+    assert!(
+        err.contains("sing-box process exited during routing verification"),
+        "Error message must clearly identify process exit during routing verification: {}",
+        err
+    );
 }
 
 fn test_ar_external_aether_guards_abort_optimization_before_disruption() {
@@ -1968,12 +2068,63 @@ fn test_ar_external_aether_guards_abort_optimization_before_disruption() {
 }
 
 fn test_as_tun_stabilization_window_guarantees_adapter_persistence() {
-    use aether_desktop_lib::health::HealthProber;
+    use aether_desktop_lib::process::runner::verify_tun_stabilization;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
 
-    // Verify helper check_tun_interface_exists return types and non-panicking execution
-    let (found, matched_info, all_adapters) =
-        HealthProber::check_tun_interface_exists("dummy-tun-adapter-test-xyz", Some("240.240.240.240"));
-    assert!(!found, "Dummy adapter must not be found");
-    assert!(matched_info.is_none());
-    assert!(!all_adapters.is_empty() || all_adapters.is_empty());
+    let tokio_rt = tokio::runtime::Runtime::new().unwrap();
+
+    // 1. Deterministic Happy Path: child remains alive and adapter present for all ticks -> Ok
+    let res_stable = tokio_rt.block_on(verify_tun_stabilization(
+        || true,
+        || true,
+        Duration::from_millis(60),
+        Duration::from_millis(15),
+    ));
+    assert!(res_stable.is_ok(), "Stable TUN with running child must pass stabilization");
+
+    // 2. Deterministic Child Exit: child exits at tick 2 of stabilization -> Err
+    let tick_count = Arc::new(AtomicUsize::new(0));
+    let tick_clone = tick_count.clone();
+    let res_child_exit = tokio_rt.block_on(verify_tun_stabilization(
+        move || {
+            let count = tick_clone.fetch_add(1, Ordering::SeqCst);
+            count < 2 // alive on tick 0 and 1, dead on tick 2
+        },
+        || true,
+        Duration::from_millis(100),
+        Duration::from_millis(15),
+    ));
+    assert!(res_child_exit.is_err(), "Child exit during stabilization must fail");
+    let err_child = res_child_exit.unwrap_err();
+    assert!(
+        err_child.contains("sing-box process exited during TUN stabilization window"),
+        "Error must identify stabilization exit: {}",
+        err_child
+    );
+
+    // 3. Deterministic Adapter Drop: adapter disappears during stabilization -> Err
+    let adapter_present = Arc::new(AtomicBool::new(true));
+    let adapter_clone = adapter_present.clone();
+    let tick_count_tun = Arc::new(AtomicUsize::new(0));
+    let res_tun_drop = tokio_rt.block_on(verify_tun_stabilization(
+        || true,
+        move || {
+            let count = tick_count_tun.fetch_add(1, Ordering::SeqCst);
+            if count >= 2 {
+                adapter_clone.store(false, Ordering::SeqCst);
+            }
+            adapter_clone.load(Ordering::SeqCst)
+        },
+        Duration::from_millis(100),
+        Duration::from_millis(15),
+    ));
+    assert!(res_tun_drop.is_err(), "Adapter drop during stabilization must fail");
+    let err_tun = res_tun_drop.unwrap_err();
+    assert!(
+        err_tun.contains("TUN interface disappeared during stabilization window"),
+        "Error must identify adapter drop: {}",
+        err_tun
+    );
 }

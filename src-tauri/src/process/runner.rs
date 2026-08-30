@@ -292,6 +292,202 @@ impl AetherRunner {
     }
 }
 
+/// Polls a freshly detected TUN adapter across a stabilization duration (e.g. 400ms)
+/// ensuring that both:
+/// 1. The child process remains alive (`is_running_fn() == true`)
+/// 2. The expected TUN interface remains present in the network stack (`check_tun_fn() == true`)
+///
+/// Returns `Ok(())` if both conditions hold continuously throughout the window.
+/// Returns `Err(String)` if the child process exits or the adapter disappears.
+pub async fn verify_tun_stabilization<R, T>(
+    mut is_running_fn: R,
+    mut check_tun_fn: T,
+    duration: Duration,
+    poll_interval: Duration,
+) -> Result<(), String>
+where
+    R: FnMut() -> bool,
+    T: FnMut() -> bool,
+{
+    let start = std::time::Instant::now();
+    while start.elapsed() < duration {
+        tokio::time::sleep(poll_interval).await;
+        if !is_running_fn() {
+            return Err("sing-box process exited during TUN stabilization window".to_string());
+        }
+        if !check_tun_fn() {
+            return Err("TUN interface disappeared during stabilization window".to_string());
+        }
+    }
+    Ok(())
+}
+
+/// Parameterized router and egress verification decision path.
+/// Verifies process liveness at every stage (initial, discovery, stabilization, pre-egress, and post-egress).
+pub async fn verify_router_and_egress_decision_path<R, C, S, FutS>(
+    mut is_running_fn: R,
+    mut check_tun_fn: C,
+    mut staged_egress_fn: S,
+    interface_name: &str,
+    tun_address: Option<&str>,
+    max_duration: Duration,
+    stabilization_duration: Duration,
+    stabilization_interval: Duration,
+    log_fn: Option<&(dyn Fn(&str, &str, &str) + Send + Sync)>,
+) -> Result<String, String>
+where
+    R: FnMut() -> bool,
+    C: FnMut(
+        &str,
+        Option<&str>,
+    ) -> (
+        bool,
+        Option<crate::health::DetectedAdapterInfo>,
+        Vec<crate::health::DetectedAdapterInfo>,
+    ),
+    S: FnMut() -> FutS,
+    FutS: std::future::Future<Output = Result<crate::models::health::CloudflareTrace, String>>,
+{
+    let start = std::time::Instant::now();
+    let mut tun_detected = false;
+    let mut matched_adapter_name = String::new();
+    let mut last_detected_adapters = Vec::new();
+
+    // 1. Initial liveness check before waiting for adapter discovery
+    if !is_running_fn() {
+        return Err("sing-box process exited before TUN discovery".to_string());
+    }
+
+    while start.elapsed() < max_duration {
+        if !is_running_fn() {
+            return Err("sing-box process exited during TUN initialization".to_string());
+        }
+
+        let (found, matched_info, all_adapters) = check_tun_fn(interface_name, tun_address);
+        last_detected_adapters = all_adapters;
+        if found {
+            // Check liveness immediately upon detecting adapter
+            if !is_running_fn() {
+                return Err("sing-box process exited during TUN initialization".to_string());
+            }
+
+            // Stabilization window
+            let stab_res = verify_tun_stabilization(
+                &mut is_running_fn,
+                || {
+                    let (stab_found, _, _) = check_tun_fn(interface_name, tun_address);
+                    stab_found
+                },
+                stabilization_duration,
+                stabilization_interval,
+            )
+            .await;
+
+            if let Err(e) = stab_res {
+                if !is_running_fn() {
+                    return Err(e);
+                }
+                // TUN flickered/disappeared, keep waiting
+                continue;
+            }
+
+            tun_detected = true;
+            if let Some(info) = matched_info {
+                matched_adapter_name = format!(
+                    "'{}' (Description: '{}', Index: {}, IP: {:?})",
+                    info.friendly_name, info.description, info.if_index, info.ip_addresses
+                );
+            } else {
+                matched_adapter_name = interface_name.to_string();
+            }
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    if !tun_detected {
+        if !is_running_fn() {
+            return Err("sing-box process exited during TUN initialization".to_string());
+        }
+        let mut detected_summary = Vec::new();
+        for a in &last_detected_adapters {
+            let ips = if a.ip_addresses.is_empty() {
+                "none".to_string()
+            } else {
+                a.ip_addresses.join(", ")
+            };
+            detected_summary.push(format!(
+                "  - '{}' ({}) [Index: {}, Up: {}, IPs: {}]",
+                a.friendly_name, a.description, a.if_index, a.is_up, ips
+            ));
+        }
+        let summary_str = if detected_summary.is_empty() {
+            "  (No network adapters reported by IP Helper API)".to_string()
+        } else {
+            detected_summary.join("\n")
+        };
+
+        if let Some(logger) = log_fn {
+            logger(
+                "WARN",
+                "sing-box",
+                &format!(
+                    "TUN network adapter not detected. Expected: name='{}', IP='{}'. Detected adapters in network stack:\n{}",
+                    interface_name,
+                    tun_address.unwrap_or("none"),
+                    summary_str
+                ),
+            );
+        }
+
+        return Err(format!(
+            "TUN network adapter '{}' (IP: '{}') not detected in network stack",
+            interface_name,
+            tun_address.unwrap_or("none")
+        ));
+    }
+
+    // Liveness check immediately before staged egress verification
+    if !is_running_fn() {
+        return Err("sing-box process exited before staged egress verification".to_string());
+    }
+
+    if let Some(logger) = log_fn {
+        logger(
+            "INFO",
+            "sing-box",
+            &format!(
+                "Verified TUN network adapter presence in {:.2}s: {}",
+                start.elapsed().as_secs_f32(),
+                matched_adapter_name
+            ),
+        );
+    }
+
+    let t_stages_start = std::time::Instant::now();
+    // Execute staged egress verification
+    staged_egress_fn().await?;
+
+    // Authoritative liveness check AFTER all egress stages pass
+    if !is_running_fn() {
+        return Err("sing-box process exited during routing verification".to_string());
+    }
+
+    if let Some(logger) = log_fn {
+        logger(
+            "INFO",
+            "sing-box",
+            &format!(
+                "All egress verification stages passed in {:.2}s (Total router ready: {:.2}s)",
+                t_stages_start.elapsed().as_secs_f32(),
+                start.elapsed().as_secs_f32()
+            ),
+        );
+    }
+
+    Ok(matched_adapter_name)
+}
+
 pub struct SingBoxRunner {
     handle: Option<ProcessHandle>,
     config_path: PathBuf,
@@ -496,8 +692,6 @@ impl SingBoxRunner {
     }
 
     /// Complete health and routing egress verification helper.
-    /// Verifies process liveness, TUN interface presence, and checks that direct system egress
-    /// Complete health and routing egress verification helper.
     /// Verifies process liveness, native TUN interface presence (name and/or IP), stabilization window,
     /// and checks that direct system egress matches the expected Aether public IP (preventing false positive on native ISP egress).
     pub async fn verify_router_and_egress(
@@ -508,153 +702,31 @@ impl SingBoxRunner {
         expected_aether_ip: Option<&str>,
         logger: &RingBufferLogger,
     ) -> Result<(), String> {
-        let start = std::time::Instant::now();
-        let mut tun_detected = false;
-        let mut matched_adapter_name = String::new();
-        let mut last_detected_adapters = Vec::new();
-
-        // 1. Initial liveness check before waiting for adapter discovery
-        if !self.is_running() {
-            return Err("sing-box process exited before TUN discovery".to_string());
-        }
-
-        while start.elapsed() < max_duration {
-            if !self.is_running() {
-                return Err("sing-box process exited during TUN initialization".to_string());
-            }
-
-            let (found, matched_info, all_adapters) =
-                HealthProber::check_tun_interface_exists(interface_name, tun_address);
-            last_detected_adapters = all_adapters;
-            if found {
-                // Check liveness immediately upon detecting adapter
-                if !self.is_running() {
-                    return Err("sing-box process exited during TUN initialization".to_string());
-                }
-
-                // Stabilization window (400ms)
-                // Ensure the child process remains alive and the adapter remains present
-                let stab_start = std::time::Instant::now();
-                let mut stab_failed = false;
-                while stab_start.elapsed() < Duration::from_millis(400) {
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                    if !self.is_running() {
-                        return Err(
-                            "sing-box process exited during TUN stabilization window".to_string(),
-                        );
-                    }
-                    let (stab_found, _, _) =
-                        HealthProber::check_tun_interface_exists(interface_name, tun_address);
-                    if !stab_found {
-                        stab_failed = true;
-                        break;
-                    }
-                }
-
-                if stab_failed {
-                    continue;
-                }
-
-                tun_detected = true;
-                if let Some(info) = matched_info {
-                    matched_adapter_name = format!(
-                        "'{}' (Description: '{}', Index: {}, IP: {:?})",
-                        info.friendly_name, info.description, info.if_index, info.ip_addresses
-                    );
-                } else {
-                    matched_adapter_name = interface_name.to_string();
-                }
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(200)).await;
-        }
-
-        if !tun_detected {
-            if !self.is_running() {
-                return Err("sing-box process exited during TUN initialization".to_string());
-            }
-            let mut detected_summary = Vec::new();
-            for a in &last_detected_adapters {
-                let ips = if a.ip_addresses.is_empty() {
-                    "none".to_string()
-                } else {
-                    a.ip_addresses.join(", ")
-                };
-                detected_summary.push(format!(
-                    "  - '{}' ({}) [Index: {}, Up: {}, IPs: {}]",
-                    a.friendly_name, a.description, a.if_index, a.is_up, ips
-                ));
-            }
-            let summary_str = if detected_summary.is_empty() {
-                "  (No network adapters reported by IP Helper API)".to_string()
-            } else {
-                detected_summary.join("\n")
-            };
-
-            logger.log(
-                "WARN",
-                "sing-box",
-                format!(
-                    "TUN network adapter not detected. Expected: name='{}', IP='{}'. Detected adapters in network stack:\n{}",
-                    interface_name,
-                    tun_address.unwrap_or("none"),
-                    summary_str
-                ),
-            );
-
-            return Err(format!(
-                "TUN network adapter '{}' (IP: '{}') not detected in network stack",
-                interface_name,
-                tun_address.unwrap_or("none")
-            ));
-        }
-
-        // Liveness check immediately before staged egress verification
-        if !self.is_running() {
-            return Err("sing-box process exited before staged egress verification".to_string());
-        }
-
-        logger.log(
-            "INFO",
-            "sing-box",
-            format!(
-                "Verified TUN network adapter presence in {:.2}s: {}",
-                start.elapsed().as_secs_f32(),
-                matched_adapter_name
-            ),
-        );
-
-        let t_stages_start = std::time::Instant::now();
-        // Execute staged 3-tier egress and DNS verification decision path
         let log_cb = |lvl: &str, target: &str, msg: &str| {
             logger.log(lvl, target, msg);
         };
 
-        HealthProber::verify_staged_egress_decision_path(
-            || HealthProber::query_direct_system_cloudflare_trace_ip_literal(),
-            || HealthProber::test_system_dns_resolution("www.cloudflare.com"),
-            || HealthProber::query_direct_system_cloudflare_trace_hostname(),
-            expected_aether_ip,
+        verify_router_and_egress_decision_path(
+            || self.is_running(),
+            |name, ip| HealthProber::check_tun_interface_exists(name, ip),
+            || {
+                HealthProber::verify_staged_egress_decision_path(
+                    || HealthProber::query_direct_system_cloudflare_trace_ip_literal(),
+                    || HealthProber::test_system_dns_resolution("www.cloudflare.com"),
+                    || HealthProber::query_direct_system_cloudflare_trace_hostname(),
+                    expected_aether_ip,
+                    Some(&log_cb),
+                )
+            },
+            interface_name,
+            tun_address,
+            max_duration,
+            Duration::from_millis(400),
+            Duration::from_millis(100),
             Some(&log_cb),
         )
-        .await?;
-
-        // Authoritative liveness check AFTER all egress stages pass
-        if !self.is_running() {
-            return Err("sing-box process exited during routing verification".to_string());
-        }
-
-        logger.log(
-            "INFO",
-            "sing-box",
-            format!(
-                "All egress verification stages passed in {:.2}s (Total router ready: {:.2}s)",
-                t_stages_start.elapsed().as_secs_f32(),
-                start.elapsed().as_secs_f32()
-            ),
-        );
-
-        Ok(())
+        .await
+        .map(|_| ())
     }
 
     /// Transactional Live Apply with full health and system egress verification:
