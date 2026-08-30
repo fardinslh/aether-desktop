@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { Download, RefreshCw, FileCode, CheckCircle2, Copy, X } from "lucide-react";
+import React, { useState, useEffect, useRef } from "react";
+import { Download, RefreshCw, FileCode, CheckCircle2, Copy, X, ArrowDown } from "lucide-react";
 import { LogEntry } from "../../types";
 import { api } from "../../services/api";
 
@@ -14,6 +14,27 @@ export const DiagnosticsView: React.FC<DiagnosticsViewProps> = ({ logs, onRefres
   const [showConfigModal, setShowConfigModal] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
   const [selectedSource, setSelectedSource] = useState<string>("ALL");
+
+  const logContainerRef = useRef<HTMLDivElement>(null);
+  const shouldAutoScrollRef = useRef<boolean>(true);
+  const [isAutoScrollPaused, setIsAutoScrollPaused] = useState<boolean>(false);
+
+  const handleScroll = () => {
+    const el = logContainerRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const isNearBottom = distanceFromBottom <= 60;
+    shouldAutoScrollRef.current = isNearBottom;
+    setIsAutoScrollPaused(!isNearBottom);
+  };
+
+  const handleScrollToBottom = () => {
+    shouldAutoScrollRef.current = true;
+    setIsAutoScrollPaused(false);
+    if (logContainerRef.current) {
+      logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
+    }
+  };
 
   const handleFetchConfig = async () => {
     setConfigLoading(true);
@@ -51,6 +72,28 @@ export const DiagnosticsView: React.FC<DiagnosticsViewProps> = ({ logs, onRefres
   const filteredLogs = logs.filter((l) =>
     selectedSource === "ALL" ? true : l.source.toUpperCase() === selectedSource
   );
+
+  // 1. When filter changes: snap to newest matching logs and restore live-follow mode
+  useEffect(() => {
+    shouldAutoScrollRef.current = true;
+    setIsAutoScrollPaused(false);
+    requestAnimationFrame(() => {
+      if (logContainerRef.current) {
+        logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
+      }
+    });
+  }, [selectedSource]);
+
+  // 2. When new filtered logs arrive: auto-scroll if live-follow is active
+  useEffect(() => {
+    if (shouldAutoScrollRef.current && logContainerRef.current) {
+      requestAnimationFrame(() => {
+        if (logContainerRef.current && shouldAutoScrollRef.current) {
+          logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
+        }
+      });
+    }
+  }, [filteredLogs]);
 
   return (
     <div className="flex flex-col h-full px-4 py-2.5 space-y-2.5 select-none">
@@ -109,32 +152,50 @@ export const DiagnosticsView: React.FC<DiagnosticsViewProps> = ({ logs, onRefres
       </div>
 
       {/* Terminal Log Console */}
-      <div className="flex-1 overflow-y-auto rounded-md border border-app-border bg-app-inset p-3 font-mono text-[11px] space-y-1 max-h-[380px]">
-        {filteredLogs.length === 0 ? (
-          <div className="text-ink-500 text-center py-10">No log telemetry events recorded in current runtime buffer.</div>
-        ) : (
-          filteredLogs.map((l) => (
-            <div key={l.id} className="flex items-start gap-2 hover:bg-app-surface/40 px-1 py-0.5 rounded-xs">
-              <span className="text-ink-500 shrink-0 select-none text-[10px]">
-                {new Date(l.timestamp).toLocaleTimeString()}
-              </span>
-              <span
-                className={`px-1 py-0.1 rounded-xs text-[9px] font-bold shrink-0 select-none ${
-                  l.level === "ERROR"
-                    ? "bg-signal-red-dim text-signal-red border border-signal-red/30"
-                    : l.level === "WARN"
-                    ? "bg-signal-amber-dim text-signal-amber border border-signal-amber/30"
-                    : "bg-app-panel text-ink-400 border border-app-border-subtle"
-                }`}
-              >
-                {l.level}
-              </span>
-              <span className="text-signal-cyan shrink-0 font-medium select-none text-[10px]">
-                [{l.source}]
-              </span>
-              <span className="text-ink-200 break-all leading-tight">{l.message}</span>
-            </div>
-          ))
+      <div className="relative flex-1 min-h-0 flex flex-col">
+        <div
+          ref={logContainerRef}
+          onScroll={handleScroll}
+          className="flex-1 overflow-y-auto rounded-md border border-app-border bg-app-inset p-3 font-mono text-[11px] space-y-1 max-h-[380px]"
+        >
+          {filteredLogs.length === 0 ? (
+            <div className="text-ink-500 text-center py-10">No log telemetry events recorded in current runtime buffer.</div>
+          ) : (
+            filteredLogs.map((l) => (
+              <div key={l.id} className="flex items-start gap-2 hover:bg-app-surface/40 px-1 py-0.5 rounded-xs">
+                <span className="text-ink-500 shrink-0 select-none text-[10px]">
+                  {new Date(l.timestamp).toLocaleTimeString()}
+                </span>
+                <span
+                  className={`px-1 py-0.1 rounded-xs text-[9px] font-bold shrink-0 select-none ${
+                    l.level === "ERROR"
+                      ? "bg-signal-red-dim text-signal-red border border-signal-red/30"
+                      : l.level === "WARN"
+                      ? "bg-signal-amber-dim text-signal-amber border border-signal-amber/30"
+                      : "bg-app-panel text-ink-400 border border-app-border-subtle"
+                  }`}
+                >
+                  {l.level}
+                </span>
+                <span className="text-signal-cyan shrink-0 font-medium select-none text-[10px]">
+                  [{l.source}]
+                </span>
+                <span className="text-ink-200 break-all leading-tight">{l.message}</span>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Floating "Latest logs" button when user scrolled up */}
+        {isAutoScrollPaused && filteredLogs.length > 0 && (
+          <button
+            onClick={handleScrollToBottom}
+            className="absolute bottom-3 right-4 z-10 flex items-center gap-1.5 px-2.5 py-1 rounded-sm bg-app-surface/95 hover:bg-app-elevated border border-signal-cyan/60 text-signal-cyan font-mono text-[10px] font-semibold shadow-lg backdrop-blur-xs transition-all cursor-pointer animate-in fade-in duration-150"
+            title="Scroll to newest logs"
+          >
+            <ArrowDown className="w-3 h-3" />
+            <span>Latest logs</span>
+          </button>
         )}
       </div>
 
