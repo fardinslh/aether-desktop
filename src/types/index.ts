@@ -80,6 +80,7 @@ export interface CompatibilityRule {
   enabled: boolean;
   processNames?: string[];
   ports?: number[];
+  portRanges?: string[];
   network?: NetworkProtocol;
   destination: RouteDestination;
   scope: CompatibilityScope;

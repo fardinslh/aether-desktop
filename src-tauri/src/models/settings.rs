@@ -213,8 +213,13 @@ pub struct CompatibilityRule {
     pub name: String,
     pub description: String,
     pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process_names: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ports: Option<Vec<u16>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port_ranges: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network: Option<NetworkProtocol>,
     pub destination: RouteDestination,
     pub scope: CompatibilityScope,

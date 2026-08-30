@@ -1,5 +1,6 @@
 use aether_desktop_lib::dependencies::github::ReleaseAsset;
 use aether_desktop_lib::dependencies::DependencyManager;
+use aether_desktop_lib::models::settings::{CompatibilityRule, CompatibilityScope, NetworkProtocol};
 use aether_desktop_lib::models::singbox::{InboundConfig, OutboundConfig};
 use aether_desktop_lib::models::{
     AppSettings, ApplicationRule, ConnectionState, RouteDestination, RulePriority, RuleSource,
@@ -142,8 +143,23 @@ fn main() {
     test_ad_save_exported_logs_creates_crlf_log_file();
     println!("✓ TEST AD [UNIT]: Export raw log formatting converts output to readable Windows CRLF text (PASSED)");
 
+    test_ae_dota2_valve_sdr_udp_port_range_routes_to_secondary_v2ray();
+    println!("✓ TEST AE [UNIT / ROUTING]: Dota 2 Valve SDR UDP traffic (ports 27000-27250) routes via Secondary Proxy (PASSED)");
+
+    test_af_dota2_tcp_and_non_sdr_ports_route_to_aether();
+    println!("✓ TEST AF [UNIT / ROUTING]: Dota 2 TCP and non-SDR UDP traffic strictly routes via Aether (PASSED)");
+
+    test_ag_other_process_on_sdr_ports_routes_to_normal();
+    println!("✓ TEST AG [UNIT / ROUTING]: Unrelated applications on ports 27000-27250 bypass Dota app-scoped compatibility (PASSED)");
+
+    test_ah_disabling_dota_sdr_toggle_restores_all_dota_to_aether();
+    println!("✓ TEST AH [UNIT / ROUTING]: Disabling Dota Valve SDR compatibility restores all Dota traffic to Aether (PASSED)");
+
+    test_ai_repeated_saves_do_not_duplicate_dota_sdr_rule();
+    println!("✓ TEST AI [UNIT / SETTINGS]: Repeated saves of Dota 2 settings do not duplicate the compatibility rule (PASSED)");
+
     println!("\n==================================================================");
-    println!("ALL 39 VERIFICATION & RELIABILITY TESTS PASSED!");
+    println!("ALL 44 VERIFICATION & RELIABILITY TESTS PASSED!");
     println!("==================================================================");
 }
 
@@ -1360,4 +1376,266 @@ fn test_ad_save_exported_logs_creates_crlf_log_file() {
     assert!(read_back.contains("Second line"));
 
     let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+fn test_ae_dota2_valve_sdr_udp_port_range_routes_to_secondary_v2ray() {
+    let mut settings = AppSettings::default();
+
+    // Dota 2 main application route: dota2.exe -> Aether
+    settings.application_rules = vec![ApplicationRule::new(
+        "Dota 2",
+        "dota2.exe",
+        RouteDestination::Aether,
+        None,
+        RuleSource::User,
+        RulePriority::Normal,
+        None,
+    )];
+
+    // Dota 2 Valve SDR Game UDP compatibility override:
+    // Process: dota2.exe, Network: UDP, Ports: 27000-27250, Destination: SecondaryProxy, Scope: AppScoped
+    let dota_compat = CompatibilityRule {
+        id: "compat-dota2-valve-sdr".to_string(),
+        name: "Valve SDR / Game UDP (Dota 2)".to_string(),
+        description: "Routes only Dota 2 Valve UDP traffic (27000-27250) through Secondary Proxy".to_string(),
+        enabled: true,
+        process_names: Some(vec!["dota2.exe".to_string()]),
+        ports: Some((27000..=27250).collect()),
+        port_ranges: Some(vec!["27000:27250".to_string()]),
+        network: Some(NetworkProtocol::Udp),
+        destination: RouteDestination::SecondaryProxy,
+        scope: CompatibilityScope::AppScoped,
+    };
+    settings.compatibility.custom_compatibility_rules.push(dota_compat);
+
+    let config = SingBoxConfigGenerator::generate(&settings);
+
+    // 1. dota2.exe UDP :27036 -> v2ray
+    let route_27036 = SingBoxConfigGenerator::resolve_route_with_network(
+        &config,
+        Some("dota2.exe"),
+        Some(27036),
+        Some("udp"),
+        false,
+    );
+    assert_eq!(route_27036, "v2ray", "dota2.exe UDP :27036 must route to v2ray/Secondary");
+
+    // 2. dota2.exe UDP :27058 -> v2ray
+    let route_27058 = SingBoxConfigGenerator::resolve_route_with_network(
+        &config,
+        Some("dota2.exe"),
+        Some(27058),
+        Some("udp"),
+        false,
+    );
+    assert_eq!(route_27058, "v2ray", "dota2.exe UDP :27058 must route to v2ray/Secondary");
+
+    // 3. dota2.exe UDP :27017 -> v2ray
+    let route_27017 = SingBoxConfigGenerator::resolve_route_with_network(
+        &config,
+        Some("dota2.exe"),
+        Some(27017),
+        Some("udp"),
+        false,
+    );
+    assert_eq!(route_27017, "v2ray", "dota2.exe UDP :27017 must route to v2ray/Secondary");
+}
+
+fn test_af_dota2_tcp_and_non_sdr_ports_route_to_aether() {
+    let mut settings = AppSettings::default();
+
+    // Dota 2 main application route: dota2.exe -> Aether
+    settings.application_rules = vec![ApplicationRule::new(
+        "Dota 2",
+        "dota2.exe",
+        RouteDestination::Aether,
+        None,
+        RuleSource::User,
+        RulePriority::Normal,
+        None,
+    )];
+
+    let dota_compat = CompatibilityRule {
+        id: "compat-dota2-valve-sdr".to_string(),
+        name: "Valve SDR / Game UDP (Dota 2)".to_string(),
+        description: "Routes only Dota 2 Valve UDP traffic (27000-27250) through Secondary Proxy".to_string(),
+        enabled: true,
+        process_names: Some(vec!["dota2.exe".to_string()]),
+        ports: Some((27000..=27250).collect()),
+        port_ranges: Some(vec!["27000:27250".to_string()]),
+        network: Some(NetworkProtocol::Udp),
+        destination: RouteDestination::SecondaryProxy,
+        scope: CompatibilityScope::AppScoped,
+    };
+    settings.compatibility.custom_compatibility_rules.push(dota_compat);
+
+    let config = SingBoxConfigGenerator::generate(&settings);
+
+    // 4. dota2.exe TCP :27036 -> aether (TCP traffic ignores UDP SDR override)
+    let route_tcp_27036 = SingBoxConfigGenerator::resolve_route_with_network(
+        &config,
+        Some("dota2.exe"),
+        Some(27036),
+        Some("tcp"),
+        false,
+    );
+    assert_eq!(route_tcp_27036, "aether", "dota2.exe TCP :27036 must route to aether");
+
+    // 5. dota2.exe UDP :443 -> aether (non-SDR port ignores SDR override)
+    let route_udp_443 = SingBoxConfigGenerator::resolve_route_with_network(
+        &config,
+        Some("dota2.exe"),
+        Some(443),
+        Some("udp"),
+        false,
+    );
+    assert_eq!(route_udp_443, "aether", "dota2.exe UDP :443 must route to aether");
+}
+
+fn test_ag_other_process_on_sdr_ports_routes_to_normal() {
+    let mut settings = AppSettings::default();
+
+    // Dota 2 main application route: dota2.exe -> Aether
+    settings.application_rules = vec![
+        ApplicationRule::new(
+            "Dota 2",
+            "dota2.exe",
+            RouteDestination::Aether,
+            None,
+            RuleSource::User,
+            RulePriority::Normal,
+            None,
+        ),
+        ApplicationRule::new(
+            "Game Launcher",
+            "launcher.exe",
+            RouteDestination::Direct,
+            None,
+            RuleSource::User,
+            RulePriority::Normal,
+            None,
+        ),
+    ];
+
+    let dota_compat = CompatibilityRule {
+        id: "compat-dota2-valve-sdr".to_string(),
+        name: "Valve SDR / Game UDP (Dota 2)".to_string(),
+        description: "Routes only Dota 2 Valve UDP traffic (27000-27250) through Secondary Proxy".to_string(),
+        enabled: true,
+        process_names: Some(vec!["dota2.exe".to_string()]),
+        ports: Some((27000..=27250).collect()),
+        port_ranges: Some(vec!["27000:27250".to_string()]),
+        network: Some(NetworkProtocol::Udp),
+        destination: RouteDestination::SecondaryProxy,
+        scope: CompatibilityScope::AppScoped,
+    };
+    settings.compatibility.custom_compatibility_rules.push(dota_compat);
+
+    let config = SingBoxConfigGenerator::generate(&settings);
+
+    // 6. launcher.exe UDP :27036 -> direct (its configured rule, NOT affected by Dota app-scoped compatibility)
+    let route_launcher = SingBoxConfigGenerator::resolve_route_with_network(
+        &config,
+        Some("launcher.exe"),
+        Some(27036),
+        Some("udp"),
+        false,
+    );
+    assert_eq!(route_launcher, "direct", "launcher.exe must follow its own rule (direct)");
+
+    // 6b. unassigned app UDP :27036 -> aether (global fallback, NOT affected by Dota app-scoped compatibility)
+    let route_unassigned = SingBoxConfigGenerator::resolve_route_with_network(
+        &config,
+        Some("unassigned.exe"),
+        Some(27036),
+        Some("udp"),
+        false,
+    );
+    assert_eq!(route_unassigned, "aether", "unassigned.exe must follow global fallback (aether)");
+}
+
+fn test_ah_disabling_dota_sdr_toggle_restores_all_dota_to_aether() {
+    let mut settings = AppSettings::default();
+
+    // Dota 2 main application route: dota2.exe -> Aether
+    settings.application_rules = vec![ApplicationRule::new(
+        "Dota 2",
+        "dota2.exe",
+        RouteDestination::Aether,
+        None,
+        RuleSource::User,
+        RulePriority::Normal,
+        None,
+    )];
+
+    // Compatibility rule disabled / removed
+    let dota_compat = CompatibilityRule {
+        id: "compat-dota2-valve-sdr".to_string(),
+        name: "Valve SDR / Game UDP (Dota 2)".to_string(),
+        description: "Routes only Dota 2 Valve UDP traffic (27000-27250) through Secondary Proxy".to_string(),
+        enabled: false,
+        process_names: Some(vec!["dota2.exe".to_string()]),
+        ports: Some((27000..=27250).collect()),
+        port_ranges: Some(vec!["27000:27250".to_string()]),
+        network: Some(NetworkProtocol::Udp),
+        destination: RouteDestination::SecondaryProxy,
+        scope: CompatibilityScope::AppScoped,
+    };
+    settings.compatibility.custom_compatibility_rules.push(dota_compat);
+
+    let config = SingBoxConfigGenerator::generate(&settings);
+
+    // 7. Disabling the toggle restores all Dota traffic to normal Aether route
+    let route_disabled = SingBoxConfigGenerator::resolve_route_with_network(
+        &config,
+        Some("dota2.exe"),
+        Some(27036),
+        Some("udp"),
+        false,
+    );
+    assert_eq!(route_disabled, "aether", "When disabled, dota2.exe UDP :27036 must route to aether");
+}
+
+fn test_ai_repeated_saves_do_not_duplicate_dota_sdr_rule() {
+    let mut settings = AppSettings::default();
+
+    let dota_rule_id = "compat-dota2-valve-sdr";
+
+    // Simulate saving Dota 2 modal multiple times with toggle enabled
+    for _ in 0..5 {
+        let other_rules: Vec<CompatibilityRule> = settings
+            .compatibility
+            .custom_compatibility_rules
+            .into_iter()
+            .filter(|r| r.id != dota_rule_id)
+            .collect();
+
+        let updated_dota_compat = CompatibilityRule {
+            id: dota_rule_id.to_string(),
+            name: "Valve SDR / Game UDP (Dota 2)".to_string(),
+            description: "Routes only Dota 2 Valve UDP traffic (27000-27250) through Secondary Proxy".to_string(),
+            enabled: true,
+            process_names: Some(vec!["dota2.exe".to_string()]),
+            ports: Some((27000..=27250).collect()),
+            port_ranges: Some(vec!["27000:27250".to_string()]),
+            network: Some(NetworkProtocol::Udp),
+            destination: RouteDestination::SecondaryProxy,
+            scope: CompatibilityScope::AppScoped,
+        };
+
+        let mut new_rules = other_rules;
+        new_rules.push(updated_dota_compat);
+        settings.compatibility.custom_compatibility_rules = new_rules;
+    }
+
+    // 8. Repeated saves do not duplicate the compatibility rule
+    assert_eq!(
+        settings.compatibility.custom_compatibility_rules.len(),
+        1,
+        "Repeated saves must not produce duplicate compatibility rules"
+    );
+    assert_eq!(
+        settings.compatibility.custom_compatibility_rules[0].id,
+        dota_rule_id
+    );
 }

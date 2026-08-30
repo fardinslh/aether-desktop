@@ -7,15 +7,16 @@ import {
   RefreshCw,
   ArrowRight,
 } from "lucide-react";
-import { ApplicationRule, RouteDestination } from "../../types";
+import { ApplicationRule, CompatibilityRule, RouteDestination } from "../../types";
 import { AppIcon } from "../../components/AppIcon";
 import { AddApplicationModal } from "./AddApplicationModal";
 import { EditApplicationModal } from "./EditApplicationModal";
 
 interface ApplicationRoutingViewProps {
   rules: ApplicationRule[];
+  compatibilityRules?: CompatibilityRule[];
   onAddRule: (rule: ApplicationRule) => void;
-  onUpdateRule: (rule: ApplicationRule) => void;
+  onUpdateRule: (rule: ApplicationRule, updatedCompatRules?: CompatibilityRule[]) => void;
   onToggleRule: (id: string, enabled: boolean) => void;
   onDeleteRule: (id: string) => void;
   onChangeRoute: (id: string, route: RouteDestination) => void;
@@ -24,6 +25,7 @@ interface ApplicationRoutingViewProps {
 
 export const ApplicationRoutingView: React.FC<ApplicationRoutingViewProps> = ({
   rules,
+  compatibilityRules,
   onAddRule,
   onUpdateRule,
   onToggleRule,
@@ -273,6 +275,7 @@ export const ApplicationRoutingView: React.FC<ApplicationRoutingViewProps> = ({
       <EditApplicationModal
         isOpen={!!editingRule}
         rule={editingRule}
+        compatibilityRules={compatibilityRules}
         onClose={() => setEditingRule(null)}
         onSaveRule={onUpdateRule}
         onDeleteRule={onDeleteRule}

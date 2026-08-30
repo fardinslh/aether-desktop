@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { AppSettings, ApplicationRule, ConnectionState, HealthStatus, LogEntry, RouteDestination } from "../types";
+import { AppSettings, ApplicationRule, CompatibilityRule, ConnectionState, HealthStatus, LogEntry, RouteDestination } from "../types";
 import { api } from "../services/api";
 import { listen } from "@tauri-apps/api/event";
 
@@ -145,13 +145,22 @@ export function useAppStore() {
     await updateSettings(updated);
   };
 
-  const updateApplicationRule = async (updatedRule: ApplicationRule) => {
+  const updateApplicationRule = async (
+    updatedRule: ApplicationRule,
+    updatedCompatRules?: CompatibilityRule[]
+  ) => {
     if (!settings) return;
     const updated = {
       ...settings,
       applicationRules: settings.applicationRules.map((r) =>
         r.id === updatedRule.id ? updatedRule : r
       ),
+      compatibility: updatedCompatRules
+        ? {
+            ...settings.compatibility,
+            customCompatibilityRules: updatedCompatRules,
+          }
+        : settings.compatibility,
     };
     await updateSettings(updated);
   };
@@ -167,9 +176,21 @@ export function useAppStore() {
 
   const deleteApplicationRule = async (id: string) => {
     if (!settings) return;
+    const targetRule = settings.applicationRules.find((r) => r.id === id);
+    const updatedCompatRules =
+      targetRule && targetRule.processName.toLowerCase() === "dota2.exe"
+        ? settings.compatibility.customCompatibilityRules.filter(
+            (r) => r.id !== "compat-dota2-valve-sdr"
+          )
+        : settings.compatibility.customCompatibilityRules;
+
     const updated = {
       ...settings,
       applicationRules: settings.applicationRules.filter((r) => r.id !== id),
+      compatibility: {
+        ...settings.compatibility,
+        customCompatibilityRules: updatedCompatRules,
+      },
     };
     await updateSettings(updated);
   };

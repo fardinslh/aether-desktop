@@ -109,6 +109,9 @@ pub struct RouteRule {
     pub port: Option<Vec<u16>>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub port_range: Option<Vec<String>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub network: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]

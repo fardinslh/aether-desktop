@@ -10,21 +10,26 @@ import {
   ChevronRight,
   SlidersHorizontal,
   AlertTriangle,
+  Gamepad2,
 } from "lucide-react";
-import { ApplicationRule, RouteDestination, RulePriority } from "../../types";
+import { ApplicationRule, CompatibilityRule, RouteDestination, RulePriority } from "../../types";
 import { AppIcon } from "../../components/AppIcon";
+
+const DOTA_SDR_RULE_ID = "compat-dota2-valve-sdr";
 
 interface EditApplicationModalProps {
   isOpen: boolean;
   rule: ApplicationRule | null;
+  compatibilityRules?: CompatibilityRule[];
   onClose: () => void;
-  onSaveRule: (updatedRule: ApplicationRule) => void;
+  onSaveRule: (updatedRule: ApplicationRule, updatedCompatRules?: CompatibilityRule[]) => void;
   onDeleteRule: (id: string) => void;
 }
 
 export const EditApplicationModal: React.FC<EditApplicationModalProps> = ({
   isOpen,
   rule,
+  compatibilityRules = [],
   onClose,
   onSaveRule,
   onDeleteRule,
@@ -34,6 +39,9 @@ export const EditApplicationModal: React.FC<EditApplicationModalProps> = ({
   const [priority, setPriority] = useState<RulePriority>("normal");
   const [enabled, setEnabled] = useState<boolean>(true);
   const [isAdvancedOpen, setIsAdvancedOpen] = useState<boolean>(false);
+  const [valveSdrEnabled, setValveSdrEnabled] = useState<boolean>(false);
+
+  const isDota = rule ? rule.processName.toLowerCase() === "dota2.exe" : false;
 
   useEffect(() => {
     if (rule) {
@@ -41,10 +49,21 @@ export const EditApplicationModal: React.FC<EditApplicationModalProps> = ({
       setDestination(rule.destination || rule.route || "secondaryProxy");
       setPriority(rule.priority || "normal");
       setEnabled(rule.enabled);
-      // Auto-expand advanced options if rule has high priority so the user understands its status
-      setIsAdvancedOpen(rule.priority === "high");
+
+      const dotaRuleActive = compatibilityRules.some(
+        (cr) =>
+          cr.enabled &&
+          (cr.id === DOTA_SDR_RULE_ID ||
+            (cr.processNames?.some((p) => p.toLowerCase() === "dota2.exe") &&
+              cr.network === "udp" &&
+              cr.destination === "secondaryProxy"))
+      );
+      setValveSdrEnabled(dotaRuleActive);
+
+      // Auto-expand advanced options if rule has high priority or active game compatibility
+      setIsAdvancedOpen(rule.priority === "high" || dotaRuleActive);
     }
-  }, [rule]);
+  }, [rule, compatibilityRules]);
 
   if (!isOpen || !rule) return null;
 
@@ -57,7 +76,32 @@ export const EditApplicationModal: React.FC<EditApplicationModalProps> = ({
       enabled,
       priority,
     };
-    onSaveRule(updated);
+
+    let updatedCompatRules: CompatibilityRule[] | undefined = undefined;
+
+    if (isDota) {
+      const otherCompatRules = compatibilityRules.filter((cr) => cr.id !== DOTA_SDR_RULE_ID);
+      if (valveSdrEnabled) {
+        const dotaCompatRule: CompatibilityRule = {
+          id: DOTA_SDR_RULE_ID,
+          name: "Valve SDR / Game UDP (Dota 2)",
+          description:
+            "Routes only Dota 2 Valve UDP traffic (27000-27250) through Secondary Proxy while keeping the rest of Dota on its selected route.",
+          enabled: true,
+          processNames: ["dota2.exe"],
+          network: "udp",
+          portRanges: ["27000:27250"],
+          ports: Array.from({ length: 251 }, (_, i) => 27000 + i),
+          destination: "secondaryProxy",
+          scope: "appScoped",
+        };
+        updatedCompatRules = [...otherCompatRules, dotaCompatRule];
+      } else {
+        updatedCompatRules = otherCompatRules;
+      }
+    }
+
+    onSaveRule(updated, updatedCompatRules);
     onClose();
   };
 
@@ -259,6 +303,49 @@ export const EditApplicationModal: React.FC<EditApplicationModalProps> = ({
                     </label>
                   </div>
                 </div>
+
+                {/* GAME COMPATIBILITY (Dota 2 Valve SDR UDP) */}
+                {isDota && (
+                  <div className="pt-2.5 border-t border-app-border-subtle space-y-1.5 font-sans">
+                    <div className="flex items-center justify-between">
+                      <div className="font-semibold text-ink-200 text-[11px] font-mono uppercase tracking-wider flex items-center gap-1.5">
+                        <Gamepad2 className="w-3.5 h-3.5 text-signal-amber" />
+                        <span>GAME COMPATIBILITY</span>
+                      </div>
+                      <span className="text-[9px] px-1 py-0.2 rounded-xs bg-signal-cyan-dim text-signal-cyan font-mono border border-signal-cyan/30">
+                        APP-SCOPED
+                      </span>
+                    </div>
+
+                    <label
+                      className={`flex items-start gap-2.5 p-2 rounded-sm border cursor-pointer transition-all ${
+                        valveSdrEnabled
+                          ? "bg-signal-amber-dim border-signal-amber text-ink-100 shadow-sm"
+                          : "bg-app-panel border-app-border text-ink-400 hover:border-ink-500"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={valveSdrEnabled}
+                        onChange={(e) => setValveSdrEnabled(e.target.checked)}
+                        className="mt-0.5 w-3.5 h-3.5 rounded-xs text-signal-amber focus:ring-signal-amber bg-app-inset border-app-border cursor-pointer"
+                      />
+                      <div className="space-y-0.5">
+                        <div className="font-semibold text-xs text-ink-100 font-mono flex items-center gap-1.5">
+                          <span>Valve SDR / Game UDP via Secondary</span>
+                          {valveSdrEnabled && (
+                            <span className="text-[9px] font-mono px-1 py-0.1 bg-signal-amber text-black font-bold rounded-xs">
+                              ACTIVE
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[10px] text-ink-300 font-sans leading-tight">
+                          Routes only Dota 2 Valve UDP traffic (27000-27250) through the Secondary Proxy while keeping the rest of Dota on its selected route.
+                        </p>
+                      </div>
+                    </label>
+                  </div>
+                )}
               </div>
             )}
           </div>

@@ -85,6 +85,7 @@ impl SingBoxConfigGenerator {
             protocol: Some(vec!["dns".to_string()]),
             process_name: None,
             port: None,
+            port_range: None,
             network: None,
             ip_is_private: None,
             action: Some("hijack-dns".to_string()),
@@ -94,6 +95,7 @@ impl SingBoxConfigGenerator {
             protocol: None,
             process_name: None,
             port: Some(vec![53]),
+            port_range: None,
             network: None,
             ip_is_private: None,
             action: Some("hijack-dns".to_string()),
@@ -109,6 +111,7 @@ impl SingBoxConfigGenerator {
             protocol: None,
             process_name: Some(loop_processes),
             port: None,
+            port_range: None,
             network: None,
             ip_is_private: None,
             action: Some("route".to_string()),
@@ -131,6 +134,7 @@ impl SingBoxConfigGenerator {
                         protocol: None,
                         process_name: Some(procs.clone()),
                         port: compat_rule.ports.clone(),
+                        port_range: compat_rule.port_ranges.clone(),
                         network: network_str,
                         ip_is_private: None,
                         action: Some("route".to_string()),
@@ -224,6 +228,7 @@ impl SingBoxConfigGenerator {
                 protocol: None,
                 process_name: Some(high_direct_apps),
                 port: None,
+                port_range: None,
                 network: None,
                 ip_is_private: None,
                 action: Some("route".to_string()),
@@ -235,6 +240,7 @@ impl SingBoxConfigGenerator {
                 protocol: None,
                 process_name: Some(high_v2ray_apps),
                 port: None,
+                port_range: None,
                 network: None,
                 ip_is_private: None,
                 action: Some("route".to_string()),
@@ -246,6 +252,7 @@ impl SingBoxConfigGenerator {
                 protocol: None,
                 process_name: Some(high_aether_apps),
                 port: None,
+                port_range: None,
                 network: None,
                 ip_is_private: None,
                 action: Some("route".to_string()),
@@ -268,6 +275,7 @@ impl SingBoxConfigGenerator {
                 protocol: None,
                 process_name: compat_rule.process_names.clone(),
                 port: compat_rule.ports.clone(),
+                port_range: compat_rule.port_ranges.clone(),
                 network: network_str,
                 ip_is_private: None,
                 action: Some("route".to_string()),
@@ -281,6 +289,7 @@ impl SingBoxConfigGenerator {
                 protocol: None,
                 process_name: None,
                 port: Some(GENERALS_STUN_TURN_PORTS.to_vec()),
+                port_range: None,
                 network: None,
                 ip_is_private: None,
                 action: Some("route".to_string()),
@@ -295,6 +304,7 @@ impl SingBoxConfigGenerator {
                 protocol: None,
                 process_name: Some(normal_direct_apps),
                 port: None,
+                port_range: None,
                 network: None,
                 ip_is_private: None,
                 action: Some("route".to_string()),
@@ -308,6 +318,7 @@ impl SingBoxConfigGenerator {
                 protocol: None,
                 process_name: Some(normal_v2ray_apps),
                 port: None,
+                port_range: None,
                 network: None,
                 ip_is_private: None,
                 action: Some("route".to_string()),
@@ -321,6 +332,7 @@ impl SingBoxConfigGenerator {
                 protocol: None,
                 process_name: Some(normal_aether_apps),
                 port: None,
+                port_range: None,
                 network: None,
                 ip_is_private: None,
                 action: Some("route".to_string()),
@@ -334,6 +346,7 @@ impl SingBoxConfigGenerator {
                 protocol: None,
                 process_name: None,
                 port: None,
+                port_range: None,
                 network: None,
                 ip_is_private: Some(true),
                 action: Some("route".to_string()),
@@ -378,6 +391,28 @@ impl SingBoxConfigGenerator {
         port: Option<u16>,
         is_private: bool,
     ) -> &'a str {
+        Self::resolve_route_full(config, process_name, port, None, is_private)
+    }
+
+    /// Helper that evaluates routing resolution with explicit network protocol (e.g. "udp" or "tcp")
+    pub fn resolve_route_with_network<'a>(
+        config: &'a SingBoxConfig,
+        process_name: Option<&str>,
+        port: Option<u16>,
+        network: Option<&str>,
+        is_private: bool,
+    ) -> &'a str {
+        Self::resolve_route_full(config, process_name, port, network, is_private)
+    }
+
+    /// Full semantic top-down routing resolution for a packet
+    pub fn resolve_route_full<'a>(
+        config: &'a SingBoxConfig,
+        process_name: Option<&str>,
+        port: Option<u16>,
+        network: Option<&str>,
+        is_private: bool,
+    ) -> &'a str {
         for rule in &config.route.rules {
             // Check hijack-dns infrastructure rule
             if rule.action.as_deref() == Some("hijack-dns") {
@@ -410,14 +445,32 @@ impl SingBoxConfigGenerator {
                 (None, _) => true,
             };
 
-            // Check port match if rule requires it
-            let port_matches = match (&rule.port, port) {
-                (Some(ref ports), Some(dst_port)) => ports.contains(&dst_port),
-                (Some(_), None) => false,
+            // Check network match if rule requires it (e.g. "udp" vs "tcp")
+            let network_matches = match (&rule.network, network) {
+                (Some(rule_net), Some(req_net)) => rule_net.eq_ignore_ascii_case(req_net),
+                (Some(_), None) => true,
                 (None, _) => true,
             };
 
-            if proc_matches && port_matches {
+            // Check port match if rule requires it (either port list or port_range)
+            let port_matches = match (port, &rule.port, &rule.port_range) {
+                (Some(dst_port), Some(ports), _) if ports.contains(&dst_port) => true,
+                (Some(dst_port), _, Some(ranges)) => {
+                    ranges.iter().any(|range_str| {
+                        if let Some((start_s, end_s)) = range_str.split_once(':') {
+                            if let (Ok(start), Ok(end)) = (start_s.parse::<u16>(), end_s.parse::<u16>()) {
+                                return dst_port >= start && dst_port <= end;
+                            }
+                        }
+                        false
+                    })
+                }
+                (None, Some(_), _) | (None, _, Some(_)) => false,
+                (_, None, None) => true,
+                _ => false,
+            };
+
+            if proc_matches && network_matches && port_matches {
                 return rule
                     .outbound
                     .as_deref()

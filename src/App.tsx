@@ -105,6 +105,7 @@ export function App() {
         {activeTab === "routing" && (
           <ApplicationRoutingView
             rules={settings.applicationRules}
+            compatibilityRules={settings.compatibility.customCompatibilityRules}
             onAddRule={addApplicationRule}
             onUpdateRule={updateApplicationRule}
             onToggleRule={toggleApplicationRule}
