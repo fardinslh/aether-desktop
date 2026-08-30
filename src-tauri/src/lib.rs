@@ -16,6 +16,48 @@ use std::sync::Arc;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    std::panic::set_hook(Box::new(|info| {
+        let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            s.to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "Unknown panic".to_string()
+        };
+
+        let msg = format!(
+            "Aether Desktop encountered a critical error and must close.\n\nDetails: {}\nLocation: {:?}",
+            payload,
+            info.location()
+        );
+        eprintln!("{}", msg);
+
+        if let Some(dirs) = directories::BaseDirs::new() {
+            let crash_dir = dirs.data_local_dir().join("AetherDesktop");
+            let _ = std::fs::create_dir_all(&crash_dir);
+            let crash_file = crash_dir.join("crash.log");
+            let _ = std::fs::write(&crash_file, &msg);
+        }
+
+        #[cfg(windows)]
+        unsafe {
+            use std::ffi::OsStr;
+            use std::os::windows::ffi::OsStrExt;
+            let msg_w: Vec<u16> = OsStr::new(&msg).encode_wide().chain(Some(0)).collect();
+            let title_w: Vec<u16> = OsStr::new("Aether Desktop Critical Error")
+                .encode_wide()
+                .chain(Some(0))
+                .collect();
+            windows_sys::Win32::UI::WindowsAndMessaging::MessageBoxW(
+                std::ptr::null_mut(),
+                msg_w.as_ptr(),
+                title_w.as_ptr(),
+                windows_sys::Win32::UI::WindowsAndMessaging::MB_OK
+                    | windows_sys::Win32::UI::WindowsAndMessaging::MB_ICONERROR,
+            );
+        }
+    }));
+
     let logger = RingBufferLogger::new(1000);
     logger.log("INFO", "App", "Aether Desktop initialized");
 
