@@ -61,16 +61,44 @@ pub fn parse_candidate_rtt_from_line(line: &str) -> Option<u32> {
     let start_idx = after.find(|c: char| c.is_ascii_digit())?;
     let num_slice = &after[start_idx..];
 
-    let mut digits = String::new();
-    for ch in num_slice.chars() {
+    // Extract the numeric portion (including optional decimal point)
+    let mut num_str = String::new();
+    let mut rest_slice = "";
+    let mut has_dot = false;
+    for (idx, ch) in num_slice.char_indices() {
         if ch.is_ascii_digit() {
-            digits.push(ch);
+            num_str.push(ch);
+        } else if ch == '.' && !has_dot {
+            num_str.push(ch);
+            has_dot = true;
         } else {
+            rest_slice = &num_slice[idx..];
             break;
         }
     }
 
-    digits.parse::<u32>().ok().filter(|&v| v > 0 && v < 10000)
+    let val: f64 = num_str.parse().ok()?;
+    if val <= 0.0 {
+        return None;
+    }
+
+    let rest_trimmed = rest_slice.trim_start();
+    let ms = if rest_trimmed.starts_with("ms") {
+        val.round() as u32
+    } else if rest_trimmed.starts_with("µs") || rest_trimmed.starts_with("us") {
+        (val / 1000.0).round().max(1.0) as u32
+    } else if rest_trimmed.starts_with('s') {
+        (val * 1000.0).round() as u32
+    } else {
+        // Default unit if not explicitly specified is milliseconds
+        val.round() as u32
+    };
+
+    if ms > 0 && ms < 60000 {
+        Some(ms)
+    } else {
+        None
+    }
 }
 
 pub struct ProcessHandle {
@@ -1080,6 +1108,18 @@ mod tests {
         assert_eq!(
             parse_candidate_rtt_from_line("Testing endpoint latency: 120ms"),
             Some(120)
+        );
+        assert_eq!(
+            parse_candidate_rtt_from_line("candidate 162.159.192.10:2408 rtt=1.2214481s"),
+            Some(1221)
+        );
+        assert_eq!(
+            parse_candidate_rtt_from_line("probe ok latency: 0.045s"),
+            Some(45)
+        );
+        assert_eq!(
+            parse_candidate_rtt_from_line("ping: 85.4 ms"),
+            Some(85)
         );
         assert_eq!(
             parse_candidate_rtt_from_line("Random log line with no timing"),

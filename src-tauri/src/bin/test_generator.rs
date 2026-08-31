@@ -1302,6 +1302,18 @@ fn test_z_candidate_rtt_processing_works_for_both_stdout_and_stderr() {
         &logger,
     );
     assert_eq!(best_rtt.load(Ordering::SeqCst), 42);
+
+    // 4. Seconds format candidate on stderr updates best if faster
+    process_aether_line(
+        "Endpoint 162.159.193.20:500 ok (rtt=0.035s)",
+        true,
+        &interactive,
+        &best_rtt,
+        &cached_reused,
+        &fresh_scan,
+        &logger,
+    );
+    assert_eq!(best_rtt.load(Ordering::SeqCst), 35);
 }
 
 fn test_aa_restore_deadline_bounded_to_25s() {
