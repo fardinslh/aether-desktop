@@ -44,17 +44,17 @@ pub fn get_default_rules() -> Vec<ApplicationRule> {
             "language_server.exe",
             RouteDestination::SecondaryProxy,
         ),
-        // STEAM SUITE PRESETS (Secondary Proxy for unthrottled Store, Community, Library & Web Helper)
-        ApplicationRule::preset("Steam", "steam.exe", RouteDestination::SecondaryProxy),
+        // STEAM SUITE PRESETS (Aether for unified gaming tunnel & client routing)
+        ApplicationRule::preset("Steam", "steam.exe", RouteDestination::Aether),
         ApplicationRule::preset(
             "Steam Web Helper",
             "steamwebhelper.exe",
-            RouteDestination::SecondaryProxy,
+            RouteDestination::Aether,
         ),
         ApplicationRule::preset(
             "Steam Service",
             "steamservice.exe",
-            RouteDestination::SecondaryProxy,
+            RouteDestination::Aether,
         ),
     ]
 }

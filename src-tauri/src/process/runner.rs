@@ -56,13 +56,9 @@ pub fn check_and_log_routing_highlights(logger: &RingBufferLogger, line: &str) {
         || lower.contains("steamwebhelper.exe")
         || lower.contains("steamservice.exe")
     {
-        if lower.contains("match") || lower.contains("router:") || lower.contains("outbound") {
-            logger.log("INFO", "routing", format!("[STEAM-ROUTING] {}", line));
-        }
+        logger.log("INFO", "routing", format!("[STEAM-ROUTING] {}", line));
     } else if lower.contains("dota2.exe") {
-        if lower.contains("match") || lower.contains("router:") || lower.contains("outbound") {
-            logger.log("INFO", "routing", format!("[DOTA-ROUTING] {}", line));
-        }
+        logger.log("INFO", "routing", format!("[DOTA-ROUTING] {}", line));
     }
 }
 

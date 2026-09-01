@@ -194,8 +194,8 @@ fn main() {
     test_au_cached_endpoint_reuse_rejected_during_forced_fresh_scan();
     println!("✓ TEST AU [UNIT / SCAN]: Output stream parser detects and rejects cached endpoint reuse during forced fresh scan (PASSED)");
 
-    test_av_steam_suite_routes_to_secondary_proxy();
-    println!("✓ TEST AV [UNIT / ROUTING]: Steam suite (steam.exe, steamwebhelper.exe, steamservice.exe) routes to Secondary Proxy (PASSED)");
+    test_av_steam_suite_routes_to_aether();
+    println!("✓ TEST AV [UNIT / ROUTING]: Steam suite (steam.exe, steamwebhelper.exe, steamservice.exe) routes to Aether (PASSED)");
 
     test_aw_steam_companion_propagation_when_steam_customized();
     println!("✓ TEST AW [UNIT / ROUTING]: Steam companion processes automatically propagate with steam.exe custom destination (PASSED)");
@@ -250,7 +250,7 @@ fn test_reference_config_match() {
     }
 
     let rules = &config.route.rules;
-    assert_eq!(rules.len(), 8);
+    assert_eq!(rules.len(), 9);
 
     // Rule 0 & 1: DNS Hijack Infrastructure rules
     assert_eq!(
@@ -291,16 +291,23 @@ fn test_reference_config_match() {
             "codex.exe",
             "Antigravity.exe",
             "agy.exe",
-            "language_server.exe",
+            "language_server.exe"
+        ]
+    );
+    assert_eq!(rules[6].outbound.as_deref(), Some("v2ray"));
+
+    assert_eq!(
+        rules[7].process_name.as_ref().unwrap(),
+        &vec![
             "steam.exe",
             "steamwebhelper.exe",
             "steamservice.exe"
         ]
     );
-    assert_eq!(rules[6].outbound.as_deref(), Some("v2ray"));
+    assert_eq!(rules[7].outbound.as_deref(), Some("aether"));
 
-    assert_eq!(rules[7].ip_is_private, Some(true));
-    assert_eq!(rules[7].outbound.as_deref(), Some("direct"));
+    assert_eq!(rules[8].ip_is_private, Some(true));
+    assert_eq!(rules[8].outbound.as_deref(), Some("direct"));
 
     assert_eq!(config.route.final_outbound, "aether");
     assert_eq!(
@@ -2229,21 +2236,21 @@ fn test_au_cached_endpoint_reuse_rejected_during_forced_fresh_scan() {
     assert!(!is_cached_endpoint_reuse_line(fresh2));
 }
 
-fn test_av_steam_suite_routes_to_secondary_proxy() {
+fn test_av_steam_suite_routes_to_aether() {
     let settings = AppSettings::default();
     let config = SingBoxConfigGenerator::generate(&settings);
 
-    // 1. Steam bootstrap process routes to Secondary Proxy (v2ray)
+    // 1. Steam bootstrap process routes to Aether
     let steam_route = SingBoxConfigGenerator::resolve_route(&config, Some("steam.exe"), Some(443), false);
-    assert_eq!(steam_route, "v2ray", "steam.exe must route to secondary proxy");
+    assert_eq!(steam_route, "aether", "steam.exe must route to aether");
 
-    // 2. Steam Web Helper (Store, Community, Library CEF engine) routes to Secondary Proxy (v2ray)
+    // 2. Steam Web Helper (Store, Community, Library CEF engine) routes to Aether
     let helper_route = SingBoxConfigGenerator::resolve_route(&config, Some("steamwebhelper.exe"), Some(443), false);
-    assert_eq!(helper_route, "v2ray", "steamwebhelper.exe must route to secondary proxy");
+    assert_eq!(helper_route, "aether", "steamwebhelper.exe must route to aether");
 
-    // 3. Steam Client Service routes to Secondary Proxy (v2ray)
+    // 3. Steam Client Service routes to Aether
     let service_route = SingBoxConfigGenerator::resolve_route(&config, Some("steamservice.exe"), Some(443), false);
-    assert_eq!(service_route, "v2ray", "steamservice.exe must route to secondary proxy");
+    assert_eq!(service_route, "aether", "steamservice.exe must route to aether");
 }
 
 fn test_aw_steam_companion_propagation_when_steam_customized() {
