@@ -768,7 +768,7 @@ impl SingBoxRunner {
             || {
                 HealthProber::verify_staged_egress_decision_path(
                     || HealthProber::query_direct_system_cloudflare_trace_resilient(Some(&log_cb)),
-                    || HealthProber::test_system_dns_resolution("www.cloudflare.com"),
+                    || HealthProber::test_system_dns_resolution_with_logger("www.cloudflare.com", Some(&log_cb)),
                     || HealthProber::query_direct_system_cloudflare_trace_hostname(),
                     expected_aether_ip,
                     Some(&log_cb),

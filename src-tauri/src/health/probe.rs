@@ -543,26 +543,78 @@ impl HealthProber {
     /// Stage 2: Explicit Windows system DNS resolution test
     /// Validates that Windows system DNS queries succeed through the TUN interface.
     pub async fn test_system_dns_resolution(domain: &str) -> Result<Vec<std::net::IpAddr>, String> {
-        let addr_str = format!("{}:443", domain);
-        let res = tokio::net::lookup_host(addr_str).await;
-        match res {
-            Ok(addrs) => {
-                let mut ips: Vec<std::net::IpAddr> = addrs.map(|sa| sa.ip()).collect();
-                ips.dedup();
-                if ips.is_empty() {
-                    Err(format!(
-                        "System DNS resolver returned 0 addresses for '{}'",
+        Self::test_system_dns_resolution_with_logger(domain, None).await
+    }
+
+    /// Explicit Windows system DNS resolution test with full stage diagnostics
+    pub async fn test_system_dns_resolution_with_logger(
+        primary_domain: &str,
+        log_fn: Option<&(dyn Fn(&str, &str, &str) + Send + Sync)>,
+    ) -> Result<Vec<std::net::IpAddr>, String> {
+        let domains = [
+            primary_domain,
+            "www.cloudflare.com",
+            "cloudflare.com",
+            "one.one.one.one",
+            "google.com",
+        ];
+
+        let mut last_err = String::new();
+
+        for domain in domains {
+            if let Some(logger) = log_fn {
+                logger(
+                    "INFO",
+                    "sing-box",
+                    &format!(
+                        "[DNS-VERIFY-START] Querying Windows system resolver for domain='{}' (svchost.exe -> TUN -> sing-box)...",
                         domain
-                    ))
-                } else {
-                    Ok(ips)
+                    ),
+                );
+            }
+
+            let start = Instant::now();
+            let addr_str = format!("{}:443", domain);
+            match tokio::net::lookup_host(addr_str).await {
+                Ok(addrs) => {
+                    let d = start.elapsed();
+                    let mut ips: Vec<std::net::IpAddr> = addrs.map(|sa| sa.ip()).collect();
+                    ips.dedup();
+                    if !ips.is_empty() {
+                        if let Some(logger) = log_fn {
+                            logger(
+                                "INFO",
+                                "sing-box",
+                                &format!(
+                                    "[DNS-VERIFY-SUCCESS] Domain '{}' resolved successfully to {:?} in {:.2}s",
+                                    domain, ips, d.as_secs_f32()
+                                ),
+                            );
+                        }
+                        return Ok(ips);
+                    } else {
+                        let err_msg = format!("Resolver returned 0 addresses for '{}'", domain);
+                        if let Some(logger) = log_fn {
+                            logger("WARN", "sing-box", &format!("[DNS-VERIFY-FAIL] {}", err_msg));
+                        }
+                        last_err = err_msg;
+                    }
+                }
+                Err(e) => {
+                    let d = start.elapsed();
+                    let err_msg = format!(
+                        "Windows system DNS lookup failed for '{}' after {:.2}s: {}",
+                        domain, d.as_secs_f32(), e
+                    );
+                    if let Some(logger) = log_fn {
+                        logger("WARN", "sing-box", &format!("[DNS-VERIFY-FAIL] {}", err_msg));
+                    }
+                    last_err = err_msg;
                 }
             }
-            Err(e) => Err(format!(
-                "Windows system DNS lookup failed for '{}': {}",
-                domain, e
-            )),
         }
+
+        Err(last_err)
     }
 
     /// Stage 3: Full system egress test with domain name resolution

@@ -26,10 +26,34 @@ pub struct DnsConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum DnsServer {
+    #[serde(rename = "udp")]
+    Udp(UdpDnsServer),
+    #[serde(rename = "tcp")]
+    Tcp(TcpDnsServer),
     #[serde(rename = "https")]
     Https(HttpsDnsServer),
     #[serde(rename = "local")]
     Local(LocalDnsServer),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UdpDnsServer {
+    pub tag: String,
+    pub server: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detour: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TcpDnsServer {
+    pub tag: String,
+    pub server: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detour: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -1,6 +1,6 @@
 use crate::models::settings::{CompatibilityScope, NetworkProtocol};
 use crate::models::singbox::{
-    DirectOutbound, DnsConfig, DnsServer, HttpsDnsServer, InboundConfig, LocalDnsServer, LogConfig,
+    DirectOutbound, DnsConfig, DnsServer, InboundConfig, LocalDnsServer, LogConfig,
     OutboundConfig, RouteConfig, RouteRule, SingBoxConfig, SocksOutbound, TunInbound,
 };
 use crate::models::{AppSettings, RouteDestination, RulePriority};
@@ -30,12 +30,25 @@ impl SingBoxConfigGenerator {
             timestamp: true,
         };
 
-        // 2. DNS configuration (Remote DoH over Aether, Local fallback over Direct)
+        // 2. DNS configuration (Remote UDP/TCP DNS over Aether, Local fallback over Direct)
         let dns = Some(DnsConfig {
             servers: vec![
-                DnsServer::Https(HttpsDnsServer {
+                DnsServer::Udp(crate::models::singbox::UdpDnsServer {
                     tag: "remote-dns".to_string(),
                     server: "1.1.1.1".to_string(),
+                    server_port: Some(53),
+                    detour: Some("aether".to_string()),
+                }),
+                DnsServer::Tcp(crate::models::singbox::TcpDnsServer {
+                    tag: "remote-dns-tcp".to_string(),
+                    server: "1.1.1.1".to_string(),
+                    server_port: Some(53),
+                    detour: Some("aether".to_string()),
+                }),
+                DnsServer::Udp(crate::models::singbox::UdpDnsServer {
+                    tag: "remote-dns-backup".to_string(),
+                    server: "1.0.0.1".to_string(),
+                    server_port: Some(53),
                     detour: Some("aether".to_string()),
                 }),
                 DnsServer::Local(LocalDnsServer {
