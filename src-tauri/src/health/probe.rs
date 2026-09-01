@@ -64,7 +64,7 @@ impl HealthProber {
                     "INFO",
                     "Aether",
                     &format!(
-                        "[SOCKS-VERIFY-START] Sending verification request to '{}' via {} (timeout: 6s)...",
+                        "[SOCKS-VERIFY-START] Sending verification probe to endpoint='{}' via {} (timeout: 6s)...",
                         endpoint, proxy_url
                     ),
                 );
@@ -83,7 +83,7 @@ impl HealthProber {
                             "INFO",
                             "Aether",
                             &format!(
-                                "[SOCKS-VERIFY-RECV] SOCKS response received from '{}' in {:.2}s. [SOCKS-VERIFY-HTTP] Status: {}",
+                                "[SOCKS-VERIFY-RECV] SOCKS response received from endpoint='{}' in {:.2}s. [SOCKS-VERIFY-HTTP] Status: {}",
                                 endpoint,
                                 d_resp.as_secs_f32(),
                                 status
@@ -93,11 +93,18 @@ impl HealthProber {
 
                     if !status.is_success() {
                         let status_err = format!(
-                            "Endpoint '{}' returned non-success HTTP status {}",
+                            "Endpoint '{}' returned HTTP error status {}",
                             endpoint, status
                         );
                         if let Some(logger) = log_fn {
-                            logger("WARN", "Aether", &format!("[SOCKS-VERIFY-FAIL] {}", status_err));
+                            logger(
+                                "WARN",
+                                "Aether",
+                                &format!(
+                                    "[SOCKS-VERIFY-FAIL] endpoint='{}' category='HTTP Status Error' reason: {}",
+                                    endpoint, status_err
+                                ),
+                            );
                         }
                         last_err = status_err;
                         continue;
@@ -113,7 +120,7 @@ impl HealthProber {
                                             "INFO",
                                             "Aether",
                                             &format!(
-                                                "[SOCKS-VERIFY-SUCCESS] Verification passed on '{}' (IP: {}, POP: {}, Latency: {} ms, Warp: {})",
+                                                "[SOCKS-VERIFY-SUCCESS] endpoint='{}' verified (IP={}, POP={}, Latency={}ms, Warp={})",
                                                 endpoint, trace.ip, trace.colo, trace.latency_ms, trace.warp
                                             ),
                                         );
@@ -121,12 +128,24 @@ impl HealthProber {
                                     return Ok(trace);
                                 }
                                 Err(parse_err) => {
+                                    let preview = if body.len() > 120 {
+                                        format!("{}...", &body[..120].escape_default())
+                                    } else {
+                                        body.escape_default().to_string()
+                                    };
                                     let err_msg = format!(
-                                        "Failed to parse trace response body from '{}': {}",
-                                        endpoint, parse_err
+                                        "Failed to parse trace response body from '{}': {} (body_preview: '{}')",
+                                        endpoint, parse_err, preview
                                     );
                                     if let Some(logger) = log_fn {
-                                        logger("WARN", "Aether", &format!("[SOCKS-VERIFY-FAIL] {}", err_msg));
+                                        logger(
+                                            "WARN",
+                                            "Aether",
+                                            &format!(
+                                                "[SOCKS-VERIFY-FAIL] endpoint='{}' category='Parse Error' reason: {}",
+                                                endpoint, err_msg
+                                            ),
+                                        );
                                     }
                                     last_err = err_msg;
                                 }
@@ -137,8 +156,16 @@ impl HealthProber {
                                 &format!("Failed to read response body from '{}'", endpoint),
                                 &body_err,
                             );
+                            let category = Self::classify_reqwest_error(&body_err);
                             if let Some(logger) = log_fn {
-                                logger("WARN", "Aether", &format!("[SOCKS-VERIFY-FAIL] {}", req_err));
+                                logger(
+                                    "WARN",
+                                    "Aether",
+                                    &format!(
+                                        "[SOCKS-VERIFY-FAIL] endpoint='{}' category='{}' reason: {}",
+                                        endpoint, category, req_err
+                                    ),
+                                );
                             }
                             last_err = req_err;
                         }
@@ -146,6 +173,7 @@ impl HealthProber {
                 }
                 Err(err) => {
                     let d_fail = start.elapsed();
+                    let category = Self::classify_reqwest_error(&err);
                     let req_err = Self::format_reqwest_error(
                         &format!(
                             "Request to '{}' via {} failed after {:.2}s",
@@ -156,7 +184,14 @@ impl HealthProber {
                         &err,
                     );
                     if let Some(logger) = log_fn {
-                        logger("WARN", "Aether", &format!("[SOCKS-VERIFY-FAIL] {}", req_err));
+                        logger(
+                            "WARN",
+                            "Aether",
+                            &format!(
+                                "[SOCKS-VERIFY-FAIL] endpoint='{}' category='{}' reason: {}",
+                                endpoint, category, req_err
+                            ),
+                        );
                     }
                     last_err = req_err;
                 }
@@ -164,6 +199,52 @@ impl HealthProber {
         }
 
         Err(last_err)
+    }
+
+    /// Classifies a reqwest error into a specific failure category (TLS, HTTP2, Decompression, Timeout, SOCKS, etc.)
+    pub fn classify_reqwest_error(err: &reqwest::Error) -> &'static str {
+        use std::error::Error;
+        let mut chain_text = String::new();
+        let mut curr: Option<&(dyn Error + 'static)> = err.source();
+        while let Some(src) = curr {
+            chain_text.push_str(&src.to_string());
+            chain_text.push(' ');
+            curr = src.source();
+        }
+        let chain_lower = chain_text.to_lowercase();
+
+        if err.is_timeout() || chain_lower.contains("timed out") || chain_lower.contains("timeout") {
+            "Timeout"
+        } else if chain_lower.contains("tls")
+            || chain_lower.contains("certificate")
+            || chain_lower.contains("handshake")
+            || chain_lower.contains("rustls")
+            || chain_lower.contains("webpki")
+            || chain_lower.contains("invalid peer certificate")
+            || chain_lower.contains("unknown issuer")
+        {
+            "TLS Handshake / Certificate Error"
+        } else if chain_lower.contains("h2")
+            || chain_lower.contains("http2")
+            || chain_lower.contains("stream")
+            || chain_lower.contains("frame")
+        {
+            "HTTP2 Protocol Error"
+        } else if chain_lower.contains("decompress")
+            || chain_lower.contains("gzip")
+            || chain_lower.contains("brotli")
+            || chain_lower.contains("inflate")
+            || chain_lower.contains("corrupt input")
+        {
+            "Decompression Error"
+        } else if chain_lower.contains("socks")
+            || chain_lower.contains("proxy")
+            || err.is_connect()
+        {
+            "SOCKS Connect / Transport Error"
+        } else {
+            "Network / Transport Error"
+        }
     }
 
     /// Measures multiple SOCKS5 latency samples across identical bounded intervals and computes median and jitter MAD
