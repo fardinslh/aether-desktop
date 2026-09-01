@@ -366,57 +366,173 @@ impl HealthProber {
         })
     }
 
-    /// Stage 1: DNS-independent system egress test using IP literal (1.1.1.1 or 1.0.0.1)
-    /// Validates raw TUN transport, routing, and egress consistency without relying on Windows DNS.
+    /// Stage 1: Resilient system egress test sweeping across prioritized endpoints
+    /// (https://www.cloudflare.com, http://www.cloudflare.com, https://1.1.1.1, http://1.1.1.1)
+    /// Validates raw TUN transport, routing, and egress consistency with full stage diagnostics.
     pub async fn query_direct_system_cloudflare_trace_ip_literal() -> Result<CloudflareTrace, String>
     {
+        Self::query_direct_system_cloudflare_trace_resilient(None).await
+    }
+
+    /// Performs resilient direct system Cloudflare trace probe through Windows network stack/TUN adapter.
+    /// Sweeps across prioritized endpoints with full stage telemetry and error categorization.
+    pub async fn query_direct_system_cloudflare_trace_resilient(
+        log_fn: Option<&(dyn Fn(&str, &str, &str) + Send + Sync)>,
+    ) -> Result<CloudflareTrace, String> {
         let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(6))
             .build()
             .map_err(|e| {
                 Self::format_reqwest_error(
-                    "Failed to build HTTP client for IP-literal egress test",
+                    "Failed to build HTTP client for direct system egress probe",
                     &e,
                 )
             })?;
 
         let endpoints = [
+            "https://www.cloudflare.com/cdn-cgi/trace",
+            "http://www.cloudflare.com/cdn-cgi/trace",
             "https://1.1.1.1/cdn-cgi/trace",
-            "https://1.0.0.1/cdn-cgi/trace",
+            "http://1.1.1.1/cdn-cgi/trace",
         ];
+
         let mut last_err = String::new();
 
-        for url in endpoints {
+        for endpoint in endpoints {
+            if let Some(logger) = log_fn {
+                logger(
+                    "INFO",
+                    "sing-box",
+                    &format!(
+                        "[ROUTING-VERIFY-START] Probing direct system egress on endpoint='{}' (timeout: 6s)...",
+                        endpoint
+                    ),
+                );
+            }
+
             let start = Instant::now();
-            match client.get(url).send().await {
+            let resp_result = client.get(endpoint).send().await;
+
+            match resp_result {
                 Ok(resp) => {
-                    let latency_ms = start.elapsed().as_millis() as u64;
-                    if !resp.status().is_success() {
-                        last_err =
-                            format!("Endpoint '{}' returned HTTP status {}", url, resp.status());
+                    let d_resp = start.elapsed();
+                    let status = resp.status();
+
+                    if let Some(logger) = log_fn {
+                        logger(
+                            "INFO",
+                            "sing-box",
+                            &format!(
+                                "[ROUTING-VERIFY-RECV] Direct system response received from endpoint='{}' in {:.2}s. [ROUTING-VERIFY-HTTP] Status: {}",
+                                endpoint,
+                                d_resp.as_secs_f32(),
+                                status
+                            ),
+                        );
+                    }
+
+                    if !status.is_success() {
+                        let status_err = format!(
+                            "Endpoint '{}' returned HTTP error status {}",
+                            endpoint, status
+                        );
+                        if let Some(logger) = log_fn {
+                            logger(
+                                "WARN",
+                                "sing-box",
+                                &format!(
+                                    "[ROUTING-VERIFY-FAIL] endpoint='{}' category='HTTP Status Error' reason: {}",
+                                    endpoint, status_err
+                                ),
+                            );
+                        }
+                        last_err = status_err;
                         continue;
                     }
+
                     match resp.text().await {
-                        Ok(body) => match Self::parse_trace_body(&body, latency_ms) {
-                            Ok(trace) => return Ok(trace),
-                            Err(e) => {
-                                last_err =
-                                    format!("Failed to parse trace body from '{}': {}", url, e);
+                        Ok(body) => {
+                            let latency_ms = d_resp.as_millis() as u64;
+                            match Self::parse_trace_body(&body, latency_ms) {
+                                Ok(trace) => {
+                                    if let Some(logger) = log_fn {
+                                        logger(
+                                            "INFO",
+                                            "sing-box",
+                                            &format!(
+                                                "[ROUTING-VERIFY-SUCCESS] Direct egress verified on endpoint='{}' (IP: {}, POP: {}, Latency: {} ms, Warp: {})",
+                                                endpoint, trace.ip, trace.colo, trace.latency_ms, trace.warp
+                                            ),
+                                        );
+                                    }
+                                    return Ok(trace);
+                                }
+                                Err(parse_err) => {
+                                    let preview = if body.len() > 120 {
+                                        format!("{}...", &body[..120].escape_default())
+                                    } else {
+                                        body.escape_default().to_string()
+                                    };
+                                    let err_msg = format!(
+                                        "Failed to parse trace response body from '{}': {} (body_preview: '{}')",
+                                        endpoint, parse_err, preview
+                                    );
+                                    if let Some(logger) = log_fn {
+                                        logger(
+                                            "WARN",
+                                            "sing-box",
+                                            &format!(
+                                                "[ROUTING-VERIFY-FAIL] endpoint='{}' category='Parse Error' reason: {}",
+                                                endpoint, err_msg
+                                            ),
+                                        );
+                                    }
+                                    last_err = err_msg;
+                                }
                             }
-                        },
-                        Err(e) => {
-                            last_err = Self::format_reqwest_error(
-                                &format!("Failed to read trace response body from '{}'", url),
-                                &e,
+                        }
+                        Err(body_err) => {
+                            let req_err = Self::format_reqwest_error(
+                                &format!("Failed to read response body from '{}'", endpoint),
+                                &body_err,
                             );
+                            let category = Self::classify_reqwest_error(&body_err);
+                            if let Some(logger) = log_fn {
+                                logger(
+                                    "WARN",
+                                    "sing-box",
+                                    &format!(
+                                        "[ROUTING-VERIFY-FAIL] endpoint='{}' category='{}' reason: {}",
+                                        endpoint, category, req_err
+                                    ),
+                                );
+                            }
+                            last_err = req_err;
                         }
                     }
                 }
-                Err(e) => {
-                    last_err = Self::format_reqwest_error(
-                        &format!("IP-literal trace request to '{}' failed", url),
-                        &e,
+                Err(err) => {
+                    let d_fail = start.elapsed();
+                    let category = Self::classify_reqwest_error(&err);
+                    let req_err = Self::format_reqwest_error(
+                        &format!(
+                            "Direct system request to '{}' failed after {:.2}s",
+                            endpoint,
+                            d_fail.as_secs_f32()
+                        ),
+                        &err,
                     );
+                    if let Some(logger) = log_fn {
+                        logger(
+                            "WARN",
+                            "sing-box",
+                            &format!(
+                                "[ROUTING-VERIFY-FAIL] endpoint='{}' category='{}' reason: {}",
+                                endpoint, category, req_err
+                            ),
+                        );
+                    }
+                    last_err = req_err;
                 }
             }
         }
@@ -492,7 +608,7 @@ impl HealthProber {
     }
 
     /// Executes the 3-stage egress and DNS verification decision path:
-    /// Stage 1: DNS-independent IP-literal system egress test (1.1.1.1 / 1.0.0.1)
+    /// Stage 1: Resilient system egress test (matches SOCKS verification path)
     /// Strict Check: system egress IP == expected Aether SOCKS proxy egress IP
     /// Stage 2: Windows System DNS Resolution test (www.cloudflare.com)
     /// Stage 3: Full Hostname HTTPS Trace verification (https://www.cloudflare.com/cdn-cgi/trace)
@@ -513,7 +629,7 @@ impl HealthProber {
         Fut3: std::future::Future<Output = Result<CloudflareTrace, String>> + Send,
     {
         // -------------------------------------------------------------------------
-        // Stage 1: DNS-independent system egress test (via IP-literal 1.1.1.1 / 1.0.0.1)
+        // Stage 1: System egress test
         // -------------------------------------------------------------------------
         let t_stage1 = Instant::now();
         let mut ip_trace_opt = None;
@@ -540,7 +656,7 @@ impl HealthProber {
                         "INFO",
                         "sing-box",
                         &format!(
-                            "Stage 1 PASS in {:.2}s: DNS-independent IP-literal egress verified (POP: {}, IP: {}, Latency: {} ms)",
+                            "Stage 1 PASS in {:.2}s: System egress verified (POP: {}, IP: {}, Latency: {} ms)",
                             t_stage1.elapsed().as_secs_f32(),
                             t.colo, t.ip, t.latency_ms
                         ),
@@ -554,14 +670,14 @@ impl HealthProber {
                         "ERROR",
                         "sing-box",
                         &format!(
-                            "Stage 1 FAIL after {:.2}s: Direct system egress failed on IP-literal transport (1.1.1.1 / 1.0.0.1): {}",
+                            "Stage 1 FAIL after {:.2}s: Direct system egress failed: {}",
                             t_stage1.elapsed().as_secs_f32(),
                             last_ip_err
                         ),
                     );
                 }
                 return Err(format!(
-                    "Stage 1 Transport Failure: Direct IP-literal system egress failed: {}",
+                    "Stage 1 Transport Failure: Direct system egress failed: {}",
                     last_ip_err
                 ));
             }
@@ -580,6 +696,17 @@ impl HealthProber {
                     logger("ERROR", "sing-box", &mismatch_err);
                 }
                 return Err(mismatch_err);
+            } else if !ip_trace.ip.is_empty() && !exp_ip.is_empty() {
+                if let Some(logger) = log_fn {
+                    logger(
+                        "INFO",
+                        "sing-box",
+                        &format!(
+                            "[ROUTING-VERIFY-MATCH] System egress IP ({}) matches expected Aether SOCKS egress IP ({})",
+                            ip_trace.ip, exp_ip
+                        ),
+                    );
+                }
             }
         }
 

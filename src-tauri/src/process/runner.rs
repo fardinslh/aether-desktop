@@ -767,7 +767,7 @@ impl SingBoxRunner {
             |name, ip| HealthProber::check_tun_interface_exists(name, ip),
             || {
                 HealthProber::verify_staged_egress_decision_path(
-                    || HealthProber::query_direct_system_cloudflare_trace_ip_literal(),
+                    || HealthProber::query_direct_system_cloudflare_trace_resilient(Some(&log_cb)),
                     || HealthProber::test_system_dns_resolution("www.cloudflare.com"),
                     || HealthProber::query_direct_system_cloudflare_trace_hostname(),
                     expected_aether_ip,

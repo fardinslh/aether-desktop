@@ -658,11 +658,10 @@ impl ConnectionOrchestrator {
                     "INFO",
                     "Aether",
                     format!(
-                        "[Attempt #{}] Stopping managed Aether due to verification failure",
+                        "[Attempt #{}] Keeping managed Aether daemon active for diagnostics and log inspection.",
                         attempt_id
                     ),
                 );
-                self.aether.lock().await.stop(&self.logger);
             }
             self.set_error(err.clone());
             return Err(err);
