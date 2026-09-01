@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Production-quality Windows desktop VPN and network routing manager"
 authors = ["Aether Team"]
 edition = "2021"
+default-run = "aether-desktop"
 
 [lib]
 name = "aether_desktop_lib"
