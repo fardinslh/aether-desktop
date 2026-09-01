@@ -49,6 +49,10 @@ export const api = {
     return invoke<void>("disconnect_tunnel");
   },
 
+  async cancelConnection(): Promise<void> {
+    return invoke<void>("cancel_connection");
+  },
+
   // Real System Health Evaluation
   async getHealthStatus(): Promise<HealthStatus> {
     return invoke<HealthStatus>("get_health_status");

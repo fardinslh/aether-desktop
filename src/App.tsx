@@ -26,6 +26,7 @@ export function App() {
     deleteApplicationRule,
     updateApplicationRoute,
     triggerConnect,
+    triggerCancel,
     triggerFindFasterGateway,
     triggerDisconnect,
     refreshAll,
@@ -58,6 +59,7 @@ export function App() {
               connectionState={connectionState}
               health={health}
               onConnect={triggerConnect}
+              onCancel={triggerCancel}
               onFindFasterGateway={triggerFindFasterGateway}
               onDisconnect={triggerDisconnect}
               onViewDiagnostics={() => setActiveTab("diagnostics")}

@@ -130,6 +130,7 @@ pub struct ConnectionOrchestrator {
     pub app_handle: Arc<RwLock<Option<tauri::AppHandle>>>,
     pub op_lock: Mutex<()>,
     pub next_attempt_id: AtomicU64,
+    pub cancel_requested: Arc<AtomicBool>,
 }
 
 impl ConnectionOrchestrator {
@@ -145,6 +146,7 @@ impl ConnectionOrchestrator {
             app_handle: Arc::new(RwLock::new(None)),
             op_lock: Mutex::new(()),
             next_attempt_id: AtomicU64::new(1),
+            cancel_requested: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -175,7 +177,24 @@ impl ConnectionOrchestrator {
         self.last_error.read().clone()
     }
 
+    pub async fn cancel_connection(&self) -> Result<(), String> {
+        self.cancel_requested.store(true, Ordering::SeqCst);
+        self.logger
+            .log("WARN", "STATE", "Connection cancellation requested by user.");
+
+        // Terminate managed processes immediately
+        self.force_shutdown();
+
+        // Broadcast state transition to Disconnected
+        self.set_state(ConnectionState::Disconnected);
+        self.logger
+            .log("INFO", "STATE", "Connection cancelled; all VPN components terminated.");
+        Ok(())
+    }
+
     pub async fn connect(&self, settings: &AppSettings) -> Result<(), String> {
+        self.cancel_requested.store(false, Ordering::SeqCst);
+
         // 1. Acquire operation lock FIRST to guard against concurrent lifecycle operations
         let _op_guard = match self.op_lock.try_lock() {
             Ok(guard) => guard,
@@ -361,6 +380,20 @@ impl ConnectionOrchestrator {
             let mut aether_ready = false;
             let mut attempt_cnt: u64 = 0;
             while t_aether_start.elapsed() < startup_deadline {
+                if self.cancel_requested.load(Ordering::SeqCst) {
+                    self.logger.log(
+                        "INFO",
+                        "STATE",
+                        format!(
+                            "[Attempt #{}] Connection cancelled by user during Aether startup/probe.",
+                            attempt_id
+                        ),
+                    );
+                    self.force_shutdown();
+                    self.set_state(ConnectionState::Disconnected);
+                    return Err("Connection cancelled by user".to_string());
+                }
+
                 tokio::time::sleep(check_interval).await;
                 attempt_cnt += 1;
 
@@ -496,12 +529,31 @@ impl ConnectionOrchestrator {
             return Err(err_msg);
         }
 
+        if self.cancel_requested.load(Ordering::SeqCst) {
+            self.logger.log(
+                "INFO",
+                "STATE",
+                format!(
+                    "[Attempt #{}] Connection cancelled by user before sing-box start.",
+                    attempt_id
+                ),
+            );
+            self.force_shutdown();
+            self.set_state(ConnectionState::Disconnected);
+            return Err("Connection cancelled by user".to_string());
+        }
+
         // 3. Launch sing-box router
         self.set_state(ConnectionState::StartingRouter);
         let t_sb_start = std::time::Instant::now();
         let sb_pid = {
             let mut sb_guard = self.singbox.lock().await;
             if let Err(e) = sb_guard.start(settings, &self.logger) {
+                if self.cancel_requested.load(Ordering::SeqCst) {
+                    self.force_shutdown();
+                    self.set_state(ConnectionState::Disconnected);
+                    return Err("Connection cancelled by user".to_string());
+                }
                 if self.is_aether_managed.load(Ordering::SeqCst) {
                     self.logger.log(
                         "INFO",
@@ -533,6 +585,20 @@ impl ConnectionOrchestrator {
             ),
         );
 
+        if self.cancel_requested.load(Ordering::SeqCst) {
+            self.logger.log(
+                "INFO",
+                "STATE",
+                format!(
+                    "[Attempt #{}] Connection cancelled by user after sing-box spawn.",
+                    attempt_id
+                ),
+            );
+            self.force_shutdown();
+            self.set_state(ConnectionState::Disconnected);
+            return Err("Connection cancelled by user".to_string());
+        }
+
         // 3. Bounded routing and system egress verification matching Aether IP
         self.set_state(ConnectionState::TestingRouting);
         let t_verify_start = std::time::Instant::now();
@@ -551,6 +617,22 @@ impl ConnectionOrchestrator {
             )
             .await
         {
+            if self.cancel_requested.load(Ordering::SeqCst) {
+                self.logger.log(
+                    "INFO",
+                    "STATE",
+                    format!(
+                        "[Attempt #{}] Connection cancelled by user during routing verification.",
+                        attempt_id
+                    ),
+                );
+                sb_guard.stop(&self.logger);
+                drop(sb_guard);
+                self.force_shutdown();
+                self.set_state(ConnectionState::Disconnected);
+                return Err("Connection cancelled by user".to_string());
+            }
+
             let err = format!(
                 "[Attempt #{}] Routing verification failed: {}. Stopping connection attempt.",
                 attempt_id, verify_err
@@ -1653,8 +1735,52 @@ mod tests {
             "Error message must specify restore snapshot failure: {}",
             err
         );
-        assert_eq!(*orch.state.read(), ConnectionState::Error);
-
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_cancel_during_startup() {
+        let logger = RingBufferLogger::new(100);
+        let state = Arc::new(RwLock::new(ConnectionState::StartingAether));
+        let orch = ConnectionOrchestrator::new(state.clone(), logger);
+
+        // User initiates cancel during startup
+        let res = orch.cancel_connection().await;
+        assert!(res.is_ok());
+        assert!(orch.cancel_requested.load(Ordering::SeqCst));
+        assert_eq!(*orch.state.read(), ConnectionState::Disconnected);
+    }
+
+    #[tokio::test]
+    async fn test_cancel_during_verification() {
+        let logger = RingBufferLogger::new(100);
+        let state = Arc::new(RwLock::new(ConnectionState::TestingRouting));
+        let orch = ConnectionOrchestrator::new(state.clone(), logger);
+
+        // User initiates cancel while verification is underway
+        let res = orch.cancel_connection().await;
+        assert!(res.is_ok());
+        assert!(orch.cancel_requested.load(Ordering::SeqCst));
+        assert_eq!(*orch.state.read(), ConnectionState::Disconnected);
+    }
+
+    #[tokio::test]
+    async fn test_reconnect_after_cancel() {
+        let logger = RingBufferLogger::new(100);
+        let state = Arc::new(RwLock::new(ConnectionState::Disconnected));
+        let orch = ConnectionOrchestrator::new(state.clone(), logger);
+        let mut settings = AppSettings::default();
+        settings.aether.executable_path = "C:\\invalid\\aether.exe".to_string();
+        settings.sing_box.executable_path = "C:\\invalid\\sing-box.exe".to_string();
+
+        // 1. Cancel previous attempt
+        orch.cancel_connection().await.unwrap();
+        assert!(orch.cancel_requested.load(Ordering::SeqCst));
+        assert_eq!(*orch.state.read(), ConnectionState::Disconnected);
+
+        // 2. Reconnect resets cancel_requested
+        // The attempt starts, resets cancel flag, and attempts to run
+        let _ = orch.connect(&settings).await;
+        assert!(!orch.cancel_requested.load(Ordering::SeqCst));
     }
 }

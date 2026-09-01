@@ -21,6 +21,7 @@ interface ConnectionHeroProps {
   health: HealthStatus | null;
   onConnect: () => void;
   onDisconnect: () => void;
+  onCancel?: () => void;
   onFindFasterGateway?: () => Promise<RouteOptimizationResult | void>;
   onViewDiagnostics?: () => void;
   errorDetails?: string | null;
@@ -31,6 +32,7 @@ export const ConnectionHero: React.FC<ConnectionHeroProps> = ({
   health,
   onConnect,
   onDisconnect,
+  onCancel,
   onFindFasterGateway,
   onViewDiagnostics,
   errorDetails,
@@ -458,13 +460,31 @@ export const ConnectionHero: React.FC<ConnectionHeroProps> = ({
                 )}
               </div>
             ) : isTransitioning ? (
-              <button
-                disabled
-                className="w-full py-2.5 rounded-sm bg-app-inset text-signal-cyan border border-signal-cyan/40 text-xs font-mono font-semibold flex items-center justify-center gap-2 cursor-wait"
-              >
-                <div className="w-3.5 h-3.5 border-2 border-signal-cyan border-t-transparent rounded-full animate-spin" />
-                <span>ESTABLISHING ROUTING STACK...</span>
-              </button>
+              <div className="flex items-center gap-2 w-full">
+                <div className="flex-1 py-2.5 px-3 rounded-sm bg-app-inset text-signal-cyan border border-signal-cyan/40 text-xs font-mono font-semibold flex items-center justify-center gap-2 select-none">
+                  <div className="w-3.5 h-3.5 border-2 border-signal-cyan border-t-transparent rounded-full animate-spin shrink-0" />
+                  <span className="truncate">CONNECTING...</span>
+                </div>
+                {onCancel && (
+                  <button
+                    onClick={onCancel}
+                    className="px-3.5 py-2.5 rounded-sm bg-signal-red-dim hover:bg-signal-red/20 text-signal-red hover:text-white border border-signal-red/50 text-xs font-bold font-mono transition-all cursor-pointer flex items-center gap-1.5 shrink-0 shadow-sm"
+                    title="Cancel Connection Attempt"
+                  >
+                    <X className="w-4 h-4 stroke-[2.5]" />
+                    <span>CANCEL</span>
+                  </button>
+                )}
+                {onViewDiagnostics && (
+                  <button
+                    onClick={onViewDiagnostics}
+                    className="px-3 py-2.5 rounded-sm bg-app-elevated hover:bg-zinc-800 text-ink-300 text-xs font-medium border border-app-border transition-colors cursor-pointer flex items-center gap-1 shrink-0"
+                    title="View Logs"
+                  >
+                    <Terminal className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
             ) : (
               <button
                 onClick={onConnect}

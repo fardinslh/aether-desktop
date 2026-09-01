@@ -295,6 +295,25 @@ export function useAppStore() {
     }
   };
 
+  const triggerCancel = async () => {
+    stateVersionRef.current += 1;
+    // Instant visual feedback for cancel
+    setConnectionState("DISCONNECTED");
+    connectInFlightRef.current = false;
+    disconnectInFlightRef.current = false;
+    optimizeInFlightRef.current = false;
+    setErrorDetails(null);
+
+    try {
+      await api.cancelConnection();
+      stateVersionRef.current += 1;
+      const st = await api.getConnectionState();
+      setConnectionState(st);
+    } catch (err: any) {
+      console.error("Cancel error:", err);
+    }
+  };
+
   return {
     settings,
     connectionState,
@@ -310,6 +329,7 @@ export function useAppStore() {
     deleteApplicationRule,
     updateApplicationRoute,
     triggerConnect,
+    triggerCancel,
     triggerFindFasterGateway,
     triggerDisconnect,
     refreshAll,

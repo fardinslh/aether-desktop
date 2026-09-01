@@ -135,6 +135,11 @@ pub async fn disconnect_tunnel(state: State<'_, AppState>) -> Result<(), String>
 }
 
 #[tauri::command]
+pub async fn cancel_connection(state: State<'_, AppState>) -> Result<(), String> {
+    state.orchestrator.cancel_connection().await
+}
+
+#[tauri::command]
 pub async fn get_health_status(state: State<'_, AppState>) -> Result<HealthStatus, String> {
     let settings = SettingsStorage::load();
     Ok(state.orchestrator.check_health(&settings).await)

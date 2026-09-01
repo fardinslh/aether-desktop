@@ -92,6 +92,7 @@ pub fn run() {
             commands::connect_tunnel,
             commands::find_faster_gateway,
             commands::disconnect_tunnel,
+            commands::cancel_connection,
             commands::get_health_status,
             commands::get_running_applications,
             commands::inspect_executable_file,
