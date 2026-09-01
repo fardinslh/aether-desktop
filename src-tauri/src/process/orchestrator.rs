@@ -264,12 +264,16 @@ impl ConnectionOrchestrator {
                             self.is_aether_managed.store(false, Ordering::SeqCst);
                         }
                         Err(e) => {
-                            let err = format!(
-                                "[Attempt #{}] Port {}:{} is owned by an existing Aether process (PID: {}), but SOCKS5 validation failed: {}. Ensure Aether is connected.",
-                                attempt_id, aether_host, aether_port, pid, e
+                            self.logger.log(
+                                "WARN",
+                                "Aether",
+                                format!(
+                                    "[Attempt #{}] Port {}:{} is owned by an unresponsive Aether process (PID: {}, error: {}). Terminating stale process and resetting...",
+                                    attempt_id, aether_host, aether_port, pid, e
+                                ),
                             );
-                            self.set_error(err.clone());
-                            return Err(err);
+                            ProcessDetector::kill_process_by_pid(pid);
+                            tokio::time::sleep(Duration::from_millis(200)).await;
                         }
                     }
                 }
@@ -291,12 +295,16 @@ impl ConnectionOrchestrator {
                             self.is_aether_managed.store(false, Ordering::SeqCst);
                         }
                         Err(e) => {
-                            let err = format!(
-                                "[Attempt #{}] Port {}:{} is in use, but proxy validation failed: {}. Resolve port conflict.",
-                                attempt_id, aether_host, aether_port, e
+                            self.logger.log(
+                                "WARN",
+                                "Aether",
+                                format!(
+                                    "[Attempt #{}] Port {}:{} is in use but proxy validation failed ({}). Attempting cleanup of stale Aether process...",
+                                    attempt_id, aether_host, aether_port, e
+                                ),
                             );
-                            self.set_error(err.clone());
-                            return Err(err);
+                            ProcessDetector::kill_port_owner_if_aether(aether_port);
+                            tokio::time::sleep(Duration::from_millis(200)).await;
                         }
                     }
                 }
@@ -1409,9 +1417,6 @@ impl ConnectionOrchestrator {
 
         {
             let mut state = self.state.write();
-            if *state == ConnectionState::Disconnected {
-                return Ok(());
-            }
             *state = ConnectionState::Disconnecting;
         }
         self.logger
@@ -1423,18 +1428,26 @@ impl ConnectionOrchestrator {
         // Always stop sing-box TUN router
         self.singbox.lock().await.stop(&self.logger);
 
-        // Only stop Aether if it was spawned and managed by this app
+        // Always stop managed Aether
         if self.is_aether_managed.load(Ordering::SeqCst) {
             self.logger
                 .log("INFO", "Aether", "Terminating managed Aether process...");
             self.aether.lock().await.stop(&self.logger);
         } else {
-            self.logger.log(
-                "INFO",
-                "Aether",
-                "Preserving external Aether instance on disconnect.",
-            );
+            self.aether.lock().await.stop(&self.logger);
         }
+
+        ProcessDetector::cleanup_stray_managed_processes();
+        ProcessDetector::kill_port_owner_if_aether(1819);
+
+        // Wait for TUN teardown
+        let settings = crate::settings::SettingsStorage::load();
+        let _ = HealthProber::wait_for_tun_teardown(
+            &settings.sing_box.interface_name,
+            Some(&settings.sing_box.tun_address),
+            Duration::from_secs(3),
+        )
+        .await;
 
         *self.active_aether_ip.write() = None;
         self.set_state(ConnectionState::Disconnected);
@@ -1444,6 +1457,22 @@ impl ConnectionOrchestrator {
             "All VPN components stopped and disconnected.",
         );
         Ok(())
+    }
+
+    /// Synchronously and unconditionally terminates all child processes and releases port/TUN
+    pub fn force_shutdown(&self) {
+        self.logger
+            .log("INFO", "Shutdown", "Forcing complete process teardown and shutdown...");
+        if let Ok(mut sb) = self.singbox.try_lock() {
+            sb.stop(&self.logger);
+        }
+        if let Ok(mut aether) = self.aether.try_lock() {
+            aether.stop(&self.logger);
+        }
+        ProcessDetector::cleanup_stray_managed_processes();
+        ProcessDetector::kill_port_owner_if_aether(1819);
+        *self.active_aether_ip.write() = None;
+        *self.state.write() = ConnectionState::Disconnected;
     }
 
     pub async fn apply_live_settings(&self, settings: &AppSettings) -> Result<(), String> {
@@ -1504,11 +1533,11 @@ mod tests {
     #[tokio::test]
     async fn test_d_restore_quick_reconnect_timeout_is_bounded_to_restore_window() {
         let restore_options = crate::models::settings::AetherLaunchOptions {
-            quick_reconnect_override: Some(true),
+            quick_reconnect: crate::models::settings::QuickReconnectOption::ForceEnabled,
             scan_mode_override: None,
         };
         let effective_scan_mode = crate::models::settings::AetherScanMode::Thorough;
-        let startup_deadline = if restore_options.quick_reconnect_override == Some(true) {
+        let startup_deadline = if restore_options.quick_reconnect == crate::models::settings::QuickReconnectOption::ForceEnabled {
             crate::models::settings::AETHER_RESTORE_TIMEOUT
         } else {
             crate::models::settings::aether_startup_timeout(&effective_scan_mode)

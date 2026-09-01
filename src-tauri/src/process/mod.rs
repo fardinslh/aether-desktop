@@ -1,5 +1,6 @@
 pub mod detector;
 pub mod icon;
+pub mod job;
 pub mod orchestrator;
 pub mod picker;
 pub mod runner;

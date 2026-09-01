@@ -135,13 +135,15 @@ impl ProcessHandle {
     pub fn kill(&mut self, logger: &RingBufferLogger) {
         if let Some(mut child) = self.child.take() {
             self.stop_flag.store(true, Ordering::SeqCst);
+            let pid = child.id();
             logger.log(
                 "INFO",
                 &self.name,
-                format!("Stopping process (PID: {:?})", child.id()),
+                format!("Stopping process (PID: {:?})", pid),
             );
             let _ = child.kill();
             let _ = child.wait();
+            crate::process::detector::ProcessDetector::kill_process_by_pid(pid);
             logger.log("INFO", &self.name, "Process terminated");
         }
     }
@@ -257,6 +259,7 @@ impl AetherRunner {
         let mut child = cmd
             .spawn()
             .map_err(|e| format!("Failed to spawn Aether: {}", e))?;
+        crate::process::job::assign_child_to_global_job(&child);
         let pid = child.id();
         logger.log(
             "INFO",
@@ -666,6 +669,7 @@ impl SingBoxRunner {
         let mut child = cmd
             .spawn()
             .map_err(|e| format!("Failed to spawn sing-box: {}", e))?;
+        crate::process::job::assign_child_to_global_job(&child);
         let pid = child.id();
         logger.log(
             "INFO",

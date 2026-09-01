@@ -113,9 +113,20 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building aether desktop application")
         .run(move |_app_handle, event| {
-            if let tauri::RunEvent::Exit = event {
-                let _ = tokio::runtime::Runtime::new()
-                    .map(|rt| rt.block_on(orchestrator_exit.disconnect()));
+            match event {
+                tauri::RunEvent::WindowEvent {
+                    event: tauri::WindowEvent::CloseRequested { .. },
+                    ..
+                }
+                | tauri::RunEvent::WindowEvent {
+                    event: tauri::WindowEvent::Destroyed,
+                    ..
+                }
+                | tauri::RunEvent::ExitRequested { .. }
+                | tauri::RunEvent::Exit => {
+                    orchestrator_exit.force_shutdown();
+                }
+                _ => {}
             }
         });
 }

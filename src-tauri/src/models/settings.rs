@@ -368,7 +368,7 @@ mod tests {
         };
 
         let opt_options = AetherLaunchOptions {
-            quick_reconnect_override: Some(false),
+            quick_reconnect: QuickReconnectOption::ForceFreshScan,
             scan_mode_override: Some(AetherScanMode::Thorough),
         };
 
@@ -391,7 +391,7 @@ mod tests {
         };
 
         let opt_options = AetherLaunchOptions {
-            quick_reconnect_override: Some(false),
+            quick_reconnect: QuickReconnectOption::ForceFreshScan,
             scan_mode_override: Some(AetherScanMode::Thorough),
         };
 
@@ -419,7 +419,7 @@ mod tests {
 
         // 1. Simulate optimization run
         let opt_options = AetherLaunchOptions {
-            quick_reconnect_override: Some(false),
+            quick_reconnect: QuickReconnectOption::ForceFreshScan,
             scan_mode_override: Some(AetherScanMode::Thorough),
         };
         let opt_args = settings.build_cli_arguments_with_options(None, &opt_options);

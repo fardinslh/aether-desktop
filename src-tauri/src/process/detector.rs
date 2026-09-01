@@ -202,6 +202,76 @@ impl ProcessDetector {
         None
     }
 
+    /// Forcefully terminates a process by PID
+    #[cfg(windows)]
+    pub fn kill_process_by_pid(pid: u32) -> bool {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+        unsafe {
+            let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
+            if !handle.is_null() {
+                let success = TerminateProcess(handle, 1) != 0;
+                CloseHandle(handle);
+                success
+            } else {
+                false
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    pub fn kill_process_by_pid(pid: u32) -> bool {
+        let mut sys = System::new_all();
+        sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[Pid::from_u32(pid)]), true);
+        if let Some(process) = sys.process(Pid::from_u32(pid)) {
+            process.kill()
+        } else {
+            false
+        }
+    }
+
+    /// Kills the process owning a target TCP port if it is an Aether process
+    pub fn kill_port_owner_if_aether(port: u16) -> bool {
+        if let Some((pid, proc_name)) = Self::get_process_for_tcp_port(port) {
+            let lower = proc_name.to_lowercase();
+            if lower.contains("aether") {
+                Self::kill_process_by_pid(pid)
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    }
+
+    /// Terminates any stray aether.exe or sing-box.exe processes belonging to AetherDesktop
+    pub fn cleanup_stray_managed_processes() {
+        let mut sys = System::new_all();
+        sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+
+        for (pid, process) in sys.processes() {
+            let name_raw = process.name().to_string_lossy().to_string().to_lowercase();
+            let exe_path_raw = process
+                .exe()
+                .map(|p| p.to_string_lossy().to_string().to_lowercase())
+                .unwrap_or_default();
+
+            let is_target_name = name_raw == "aether.exe"
+                || name_raw == "aether"
+                || name_raw == "sing-box.exe"
+                || name_raw == "sing-box";
+
+            let is_managed_path = exe_path_raw.contains("aetherdesktop")
+                || exe_path_raw.contains("aether-desktop")
+                || exe_path_raw.contains("v1.8.0-dev-udp");
+
+            if is_target_name && (is_managed_path || name_raw.contains("aether") || name_raw.contains("sing-box")) {
+                let pid_u32 = pid.as_u32();
+                Self::kill_process_by_pid(pid_u32);
+            }
+        }
+    }
+
     /// Derives metadata from a file path when browsing for an .exe
     pub fn inspect_executable(file_path: &str) -> (String, String) {
         let path = Path::new(file_path);
