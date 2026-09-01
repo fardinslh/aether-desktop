@@ -422,8 +422,15 @@ impl ConnectionOrchestrator {
 
                 // 2. SOCKS5 probe
                 if HealthProber::check_port_open(aether_host, aether_port, 150).await {
-                    match HealthProber::query_cloudflare_trace_via_socks5(aether_host, aether_port)
-                        .await
+                    let log_cb = |lvl: &str, target: &str, msg: &str| {
+                        self.logger.log(lvl, target, msg);
+                    };
+                    match HealthProber::query_cloudflare_trace_via_socks5_with_logger(
+                        aether_host,
+                        aether_port,
+                        Some(&log_cb),
+                    )
+                    .await
                     {
                         Ok(trace) => {
                             self.logger.log(
@@ -439,18 +446,17 @@ impl ConnectionOrchestrator {
                             break;
                         }
                         Err(err) => {
-                            if attempt_cnt % 15 == 0 {
-                                self.logger.log(
-                                    "DEBUG",
-                                    "Aether",
-                                    format!(
-                                        "[Attempt #{}] Waiting for SOCKS5 proxy initialization ({:.1}s elapsed): {}",
-                                        attempt_id,
-                                        t_aether_start.elapsed().as_secs_f32(),
-                                        err
-                                    ),
-                                );
-                            }
+                            self.logger.log(
+                                "DEBUG",
+                                "Aether",
+                                format!(
+                                    "[Attempt #{}] SOCKS5 probe attempt #{} ({:.1}s elapsed): {}",
+                                    attempt_id,
+                                    attempt_cnt,
+                                    t_aether_start.elapsed().as_secs_f32(),
+                                    err
+                                ),
+                            );
                         }
                     }
                 }

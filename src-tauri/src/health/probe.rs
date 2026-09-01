@@ -30,65 +30,140 @@ impl HealthProber {
         host: &str,
         port: u16,
     ) -> Result<CloudflareTrace, String> {
+        Self::query_cloudflare_trace_via_socks5_with_logger(host, port, None).await
+    }
+
+    /// Performs Cloudflare CDN trace probe through SOCKS5 proxy with explicit real-time stage logging
+    pub async fn query_cloudflare_trace_via_socks5_with_logger(
+        host: &str,
+        port: u16,
+        log_fn: Option<&(dyn Fn(&str, &str, &str) + Send + Sync)>,
+    ) -> Result<CloudflareTrace, String> {
         let proxy_url = format!("socks5h://{}:{}", host, port);
         let proxy = reqwest::Proxy::all(&proxy_url)
             .map_err(|e| format!("Failed to create SOCKS5 proxy configuration: {}", e))?;
 
         let client = reqwest::Client::builder()
             .proxy(proxy)
-            .timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(6))
             .build()
             .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
 
-        let start = Instant::now();
-        let resp = client
-            .get("https://www.cloudflare.com/cdn-cgi/trace")
-            .send()
-            .await
-            .map_err(|e| format!("Failed to connect via {}: {}", proxy_url, e))?;
+        let endpoints = [
+            "https://www.cloudflare.com/cdn-cgi/trace",
+            "https://1.1.1.1/cdn-cgi/trace",
+            "http://www.cloudflare.com/cdn-cgi/trace",
+            "http://1.1.1.1/cdn-cgi/trace",
+        ];
 
-        let latency_ms = start.elapsed().as_millis() as u64;
+        let mut last_err = String::new();
 
-        if !resp.status().is_success() {
-            return Err(format!(
-                "Cloudflare trace returned HTTP status {}",
-                resp.status()
-            ));
-        }
+        for endpoint in endpoints {
+            if let Some(logger) = log_fn {
+                logger(
+                    "INFO",
+                    "Aether",
+                    &format!(
+                        "[SOCKS-VERIFY-START] Sending verification request to '{}' via {} (timeout: 6s)...",
+                        endpoint, proxy_url
+                    ),
+                );
+            }
 
-        let body = resp
-            .text()
-            .await
-            .map_err(|e| format!("Failed to read response body: {}", e))?;
+            let start = Instant::now();
+            let resp_result = client.get(endpoint).send().await;
 
-        let mut ip = String::new();
-        let mut warp = String::new();
-        let mut colo = String::new();
-        let mut loc = String::new();
+            match resp_result {
+                Ok(resp) => {
+                    let d_resp = start.elapsed();
+                    let status = resp.status();
 
-        for line in body.lines() {
-            if let Some((k, v)) = line.split_once('=') {
-                match k.trim() {
-                    "ip" => ip = v.trim().to_string(),
-                    "warp" => warp = v.trim().to_string(),
-                    "colo" => colo = v.trim().to_string(),
-                    "loc" => loc = v.trim().to_string(),
-                    _ => {}
+                    if let Some(logger) = log_fn {
+                        logger(
+                            "INFO",
+                            "Aether",
+                            &format!(
+                                "[SOCKS-VERIFY-RECV] SOCKS response received from '{}' in {:.2}s. [SOCKS-VERIFY-HTTP] Status: {}",
+                                endpoint,
+                                d_resp.as_secs_f32(),
+                                status
+                            ),
+                        );
+                    }
+
+                    if !status.is_success() {
+                        let status_err = format!(
+                            "Endpoint '{}' returned non-success HTTP status {}",
+                            endpoint, status
+                        );
+                        if let Some(logger) = log_fn {
+                            logger("WARN", "Aether", &format!("[SOCKS-VERIFY-FAIL] {}", status_err));
+                        }
+                        last_err = status_err;
+                        continue;
+                    }
+
+                    match resp.text().await {
+                        Ok(body) => {
+                            let latency_ms = d_resp.as_millis() as u64;
+                            match Self::parse_trace_body(&body, latency_ms) {
+                                Ok(trace) => {
+                                    if let Some(logger) = log_fn {
+                                        logger(
+                                            "INFO",
+                                            "Aether",
+                                            &format!(
+                                                "[SOCKS-VERIFY-SUCCESS] Verification passed on '{}' (IP: {}, POP: {}, Latency: {} ms, Warp: {})",
+                                                endpoint, trace.ip, trace.colo, trace.latency_ms, trace.warp
+                                            ),
+                                        );
+                                    }
+                                    return Ok(trace);
+                                }
+                                Err(parse_err) => {
+                                    let err_msg = format!(
+                                        "Failed to parse trace response body from '{}': {}",
+                                        endpoint, parse_err
+                                    );
+                                    if let Some(logger) = log_fn {
+                                        logger("WARN", "Aether", &format!("[SOCKS-VERIFY-FAIL] {}", err_msg));
+                                    }
+                                    last_err = err_msg;
+                                }
+                            }
+                        }
+                        Err(body_err) => {
+                            let req_err = Self::format_reqwest_error(
+                                &format!("Failed to read response body from '{}'", endpoint),
+                                &body_err,
+                            );
+                            if let Some(logger) = log_fn {
+                                logger("WARN", "Aether", &format!("[SOCKS-VERIFY-FAIL] {}", req_err));
+                            }
+                            last_err = req_err;
+                        }
+                    }
+                }
+                Err(err) => {
+                    let d_fail = start.elapsed();
+                    let req_err = Self::format_reqwest_error(
+                        &format!(
+                            "Request to '{}' via {} failed after {:.2}s",
+                            endpoint,
+                            proxy_url,
+                            d_fail.as_secs_f32()
+                        ),
+                        &err,
+                    );
+                    if let Some(logger) = log_fn {
+                        logger("WARN", "Aether", &format!("[SOCKS-VERIFY-FAIL] {}", req_err));
+                    }
+                    last_err = req_err;
                 }
             }
         }
 
-        if ip.is_empty() {
-            return Err("Invalid Cloudflare trace response: missing IP address".to_string());
-        }
-
-        Ok(CloudflareTrace {
-            ip,
-            warp,
-            colo,
-            loc,
-            latency_ms,
-        })
+        Err(last_err)
     }
 
     /// Measures multiple SOCKS5 latency samples across identical bounded intervals and computes median and jitter MAD
