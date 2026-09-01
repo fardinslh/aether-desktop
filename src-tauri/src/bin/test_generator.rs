@@ -194,8 +194,14 @@ fn main() {
     test_au_cached_endpoint_reuse_rejected_during_forced_fresh_scan();
     println!("✓ TEST AU [UNIT / SCAN]: Output stream parser detects and rejects cached endpoint reuse during forced fresh scan (PASSED)");
 
+    test_av_steam_suite_routes_to_secondary_proxy();
+    println!("✓ TEST AV [UNIT / ROUTING]: Steam suite (steam.exe, steamwebhelper.exe, steamservice.exe) routes to Secondary Proxy (PASSED)");
+
+    test_aw_steam_companion_propagation_when_steam_customized();
+    println!("✓ TEST AW [UNIT / ROUTING]: Steam companion processes automatically propagate with steam.exe custom destination (PASSED)");
+
     println!("\n==================================================================");
-    println!("ALL 56 VERIFICATION & RELIABILITY TESTS PASSED!");
+    println!("ALL 58 VERIFICATION & RELIABILITY TESTS PASSED!");
     println!("==================================================================");
 }
 
@@ -285,7 +291,10 @@ fn test_reference_config_match() {
             "codex.exe",
             "Antigravity.exe",
             "agy.exe",
-            "language_server.exe"
+            "language_server.exe",
+            "steam.exe",
+            "steamwebhelper.exe",
+            "steamservice.exe"
         ]
     );
     assert_eq!(rules[6].outbound.as_deref(), Some("v2ray"));
@@ -2219,3 +2228,45 @@ fn test_au_cached_endpoint_reuse_rejected_during_forced_fresh_scan() {
     assert!(!is_cached_endpoint_reuse_line(fresh1));
     assert!(!is_cached_endpoint_reuse_line(fresh2));
 }
+
+fn test_av_steam_suite_routes_to_secondary_proxy() {
+    let settings = AppSettings::default();
+    let config = SingBoxConfigGenerator::generate(&settings);
+
+    // 1. Steam bootstrap process routes to Secondary Proxy (v2ray)
+    let steam_route = SingBoxConfigGenerator::resolve_route(&config, Some("steam.exe"), Some(443), false);
+    assert_eq!(steam_route, "v2ray", "steam.exe must route to secondary proxy");
+
+    // 2. Steam Web Helper (Store, Community, Library CEF engine) routes to Secondary Proxy (v2ray)
+    let helper_route = SingBoxConfigGenerator::resolve_route(&config, Some("steamwebhelper.exe"), Some(443), false);
+    assert_eq!(helper_route, "v2ray", "steamwebhelper.exe must route to secondary proxy");
+
+    // 3. Steam Client Service routes to Secondary Proxy (v2ray)
+    let service_route = SingBoxConfigGenerator::resolve_route(&config, Some("steamservice.exe"), Some(443), false);
+    assert_eq!(service_route, "v2ray", "steamservice.exe must route to secondary proxy");
+}
+
+fn test_aw_steam_companion_propagation_when_steam_customized() {
+    let mut settings = AppSettings::default();
+
+    // User explicitly assigns Steam to direct in application rules without adding webhelper
+    settings.application_rules.retain(|r| !r.process_name.to_lowercase().starts_with("steam"));
+    settings.application_rules.push(ApplicationRule::preset(
+        "Steam Custom Direct",
+        "steam.exe",
+        RouteDestination::Direct,
+    ));
+
+    let config = SingBoxConfigGenerator::generate(&settings);
+
+    let steam_route = SingBoxConfigGenerator::resolve_route(&config, Some("steam.exe"), Some(443), false);
+    assert_eq!(steam_route, "direct");
+
+    // Companions automatically follow steam.exe destination
+    let helper_route = SingBoxConfigGenerator::resolve_route(&config, Some("steamwebhelper.exe"), Some(443), false);
+    assert_eq!(helper_route, "direct", "steamwebhelper.exe must automatically follow steam.exe direct route");
+
+    let service_route = SingBoxConfigGenerator::resolve_route(&config, Some("steamservice.exe"), Some(443), false);
+    assert_eq!(service_route, "direct", "steamservice.exe must automatically follow steam.exe direct route");
+}
+

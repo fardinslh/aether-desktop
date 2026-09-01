@@ -235,6 +235,60 @@ impl SingBoxConfigGenerator {
             }
         }
 
+        // Auto-propagate Steam companion processes (steamwebhelper.exe, steamservice.exe)
+        // if steam.exe is routed to a destination and companions are not explicitly routed elsewhere.
+        let all_configured_apps: Vec<String> = high_direct_apps
+            .iter()
+            .chain(high_v2ray_apps.iter())
+            .chain(high_aether_apps.iter())
+            .chain(normal_direct_apps.iter())
+            .chain(normal_v2ray_apps.iter())
+            .chain(normal_aether_apps.iter())
+            .map(|s| s.to_lowercase())
+            .collect();
+
+        let steam_companions = ["steamwebhelper.exe", "steamservice.exe"];
+
+        if all_configured_apps.contains(&"steam.exe".to_string()) {
+            if normal_v2ray_apps.iter().any(|p| p.eq_ignore_ascii_case("steam.exe")) {
+                for comp in &steam_companions {
+                    if !all_configured_apps.contains(&comp.to_lowercase()) {
+                        normal_v2ray_apps.push(comp.to_string());
+                    }
+                }
+            } else if normal_aether_apps.iter().any(|p| p.eq_ignore_ascii_case("steam.exe")) {
+                for comp in &steam_companions {
+                    if !all_configured_apps.contains(&comp.to_lowercase()) {
+                        normal_aether_apps.push(comp.to_string());
+                    }
+                }
+            } else if normal_direct_apps.iter().any(|p| p.eq_ignore_ascii_case("steam.exe")) {
+                for comp in &steam_companions {
+                    if !all_configured_apps.contains(&comp.to_lowercase()) {
+                        normal_direct_apps.push(comp.to_string());
+                    }
+                }
+            } else if high_v2ray_apps.iter().any(|p| p.eq_ignore_ascii_case("steam.exe")) {
+                for comp in &steam_companions {
+                    if !all_configured_apps.contains(&comp.to_lowercase()) {
+                        high_v2ray_apps.push(comp.to_string());
+                    }
+                }
+            } else if high_aether_apps.iter().any(|p| p.eq_ignore_ascii_case("steam.exe")) {
+                for comp in &steam_companions {
+                    if !all_configured_apps.contains(&comp.to_lowercase()) {
+                        high_aether_apps.push(comp.to_string());
+                    }
+                }
+            } else if high_direct_apps.iter().any(|p| p.eq_ignore_ascii_case("steam.exe")) {
+                for comp in &steam_companions {
+                    if !all_configured_apps.contains(&comp.to_lowercase()) {
+                        high_direct_apps.push(comp.to_string());
+                    }
+                }
+            }
+        }
+
         // 5.3 Priority 3: HIGH-PRIORITY Application Overrides (e.g. Discord.exe -> aether)
         if !high_direct_apps.is_empty() {
             rules.push(RouteRule {

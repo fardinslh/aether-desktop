@@ -50,6 +50,22 @@ fn classify_log_level(line: &str, is_stderr: bool) -> &'static str {
     }
 }
 
+pub fn check_and_log_routing_highlights(logger: &RingBufferLogger, line: &str) {
+    let lower = line.to_lowercase();
+    if lower.contains("steam.exe")
+        || lower.contains("steamwebhelper.exe")
+        || lower.contains("steamservice.exe")
+    {
+        if lower.contains("match") || lower.contains("router:") || lower.contains("outbound") {
+            logger.log("INFO", "routing", format!("[STEAM-ROUTING] {}", line));
+        }
+    } else if lower.contains("dota2.exe") {
+        if lower.contains("match") || lower.contains("router:") || lower.contains("outbound") {
+            logger.log("INFO", "routing", format!("[DOTA-ROUTING] {}", line));
+        }
+    }
+}
+
 pub fn parse_candidate_rtt_from_line(line: &str) -> Option<u32> {
     let lower = line.to_lowercase();
     let candidate_pos = lower
@@ -692,6 +708,7 @@ impl SingBoxRunner {
                     if let Ok(l) = line {
                         if !l.trim().is_empty() {
                             let lvl = classify_log_level(&l, false);
+                            check_and_log_routing_highlights(&log_clone, &l);
                             log_clone.log(lvl, "sing-box", l);
                         }
                     }
@@ -711,6 +728,7 @@ impl SingBoxRunner {
                     if let Ok(l) = line {
                         if !l.trim().is_empty() {
                             let lvl = classify_log_level(&l, true);
+                            check_and_log_routing_highlights(&log_clone, &l);
                             log_clone.log(lvl, "sing-box", l);
                         }
                     }
