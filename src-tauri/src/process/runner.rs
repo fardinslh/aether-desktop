@@ -1100,6 +1100,9 @@ pub fn process_aether_line(
                 );
             }
         }
+        if line.contains("[TCP-DIAG]") {
+            logger.log("INFO", "routing", format!("[AETHER-TCP-DIAG] {}", line));
+        }
         let lvl = classify_log_level(line, is_stderr);
         logger.log(lvl, "Aether", line);
     }
