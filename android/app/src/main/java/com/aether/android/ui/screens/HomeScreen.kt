@@ -11,7 +11,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.TravelExplore
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -35,6 +37,7 @@ fun HomeScreen(
     activeProfile: Profile?,
     onToggleConnect: () -> Unit,
     onNavigateToServers: () -> Unit,
+    onRescanGateway: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val isConnected = status.state == VpnState.CONNECTED
@@ -78,42 +81,91 @@ fun HomeScreen(
             ) {
                 Column {
                     Text(
-                        text = "ACTIVE GATEWAY",
+                        text = if (isConnected) "ACTIVE CLEAN GATEWAY" else "ACTIVE GATEWAY",
                         fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace,
-                        color = TextSecondary,
+                        color = if (isConnected) StatusGreen else TextSecondary,
                         fontWeight = FontWeight.Bold
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = activeProfile?.name ?: "No Server Selected",
+                        text = status.connectedProfile?.name ?: activeProfile?.name ?: "No Server Selected",
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold,
                         color = TextPrimary
                     )
+                    val displayServer = status.connectedProfile?.server ?: activeProfile?.server ?: ""
+                    val displayPort = status.connectedProfile?.port ?: activeProfile?.port ?: 0
                     Text(
-                        text = if (activeProfile != null) "${activeProfile.server}:${activeProfile.port}" else "Tap to choose a node",
+                        text = if (displayServer.isNotEmpty()) "$displayServer:$displayPort" else "Tap to choose a node",
                         fontSize = 12.sp,
                         fontFamily = FontFamily.Monospace,
-                        color = TextTertiary
+                        color = if (isConnected) StatusGreen.copy(alpha = 0.8f) else TextTertiary
                     )
                 }
 
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(8.dp))
-                        .background(SurfaceVariantDark)
+                        .background(if (isConnected) StatusGreen.copy(alpha = 0.15f) else SurfaceVariantDark)
                         .padding(horizontal = 10.dp, vertical = 6.dp)
                 ) {
                     Text(
-                        text = activeProfile?.type?.name ?: "NONE",
-                        color = PrimaryCyan,
+                        text = if (isConnected) "CLEAN EDGE" else (activeProfile?.type?.name ?: "NONE"),
+                        color = if (isConnected) StatusGreen else PrimaryCyan,
                         fontSize = 12.sp,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold
                     )
                 }
             }
+        }
+
+        // Live Hunting or Status Indicator
+        if (isConnecting && status.huntingStatus != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(SurfaceDark)
+                    .border(1.dp, StatusAmber.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = status.huntingStatus,
+                    color = StatusAmber,
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+        } else if (isConnected) {
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(SurfaceVariantDark)
+                    .clickable { onRescanGateway() }
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Refresh,
+                    contentDescription = "Rescan Gateway",
+                    tint = PrimaryCyan,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "FIND FASTER GATEWAY",
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    color = PrimaryCyan
+                )
+            }
+        } else {
+            Spacer(modifier = Modifier.height(1.dp))
         }
 
         // Tactile Connect Power Button
@@ -165,10 +217,10 @@ fun HomeScreen(
                     Text(
                         text = when {
                             isConnected -> "CONNECTED"
-                            isConnecting -> "CONNECTING"
+                            isConnecting -> if (status.bestCandidateRtt != null) "HUNTING (${status.bestCandidateRtt}ms)" else "HUNTING IP..."
                             else -> "CONNECT"
                         },
-                        fontSize = 14.sp,
+                        fontSize = if (isConnecting) 12.sp else 14.sp,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
                         color = when {
@@ -176,7 +228,7 @@ fun HomeScreen(
                             isConnecting -> StatusAmber
                             else -> TextPrimary
                         },
-                        letterSpacing = 2.sp
+                        letterSpacing = if (isConnecting) 1.sp else 2.sp
                     )
                 }
             }

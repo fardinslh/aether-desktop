@@ -102,6 +102,9 @@ class MainActivity : ComponentActivity() {
                                     },
                                     onNavigateToServers = {
                                         currentRoute = Screen.Servers.route
+                                    },
+                                    onRescanGateway = {
+                                        AetherVpnService.rescan(this@MainActivity)
                                     }
                                 )
                             }

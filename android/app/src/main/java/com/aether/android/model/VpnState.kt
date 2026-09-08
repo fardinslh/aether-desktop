@@ -17,5 +17,7 @@ data class VpnStatus(
     val totalDownloadBytes: Long = 0,
     val pingMs: Long? = null,
     val connectedSinceEpochMs: Long = 0,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val huntingStatus: String? = null,
+    val bestCandidateRtt: Long? = null
 )

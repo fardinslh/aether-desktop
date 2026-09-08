@@ -37,6 +37,41 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
+      - name: Fetch and Stage Native Engine Binaries (Aether & Tun2Socks)
+        run: |
+          mkdir -p android/app/src/main/jniLibs/arm64-v8a
+          mkdir -p android/app/src/main/jniLibs/armeabi-v7a
+          mkdir -p android/app/src/main/jniLibs/x86_64
+
+          echo "=== Fetching Aether Core v1.9.0 ==="
+          curl -sSL "https://github.com/CluvexStudio/Aether/releases/download/v1.9.0/aether-android-arm64.tar.gz" | tar -xz -C android/app/src/main/jniLibs/arm64-v8a/
+          mv android/app/src/main/jniLibs/arm64-v8a/aether android/app/src/main/jniLibs/arm64-v8a/libaether.so
+          chmod +x android/app/src/main/jniLibs/arm64-v8a/libaether.so
+
+          curl -sSL "https://github.com/CluvexStudio/Aether/releases/download/v1.9.0/aether-android-armv7.tar.gz" | tar -xz -C android/app/src/main/jniLibs/armeabi-v7a/
+          mv android/app/src/main/jniLibs/armeabi-v7a/aether android/app/src/main/jniLibs/armeabi-v7a/libaether.so
+          chmod +x android/app/src/main/jniLibs/armeabi-v7a/libaether.so
+
+          curl -sSL "https://github.com/CluvexStudio/Aether/releases/download/v1.9.0/aether-android-x86_64.tar.gz" | tar -xz -C android/app/src/main/jniLibs/x86_64/
+          mv android/app/src/main/jniLibs/x86_64/aether android/app/src/main/jniLibs/x86_64/libaether.so
+          chmod +x android/app/src/main/jniLibs/x86_64/libaether.so
+
+          echo "=== Fetching Tun2Socks v2.7.0 ==="
+          curl -sSL "https://github.com/xjasonlyu/tun2socks/releases/download/v2.7.0/tun2socks-linux-arm64.zip" -o /tmp/t2s-arm64.zip
+          unzip -p /tmp/t2s-arm64.zip tun2socks-linux-arm64 > android/app/src/main/jniLibs/arm64-v8a/libtun2socks.so
+          chmod +x android/app/src/main/jniLibs/arm64-v8a/libtun2socks.so
+
+          curl -sSL "https://github.com/xjasonlyu/tun2socks/releases/download/v2.7.0/tun2socks-linux-armv7.zip" -o /tmp/t2s-armv7.zip
+          unzip -p /tmp/t2s-armv7.zip tun2socks-linux-armv7 > android/app/src/main/jniLibs/armeabi-v7a/libtun2socks.so
+          chmod +x android/app/src/main/jniLibs/armeabi-v7a/libtun2socks.so
+
+          curl -sSL "https://github.com/xjasonlyu/tun2socks/releases/download/v2.7.0/tun2socks-linux-amd64.zip" -o /tmp/t2s-x86_64.zip
+          unzip -p /tmp/t2s-x86_64.zip tun2socks-linux-amd64 > android/app/src/main/jniLibs/x86_64/libtun2socks.so
+          chmod +x android/app/src/main/jniLibs/x86_64/libtun2socks.so
+
+          echo "=== Staged JNI Libraries ==="
+          ls -lh android/app/src/main/jniLibs/*
+
       - name: Build Native Android APK
         working-directory: android
         run: |
