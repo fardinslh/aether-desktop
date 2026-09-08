@@ -1,0 +1,296 @@
+package com.aether.android.ui.screens
+
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.aether.android.model.Profile
+import com.aether.android.model.VpnState
+import com.aether.android.model.VpnStatus
+import com.aether.android.ui.theme.*
+
+@Composable
+fun HomeScreen(
+    status: VpnStatus,
+    activeProfile: Profile?,
+    onToggleConnect: () -> Unit,
+    onNavigateToServers: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val isConnected = status.state == VpnState.CONNECTED
+    val isConnecting = status.state == VpnState.CONNECTING || status.state == VpnState.RECONNECTING
+
+    // Pulsing animation for the connect ring
+    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+    val pulseScale by infiniteTransition.animateFloat(
+        initialValue = 1f,
+        targetValue = if (isConnected || isConnecting) 1.08f else 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1200, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulse_scale"
+    )
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(horizontal = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.SpaceBetween
+    ) {
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Active Node Card
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onNavigateToServers() },
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = SurfaceDark)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "ACTIVE GATEWAY",
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = TextSecondary,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = activeProfile?.name ?: "No Server Selected",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
+                    Text(
+                        text = if (activeProfile != null) "${activeProfile.server}:${activeProfile.port}" else "Tap to choose a node",
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = TextTertiary
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(SurfaceVariantDark)
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = activeProfile?.type?.name ?: "NONE",
+                        color = PrimaryCyan,
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+
+        // Tactile Connect Power Button
+        Box(
+            modifier = Modifier
+                .size(240.dp)
+                .scale(pulseScale),
+            contentAlignment = Alignment.Center
+        ) {
+            val outerBorderColor = when {
+                isConnected -> StatusGreen
+                isConnecting -> StatusAmber
+                else -> BorderDark
+            }
+            val glowBrush = when {
+                isConnected -> Brush.radialGradient(listOf(StatusGreenGlow, Color.Transparent))
+                isConnecting -> Brush.radialGradient(listOf(StatusAmber.copy(alpha = 0.2f), Color.Transparent))
+                else -> Brush.radialGradient(listOf(Color.Transparent, Color.Transparent))
+            }
+
+            Box(
+                modifier = Modifier
+                    .size(240.dp)
+                    .clip(CircleShape)
+                    .background(glowBrush)
+            )
+
+            Box(
+                modifier = Modifier
+                    .size(190.dp)
+                    .clip(CircleShape)
+                    .background(SurfaceDark)
+                    .border(3.dp, outerBorderColor, CircleShape)
+                    .clickable { onToggleConnect() },
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        imageVector = Icons.Default.PowerSettingsNew,
+                        contentDescription = "Toggle Power",
+                        modifier = Modifier.size(56.dp),
+                        tint = when {
+                            isConnected -> StatusGreen
+                            isConnecting -> StatusAmber
+                            else -> TextSecondary
+                        }
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = when {
+                            isConnected -> "CONNECTED"
+                            isConnecting -> "CONNECTING"
+                            else -> "CONNECT"
+                        },
+                        fontSize = 14.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        color = when {
+                            isConnected -> StatusGreen
+                            isConnecting -> StatusAmber
+                            else -> TextPrimary
+                        },
+                        letterSpacing = 2.sp
+                    )
+                }
+            }
+        }
+
+        // Live Telemetry Stats (Ping, Up, Down)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(SurfaceDark)
+                .padding(vertical = 16.dp, horizontal = 12.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Ping
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Speed,
+                        contentDescription = "Ping",
+                        modifier = Modifier.size(16.dp),
+                        tint = PrimaryCyan
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "LATENCY",
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = TextSecondary,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = if (isConnected && status.pingMs != null) "${status.pingMs} ms" else "-- ms",
+                    fontSize = 15.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    color = if (isConnected) StatusGreen else TextSecondary
+                )
+            }
+
+            Divider(
+                modifier = Modifier
+                    .height(32.dp)
+                    .width(1.dp),
+                color = BorderDark
+            )
+
+            // Uplink
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.ArrowUpward,
+                        contentDescription = "Upload",
+                        modifier = Modifier.size(16.dp),
+                        tint = AccentPurple
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "UPLOAD",
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = TextSecondary,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = if (isConnected) "0.0 KB/s" else "--",
+                    fontSize = 15.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+            }
+
+            Divider(
+                modifier = Modifier
+                    .height(32.dp)
+                    .width(1.dp),
+                color = BorderDark
+            )
+
+            // Downlink
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.ArrowDownward,
+                        contentDescription = "Download",
+                        modifier = Modifier.size(16.dp),
+                        tint = PrimaryCyan
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "DOWNLOAD",
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = TextSecondary,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = if (isConnected) "0.0 KB/s" else "--",
+                    fontSize = 15.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+    }
+}

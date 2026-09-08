@@ -43,6 +43,8 @@ Desktop.ini
 *.msi
 *.zip
 *.tar.gz
+*.apk
+dist-android/
 
 # Local Logs & Runtime Configs
 *.log

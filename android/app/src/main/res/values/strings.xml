@@ -1,0 +1,11 @@
+<resources>
+    <string name="app_name">Aether</string>
+    <string name="quick_settings_tile_label">Aether VPN</string>
+    <string name="vpn_channel_name">Aether VPN Status</string>
+    <string name="vpn_channel_desc">Shows ongoing connection status and data throughput</string>
+    <string name="status_connected">Connected</string>
+    <string name="status_connecting">Connecting…</string>
+    <string name="status_disconnected">Disconnected</string>
+    <string name="action_disconnect">Disconnect</string>
+    <string name="action_connect">Connect</string>
+</resources>
