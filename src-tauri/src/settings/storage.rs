@@ -192,33 +192,33 @@ impl SettingsStorage {
                             needs_migration = true;
                         }
 
-                        // Auto-discover and validate binary paths
-                        let aether_valid = match crate::dependencies::DependencyManager::discover_aether_binary(&settings.aether.executable_path) {
-                            Some((p, _)) => {
-                                let p_str = p.to_string_lossy().to_string();
-                                if settings.aether.executable_path != p_str {
-                                    settings.aether.executable_path = p_str;
-                                    needs_migration = true;
-                                }
-                                true
-                            }
-                            None => false,
-                        };
-
-                        let singbox_valid = match crate::dependencies::DependencyManager::discover_singbox_binary(&settings.sing_box.executable_path) {
-                            Some((p, _)) => {
-                                let p_str = p.to_string_lossy().to_string();
-                                if settings.sing_box.executable_path != p_str {
-                                    settings.sing_box.executable_path = p_str;
-                                    needs_migration = true;
-                                }
-                                true
-                            }
-                            None => false,
-                        };
-
                         #[cfg(not(target_os = "android"))]
                         {
+                            // Auto-discover and validate binary paths
+                            let aether_valid = match crate::dependencies::DependencyManager::discover_aether_binary(&settings.aether.executable_path) {
+                                Some((p, _)) => {
+                                    let p_str = p.to_string_lossy().to_string();
+                                    if settings.aether.executable_path != p_str {
+                                        settings.aether.executable_path = p_str;
+                                        needs_migration = true;
+                                    }
+                                    true
+                                }
+                                None => false,
+                            };
+
+                            let singbox_valid = match crate::dependencies::DependencyManager::discover_singbox_binary(&settings.sing_box.executable_path) {
+                                Some((p, _)) => {
+                                    let p_str = p.to_string_lossy().to_string();
+                                    if settings.sing_box.executable_path != p_str {
+                                        settings.sing_box.executable_path = p_str;
+                                        needs_migration = true;
+                                    }
+                                    true
+                                }
+                                None => false,
+                            };
+
                             // If any core binary is missing or invalid on disk, first run is NOT completed
                             if (!aether_valid || !singbox_valid) && settings.first_run_completed {
                                 settings.first_run_completed = false;

@@ -850,14 +850,17 @@ impl ConnectionOrchestrator {
             tokio::time::sleep(tokio::time::Duration::from_millis(800)).await;
             return Ok(RouteOptimizationResult {
                 success: true,
-                message: "Mobile gateway scan complete. Best gateway maintained.".to_string(),
                 previous_latency_ms: Some(45),
-                new_latency_ms: Some(38),
-                latency_delta_ms: Some(7),
                 previous_jitter_ms: Some(4),
+                previous_pop: Some("MOB".to_string()),
+                previous_ip: Some("162.159.192.1".to_string()),
+                new_latency_ms: Some(38),
                 new_jitter_ms: Some(2),
-                new_ip: Some("162.159.192.1".to_string()),
                 new_pop: Some("MOB".to_string()),
+                new_ip: Some("162.159.192.1".to_string()),
+                latency_delta_ms: Some(7),
+                decision: "KeptFaster".to_string(),
+                message: "Mobile gateway scan complete. Best gateway maintained.".to_string(),
             });
         }
         #[cfg(not(target_os = "android"))]
@@ -1801,38 +1804,56 @@ impl ConnectionOrchestrator {
         {
             let _ = settings;
             let is_conn = *self.state.read() == ConnectionState::Connected;
+            let now_ms = chrono::Utc::now().timestamp_millis();
             HealthStatus {
-                aether_tunnel: crate::models::HealthCheck {
-                    ok: is_conn,
-                    message: if is_conn { "Android Mobile VPN Active".to_string() } else { "Standby".to_string() },
+                internet: if is_conn {
+                    crate::models::health::ServiceHealth::ok("Protected")
+                } else {
+                    crate::models::health::ServiceHealth::ok("Direct")
                 },
-                singbox_process: crate::models::HealthCheck {
-                    ok: is_conn,
-                    message: if is_conn { "Mobile Routing Engine Active".to_string() } else { "Standby".to_string() },
+                aether_process: if is_conn {
+                    crate::models::health::ServiceHealth::ok("Android Mobile VPN Active")
+                } else {
+                    crate::models::health::ServiceHealth::err("Standby")
                 },
-                tun_interface: crate::models::HealthCheck {
-                    ok: is_conn,
-                    message: if is_conn { "Android VpnService TUN Active".to_string() } else { "Standby".to_string() },
+                aether_socks: if is_conn {
+                    crate::models::health::ServiceHealth::ok("Mobile SOCKS Active")
+                } else {
+                    crate::models::health::ServiceHealth::err("Standby")
                 },
-                routing: crate::models::HealthCheck {
-                    ok: is_conn,
-                    message: if is_conn { "System Egress Protected".to_string() } else { "Standby".to_string() },
+                aether_tunnel: if is_conn {
+                    crate::models::health::ServiceHealth::ok("Mobile Tunnel Active")
+                } else {
+                    crate::models::health::ServiceHealth::err("Standby")
                 },
-                secondary_proxy: crate::models::HealthCheck {
-                    ok: false,
-                    message: "Standby".to_string(),
+                singbox_process: if is_conn {
+                    crate::models::health::ServiceHealth::ok("Mobile Routing Engine Active")
+                } else {
+                    crate::models::health::ServiceHealth::err("Standby")
+                },
+                tun_interface: if is_conn {
+                    crate::models::health::ServiceHealth::ok("Android VpnService TUN Active")
+                } else {
+                    crate::models::health::ServiceHealth::err("Standby")
+                },
+                secondary_proxy: crate::models::health::ServiceHealth::err("Standby"),
+                routing: if is_conn {
+                    crate::models::health::ServiceHealth::ok("System Egress Protected")
+                } else {
+                    crate::models::health::ServiceHealth::err("Standby")
                 },
                 cloudflare_trace: if is_conn {
-                    Some(crate::models::CloudflareTrace {
+                    Some(crate::models::health::CloudflareTrace {
                         ip: "104.28.0.1".to_string(),
-                        colo: "WARP-MOBILE".to_string(),
                         warp: "on".to_string(),
-                        gateway: "on".to_string(),
-                        latency_ms: Some(42),
+                        colo: "WARP-MOBILE".to_string(),
+                        loc: "US".to_string(),
+                        latency_ms: 42,
                     })
                 } else {
                     None
                 },
+                last_checked_epoch_ms: now_ms,
             }
         }
         #[cfg(not(target_os = "android"))]
