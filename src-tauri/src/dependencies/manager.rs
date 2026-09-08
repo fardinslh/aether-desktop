@@ -1,3 +1,4 @@
+#[cfg(not(target_os = "android"))]
 use super::github::GithubClient;
 use crate::settings::SettingsStorage;
 use futures_util::StreamExt;

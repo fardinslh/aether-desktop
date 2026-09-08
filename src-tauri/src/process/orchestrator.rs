@@ -2,6 +2,7 @@ use crate::health::HealthProber;
 use crate::logging::RingBufferLogger;
 use crate::models::health::HealthStatus;
 use crate::models::{AppSettings, ConnectionState};
+#[cfg(not(target_os = "android"))]
 use crate::process::detector::ProcessDetector;
 use crate::process::runner::{AetherRunner, SingBoxRunner};
 use parking_lot::RwLock;
@@ -264,7 +265,7 @@ impl ConnectionOrchestrator {
                 format!("[Attempt #{}] Initializing Android mobile VPN service...", attempt_id),
             );
             tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
-            self.set_state(ConnectionState::ConfiguringSingBox);
+            self.set_state(ConnectionState::StartingRouter);
             tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
             self.set_state(ConnectionState::Connected);
             self.logger.log(
