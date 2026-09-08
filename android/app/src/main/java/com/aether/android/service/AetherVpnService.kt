@@ -10,14 +10,12 @@ import android.os.ParcelFileDescriptor
 import androidx.core.app.NotificationCompat
 import com.aether.android.AetherApplication
 import com.aether.android.R
-import com.aether.android.core.EndpointCandidate
-import com.aether.android.core.WarpScanner
 import com.aether.android.model.Profile
-import com.aether.android.model.ProfileType
 import com.aether.android.model.SplitTunnelMode
 import com.aether.android.model.VpnState
 import com.aether.android.model.VpnStatus
 import com.aether.android.ui.MainActivity
+import hev.sockstun.TProxyService
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -38,6 +36,22 @@ class AetherVpnService : VpnService() {
 
         private val _vpnStatus = MutableStateFlow(VpnStatus())
         val vpnStatus: StateFlow<VpnStatus> = _vpnStatus.asStateFlow()
+
+        private val DEFAULT_WARP_IDENTITY = """
+device_id = "4df2f838-0671-44db-9850-fe63f2a01741"
+access_token = "ebdcabbd-ff26-4bbd-a3ac-6385a5ee4ee7"
+cert_pem = ""
+key_pem = ""
+cert_issued_at = 0
+ipv4 = "172.16.0.2"
+ipv6 = "2606:4700:110:8dbd:6465:9f60:43b7:3b5a"
+wg_private_key = "6GNFMS4ruRl+bYlnXQOm5leYwCOXzVSBWmnS0JTGHW0="
+wg_peer_public_key = "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo="
+client_id = "dYix"
+organization = ""
+gateway_proxy = "172.16.0.1:2480"
+assigned_endpoint = "162.159.192.10"
+""".trimIndent()
 
         fun start(context: Context, profileId: String? = null) {
             val intent = Intent(context, AetherVpnService::class.java).apply {
@@ -69,7 +83,6 @@ class AetherVpnService : VpnService() {
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var vpnInterface: ParcelFileDescriptor? = null
     private var aetherProcess: Process? = null
-    private var tun2socksProcess: Process? = null
     private var candidateMonitoringJob: Job? = null
     private var speedMonitoringJob: Job? = null
 
@@ -106,118 +119,125 @@ class AetherVpnService : VpnService() {
         _vpnStatus.value = VpnStatus(
             state = VpnState.CONNECTING,
             connectedProfile = profile,
-            huntingStatus = "Initiating clean gateway discovery..."
+            huntingStatus = "Hunting for clean Cloudflare edge candidate..."
         )
 
         startForeground(NOTIFICATION_ID, buildNotification("Connecting...", profile.name))
 
         serviceScope.launch {
             try {
-                // 1. Locate Native Binaries
+                // 1. Locate Native Aether Core Daemon
                 val nativeLibDir = File(applicationInfo.nativeLibraryDir)
                 val aetherBin = File(nativeLibDir, "libaether.so")
-                val tun2socksBin = File(nativeLibDir, "libtun2socks.so")
-
-                val configFile = File(filesDir, "aether.toml")
-                val hasNativeDaemons = aetherBin.exists() && aetherBin.canExecute()
-
-                var bestCleanEndpoint: EndpointCandidate? = null
-
-                // 2. Candidate IP Discovery / Hunting
-                _vpnStatus.value = _vpnStatus.value.copy(huntingStatus = "Searching for clean Cloudflare IPs...")
-                val candidates = WarpScanner.scanCleanEndpoints { tested, total, currentBest ->
-                    if (currentBest != null) {
-                        _vpnStatus.value = _vpnStatus.value.copy(
-                            huntingStatus = "Probing IPs ($tested/$total) - Found: ${currentBest.ip}:${currentBest.port} (${currentBest.rttMs}ms)",
-                            bestCandidateRtt = currentBest.rttMs
-                        )
-                        updateNotification("Hunting: ${currentBest.ip} (${currentBest.rttMs}ms)", profile.name)
-                    }
+                if (!aetherBin.exists()) {
+                    throw IllegalStateException("libaether.so missing in ${nativeLibDir.absolutePath}")
                 }
 
-                bestCleanEndpoint = candidates.firstOrNull() ?: EndpointCandidate("188.114.99.215", 942, 45)
-                val cleanIp = bestCleanEndpoint.ip
-                val cleanPort = bestCleanEndpoint.port
-                val cleanRtt = bestCleanEndpoint.rttMs
+                // Ensure aether.toml exists with pre-seeded WARP identity if empty
+                val configFile = File(filesDir, "aether.toml")
+                if (!configFile.exists() || configFile.length() < 50) {
+                    configFile.writeText(DEFAULT_WARP_IDENTITY)
+                }
 
-                _vpnStatus.value = _vpnStatus.value.copy(
-                    huntingStatus = "Clean gateway selected: $cleanIp:$cleanPort ($cleanRtt ms)"
+                val lastconnFile = File(filesDir, "aether-lastconn.toml")
+
+                // 2. Build Aether Daemon Command
+                val cmd = mutableListOf(
+                    aetherBin.absolutePath,
+                    "--config", configFile.absolutePath,
+                    "--bind", "127.0.0.1:1819",
+                    "--wg",
+                    "-4",
+                    "--noize", "gfw"
                 )
 
-                // 3. Launch Native Aether Daemon if available
-                if (hasNativeDaemons) {
-                    val cmd = mutableListOf(
-                        aetherBin.absolutePath,
-                        "--config", configFile.absolutePath,
-                        "--bind", "127.0.0.1:1819",
-                        "--wg",
-                        "-4",
-                        "--wg-peer", "$cleanIp:$cleanPort"
-                    )
-                    if (forceFreshScan) {
-                        cmd.add("--no-quick-reconnect")
-                        cmd.add("--scan")
-                        cmd.add("balanced")
-                    } else {
-                        cmd.add("--quick-reconnect")
-                    }
-
-                    val pb = ProcessBuilder(cmd)
-                    pb.directory(filesDir)
-                    pb.redirectErrorStream(true)
-                    val proc = pb.start()
-                    aetherProcess = proc
-
-                    // Monitor Aether output for candidate RTT lines
-                    candidateMonitoringJob = launch {
-                        try {
-                            val reader = BufferedReader(InputStreamReader(proc.inputStream))
-                            var line: String? = null
-                            while (isActive && reader.readLine().also { line = it } != null) {
-                                val currentLine = line
-                                if (currentLine != null) {
-                                    val parsed = parseCandidateFromLine(currentLine)
-                                    if (parsed != null) {
-                                        _vpnStatus.value = _vpnStatus.value.copy(
-                                            huntingStatus = "Candidate: ${parsed.first} (${parsed.second} ms)",
-                                            bestCandidateRtt = parsed.second
-                                        )
-                                    }
-                                }
-                            }
-                        } catch (ignored: Exception) {}
-                    }
-
-                    // Await SOCKS5 Port 1819 Readiness
-                    var ready = false
-                    for (i in 1..25) {
-                        delay(200)
-                        if (isSocksPortReady("127.0.0.1", 1819)) {
-                            ready = true
-                            break
-                        }
-                    }
+                if (forceFreshScan || !lastconnFile.exists()) {
+                    cmd.add("--no-quick-reconnect")
+                    cmd.add("--turbo")
                 } else {
-                    // Simulated gateway readiness delay
+                    cmd.add("--quick-reconnect")
+                }
+
+                var activeCleanIp = "162.159.192.1"
+                var activeCleanPort = 2408
+                var activeCleanRtt = 45L
+
+                val pb = ProcessBuilder(cmd)
+                pb.directory(filesDir)
+                pb.redirectErrorStream(true)
+                val proc = pb.start()
+                aetherProcess = proc
+
+                // 3. Monitor Aether Stdout in Real-Time
+                candidateMonitoringJob = launch {
+                    try {
+                        val reader = BufferedReader(InputStreamReader(proc.inputStream))
+                        var line: String? = null
+                        while (isActive && reader.readLine().also { line = it } != null) {
+                            val currentLine = line ?: continue
+                            val parsed = parseCandidateFromLine(currentLine)
+                            if (parsed != null) {
+                                val (ep, rtt) = parsed
+                                val parts = ep.split(":")
+                                if (parts.size == 2) {
+                                    activeCleanIp = parts[0]
+                                    activeCleanPort = parts[1].toIntOrNull() ?: activeCleanPort
+                                }
+                                activeCleanRtt = rtt
+                                _vpnStatus.value = _vpnStatus.value.copy(
+                                    huntingStatus = "Candidate: $ep (${rtt}ms)",
+                                    bestCandidateRtt = rtt
+                                )
+                                updateNotification("Hunting: $ep (${rtt}ms)", profile.name)
+                            } else if (currentLine.contains("tunnel validated") || currentLine.contains("socks5 server listening")) {
+                                _vpnStatus.value = _vpnStatus.value.copy(
+                                    huntingStatus = "Cloudflare WireGuard validated. Activating TUN..."
+                                )
+                            }
+                        }
+                    } catch (ignored: Exception) {}
+                }
+
+                // 4. Strict Readiness Verification for SOCKS5 Port 1819
+                var socksReady = false
+                val deadline = System.currentTimeMillis() + 40_000 // 40s budget for fresh scan
+                while (System.currentTimeMillis() < deadline && isActive) {
+                    if (proc.isAlive == false) {
+                        val exitCode = proc.exitValue()
+                        throw IllegalStateException("Aether engine terminated prematurely with exit code $exitCode")
+                    }
+                    if (isSocksPortReady("127.0.0.1", 1819)) {
+                        socksReady = true
+                        break
+                    }
                     delay(300)
                 }
 
-                // 4. Establish Android VpnService TUN Interface
+                if (!socksReady) {
+                    throw IllegalStateException("Timed out waiting for Aether SOCKS5 proxy on 127.0.0.1:1819")
+                }
+
+                // 5. Establish Android VpnService TUN Interface
                 val builder = Builder()
                     .setSession("Aether")
                     .setMtu(settings.mtu)
                     .addAddress("172.19.0.1", 30)
                     .addDnsServer(settings.primaryDns)
+                    .addDnsServer("8.8.8.8")
                     .addRoute("0.0.0.0", 0)
 
-                // CRITICAL LOOP PREVENTION:
-                // Exclude this app package so Aether and Tun2Socks daemons route
-                // out physical WAN (Cellular/Wi-Fi) without looping into tun0!
+                try {
+                    builder.addAddress("fc00::1", 120)
+                    builder.addRoute("::", 0)
+                } catch (ignored: Exception) {}
+
+                // CRITICAL ROUTING LOOP PREVENTION:
+                // Exclude this app package so Aether core routes through physical WAN
                 try {
                     builder.addDisallowedApplication(packageName)
                 } catch (ignored: Exception) {}
 
-                // Split Tunneling Configuration
+                // Split Tunneling
                 if (settings.selectedPackages.isNotEmpty()) {
                     when (settings.splitTunnelMode) {
                         SplitTunnelMode.BYPASS_SELECTED -> {
@@ -235,45 +255,54 @@ class AetherVpnService : VpnService() {
                 }
 
                 vpnInterface = builder.establish()
-                if (vpnInterface == null) {
-                    _vpnStatus.value = VpnStatus(
-                        state = VpnState.ERROR,
-                        errorMessage = "System VPN establishment failed"
-                    )
-                    stopVpn()
-                    return@launch
-                }
+                    ?: throw IllegalStateException("Android VpnService.Builder.establish() returned null")
 
                 val tunFd = vpnInterface!!.fd
 
-                // 5. Attach Tun2Socks Engine
-                if (hasNativeDaemons && tun2socksBin.exists() && tun2socksBin.canExecute()) {
-                    val t2sCmd = listOf(
-                        tun2socksBin.absolutePath,
-                        "-device", "fd://$tunFd",
-                        "-proxy", "socks5://127.0.0.1:1819",
-                        "-loglevel", "warn"
-                    )
-                    val t2sPb = ProcessBuilder(t2sCmd)
-                    tun2socksProcess = t2sPb.start()
-                }
+                // 6. Start In-Process TProxy Engine (libhev-socks5-tunnel.so)
+                val tproxyConf = File(filesDir, "tproxy.yml")
+                tproxyConf.writeText(
+                    """
+                    tunnel:
+                      name: tun0
+                      mtu: ${settings.mtu}
+                      ipv4: 172.19.0.1
+                      ipv6: 'fc00::1'
 
-                // 6. Transition to CONNECTED
-                val activeConnectedProfile = profile.copy(
-                    server = cleanIp,
-                    port = cleanPort,
-                    latencyMs = cleanRtt
+                    socks5:
+                      port: 1819
+                      address: 127.0.0.1
+                      udp: 'udp'
+
+                    misc:
+                      task-stack-size: 86016
+                      tcp-buffer-size: 65536
+                      udp-recv-buffer-size: 524288
+                      log-level: warn
+                    """.trimIndent()
                 )
 
-                _vpnStatus.value = VpnStatus(
+                val started = TProxyService.TProxyStartService(tproxyConf.absolutePath, tunFd)
+                if (!started) {
+                    throw IllegalStateException("Failed to start in-process TProxy engine on TUN fd $tunFd")
+                }
+
+                // 7. Transition to CONNECTED
+                val activeConnectedProfile = profile.copy(
+                    server = activeCleanIp,
+                    port = activeCleanPort,
+                    latencyMs = activeCleanRtt
+                )
+
+                _vpnStatus.value = _vpnStatus.value.copy(
                     state = VpnState.CONNECTED,
                     connectedProfile = activeConnectedProfile,
-                    pingMs = cleanRtt,
-                    huntingStatus = "Connected to clean gateway $cleanIp:$cleanPort",
+                    pingMs = activeCleanRtt,
+                    huntingStatus = "Connected to clean edge $activeCleanIp:$activeCleanPort",
                     connectedSinceEpochMs = System.currentTimeMillis()
                 )
 
-                updateNotification("Connected — $cleanIp", activeConnectedProfile.name)
+                updateNotification("Connected — $activeCleanIp", activeConnectedProfile.name)
                 startSpeedMonitoring()
 
             } catch (e: Exception) {
@@ -289,7 +318,7 @@ class AetherVpnService : VpnService() {
     private fun isSocksPortReady(host: String, port: Int): Boolean {
         return try {
             val s = Socket()
-            s.connect(InetSocketAddress(host, port), 200)
+            s.connect(InetSocketAddress(host, port), 250)
             s.close()
             true
         } catch (e: Exception) {
@@ -299,39 +328,64 @@ class AetherVpnService : VpnService() {
 
     private fun parseCandidateFromLine(line: String): Pair<String, Long>? {
         val lower = line.lowercase()
-        if (!lower.contains("candidate") && !lower.contains("endpoint") && !lower.contains("rtt")) return null
+        if (!lower.contains("candidate") && !lower.contains("endpoint")) return null
+
         val epRegex = Regex("(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}):(\\d{2,5})")
-        val epMatch = epRegex.find(line)
-        val endpoint = epMatch?.value ?: ""
+        val epMatch = epRegex.find(line) ?: return null
+        val endpoint = epMatch.value
 
         val rttRegex = Regex("(?:rtt|latency|ping)[=:\\s]+([\\d.]+)\\s*(ms|s|µs|us)?", RegexOption.IGNORE_CASE)
-        val rttMatch = rttRegex.find(line) ?: return null
-        val numStr = rttMatch.groupValues[1]
-        val unit = rttMatch.groupValues.getOrNull(2) ?: "ms"
-        val num = numStr.toDoubleOrNull() ?: return null
-        val rttMs = if (unit.equals("s", ignoreCase = true)) {
-            (num * 1000).toLong()
+        val rttMatch = rttRegex.find(line)
+        val rttMs = if (rttMatch != null) {
+            val numStr = rttMatch.groupValues[1]
+            val unit = rttMatch.groupValues.getOrNull(2) ?: "ms"
+            val num = numStr.toDoubleOrNull() ?: 50.0
+            if (unit.equals("s", ignoreCase = true)) {
+                (num * 1000).toLong()
+            } else if (unit.equals("us", ignoreCase = true) || unit.equals("µs", ignoreCase = true)) {
+                (num / 1000).toLong().coerceAtLeast(1)
+            } else {
+                num.toLong()
+            }
         } else {
-            num.toLong()
+            45L
         }
         return endpoint to rttMs
     }
 
     private fun startSpeedMonitoring() {
         speedMonitoringJob = serviceScope.launch {
-            while (isActive) {
-                delay(1500)
-                if (_vpnStatus.value.state == VpnState.CONNECTED) {
-                    val current = _vpnStatus.value
-                    // Jitter variation around the established candidate ping
-                    val basePing = current.pingMs ?: 45
-                    val jitter = (-3..4).random()
-                    val newPing = (basePing + jitter).coerceAtLeast(15)
+            var lastTxBytes = 0L
+            var lastRxBytes = 0L
+            var lastSampleTime = System.currentTimeMillis()
 
-                    _vpnStatus.value = current.copy(
-                        pingMs = newPing,
-                        uplinkSpeedBps = (1024..40960).random().toLong(),
-                        downlinkSpeedBps = (10240..153600).random().toLong()
+            while (isActive) {
+                delay(1200)
+                if (_vpnStatus.value.state == VpnState.CONNECTED) {
+                    val stats = TProxyService.TProxyGetStats()
+                    val now = System.currentTimeMillis()
+                    val deltaSec = ((now - lastSampleTime) / 1000.0).coerceAtLeast(0.1)
+
+                    var upSpeed = 0L
+                    var downSpeed = 0L
+
+                    if (stats != null && stats.size >= 4) {
+                        val currentTxBytes = stats[1]
+                        val currentRxBytes = stats[3]
+                        if (lastTxBytes > 0L && currentTxBytes >= lastTxBytes) {
+                            upSpeed = ((currentTxBytes - lastTxBytes) / deltaSec).toLong()
+                        }
+                        if (lastRxBytes > 0L && currentRxBytes >= lastRxBytes) {
+                            downSpeed = ((currentRxBytes - lastRxBytes) / deltaSec).toLong()
+                        }
+                        lastTxBytes = currentTxBytes
+                        lastRxBytes = currentRxBytes
+                        lastSampleTime = now
+                    }
+
+                    _vpnStatus.value = _vpnStatus.value.copy(
+                        uplinkSpeedBps = upSpeed,
+                        downlinkSpeedBps = downSpeed
                     )
                 }
             }
@@ -342,13 +396,18 @@ class AetherVpnService : VpnService() {
         speedMonitoringJob?.cancel()
         candidateMonitoringJob?.cancel()
 
-        try { tun2socksProcess?.destroy() } catch (ignored: Exception) {}
-        tun2socksProcess = null
+        try {
+            TProxyService.TProxyStopService()
+        } catch (ignored: Exception) {}
 
-        try { aetherProcess?.destroy() } catch (ignored: Exception) {}
+        try {
+            aetherProcess?.destroy()
+        } catch (ignored: Exception) {}
         aetherProcess = null
 
-        try { vpnInterface?.close() } catch (ignored: Exception) {}
+        try {
+            vpnInterface?.close()
+        } catch (ignored: Exception) {}
         vpnInterface = null
 
         _vpnStatus.value = VpnStatus(state = VpnState.DISCONNECTED)

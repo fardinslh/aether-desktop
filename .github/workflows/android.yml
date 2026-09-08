@@ -56,18 +56,16 @@ jobs:
           mv android/app/src/main/jniLibs/x86_64/aether android/app/src/main/jniLibs/x86_64/libaether.so
           chmod +x android/app/src/main/jniLibs/x86_64/libaether.so
 
-          echo "=== Fetching Tun2Socks v2.7.0 ==="
-          curl -sSL "https://github.com/xjasonlyu/tun2socks/releases/download/v2.7.0/tun2socks-linux-arm64.zip" -o /tmp/t2s-arm64.zip
-          unzip -p /tmp/t2s-arm64.zip tun2socks-linux-arm64 > android/app/src/main/jniLibs/arm64-v8a/libtun2socks.so
-          chmod +x android/app/src/main/jniLibs/arm64-v8a/libtun2socks.so
+          echo "=== Fetching In-Process TProxy Engine (libhev-socks5-tunnel.so) ==="
+          curl -sSL "https://github.com/heiher/sockstun/releases/download/8.0/hev.sockstun-8.0-release.apk" -o /tmp/sockstun.apk
+          unzip -p /tmp/sockstun.apk lib/arm64-v8a/libhev-socks5-tunnel.so > android/app/src/main/jniLibs/arm64-v8a/libhev-socks5-tunnel.so
+          chmod +x android/app/src/main/jniLibs/arm64-v8a/libhev-socks5-tunnel.so
 
-          curl -sSL "https://github.com/xjasonlyu/tun2socks/releases/download/v2.7.0/tun2socks-linux-armv7.zip" -o /tmp/t2s-armv7.zip
-          unzip -p /tmp/t2s-armv7.zip tun2socks-linux-armv7 > android/app/src/main/jniLibs/armeabi-v7a/libtun2socks.so
-          chmod +x android/app/src/main/jniLibs/armeabi-v7a/libtun2socks.so
+          unzip -p /tmp/sockstun.apk lib/armeabi-v7a/libhev-socks5-tunnel.so > android/app/src/main/jniLibs/armeabi-v7a/libhev-socks5-tunnel.so
+          chmod +x android/app/src/main/jniLibs/armeabi-v7a/libhev-socks5-tunnel.so
 
-          curl -sSL "https://github.com/xjasonlyu/tun2socks/releases/download/v2.7.0/tun2socks-linux-amd64.zip" -o /tmp/t2s-x86_64.zip
-          unzip -p /tmp/t2s-x86_64.zip tun2socks-linux-amd64 > android/app/src/main/jniLibs/x86_64/libtun2socks.so
-          chmod +x android/app/src/main/jniLibs/x86_64/libtun2socks.so
+          unzip -p /tmp/sockstun.apk lib/x86_64/libhev-socks5-tunnel.so > android/app/src/main/jniLibs/x86_64/libhev-socks5-tunnel.so
+          chmod +x android/app/src/main/jniLibs/x86_64/libhev-socks5-tunnel.so
 
           echo "=== Staged JNI Libraries ==="
           ls -lh android/app/src/main/jniLibs/*
