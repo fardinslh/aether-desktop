@@ -25,6 +25,11 @@ class AetherApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            android.util.Log.e("AetherApplication", "FATAL UNCAUGHT EXCEPTION on thread ${thread.name}", throwable)
+            defaultHandler?.uncaughtException(thread, throwable)
+        }
         profileRepository = ProfileRepository(this)
         settingsRepository = SettingsRepository(this)
         createNotificationChannels()

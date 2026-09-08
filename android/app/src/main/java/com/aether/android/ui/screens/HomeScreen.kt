@@ -122,7 +122,25 @@ fun HomeScreen(
         }
 
         // Live Hunting or Status Indicator
-        if (isConnecting && status.huntingStatus != null) {
+        if (status.state == VpnState.ERROR && status.errorMessage != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(SurfaceDark)
+                    .border(1.dp, StatusRed.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = status.errorMessage,
+                    color = StatusRed,
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+        } else if (isConnecting && status.huntingStatus != null) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -299,7 +317,7 @@ fun HomeScreen(
                 }
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = if (isConnected) "0.0 KB/s" else "--",
+                    text = if (isConnected) formatSpeed(status.uplinkSpeedBps) else "--",
                     fontSize = 15.sp,
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Bold,
@@ -334,7 +352,7 @@ fun HomeScreen(
                 }
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = if (isConnected) "0.0 KB/s" else "--",
+                    text = if (isConnected) formatSpeed(status.downlinkSpeedBps) else "--",
                     fontSize = 15.sp,
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Bold,
@@ -344,5 +362,14 @@ fun HomeScreen(
         }
 
         Spacer(modifier = Modifier.height(16.dp))
+    }
+}
+
+private fun formatSpeed(bytesPerSec: Long): String {
+    return when {
+        bytesPerSec >= 1024 * 1024 -> String.format(java.util.Locale.US, "%.1f MB/s", bytesPerSec / (1024.0 * 1024.0))
+        bytesPerSec >= 1024 -> String.format(java.util.Locale.US, "%.1f KB/s", bytesPerSec / 1024.0)
+        bytesPerSec > 0 -> "$bytesPerSec B/s"
+        else -> "0.0 KB/s"
     }
 }

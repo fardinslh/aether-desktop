@@ -1,15 +1,19 @@
 package com.aether.android.service
 
 import android.app.Notification
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.aether.android.AetherApplication
 import com.aether.android.R
+import com.aether.android.model.AppSettings
 import com.aether.android.model.Profile
 import com.aether.android.model.SplitTunnelMode
 import com.aether.android.model.VpnState
@@ -25,10 +29,12 @@ import java.io.File
 import java.io.InputStreamReader
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.util.Collections
 
 class AetherVpnService : VpnService() {
 
     companion object {
+        private const val TAG = "AetherVpnService"
         const val ACTION_CONNECT = "com.aether.android.CONNECT"
         const val ACTION_DISCONNECT = "com.aether.android.DISCONNECT"
         const val ACTION_RESCAN = "com.aether.android.RESCAN"
@@ -122,7 +128,17 @@ assigned_endpoint = "162.159.192.10"
             huntingStatus = "Hunting for clean Cloudflare edge candidate..."
         )
 
-        startForeground(NOTIFICATION_ID, buildNotification("Connecting...", profile.name))
+        // Android 14+ (API 34+) MUST specify foregroundServiceType matching the manifest
+        val notification = buildNotification("Connecting...", profile.name)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
 
         serviceScope.launch {
             try {
@@ -131,6 +147,9 @@ assigned_endpoint = "162.159.192.10"
                 val aetherBin = File(nativeLibDir, "libaether.so")
                 if (!aetherBin.exists()) {
                     throw IllegalStateException("libaether.so missing in ${nativeLibDir.absolutePath}")
+                }
+                if (!aetherBin.canExecute()) {
+                    aetherBin.setExecutable(true)
                 }
 
                 // Ensure aether.toml exists with pre-seeded WARP identity if empty
@@ -168,13 +187,21 @@ assigned_endpoint = "162.159.192.10"
                 val proc = pb.start()
                 aetherProcess = proc
 
+                val recentLogs = Collections.synchronizedList(mutableListOf<String>())
+
                 // 3. Monitor Aether Stdout in Real-Time
                 candidateMonitoringJob = launch {
                     try {
-                        val reader = BufferedReader(InputStreamReader(proc.inputStream))
+                        val reader = BufferedReader(InputStreamReader(proc.inputStream, Charsets.UTF_8))
                         var line: String? = null
                         while (isActive && reader.readLine().also { line = it } != null) {
                             val currentLine = line ?: continue
+                            Log.d(TAG, "[Aether] $currentLine")
+                            recentLogs.add(currentLine)
+                            if (recentLogs.size > 20) {
+                                recentLogs.removeAt(0)
+                            }
+
                             val parsed = parseCandidateFromLine(currentLine)
                             if (parsed != null) {
                                 val (ep, rtt) = parsed
@@ -195,66 +222,32 @@ assigned_endpoint = "162.159.192.10"
                                 )
                             }
                         }
-                    } catch (ignored: Exception) {}
+                    } catch (ignored: Throwable) {}
                 }
 
                 // 4. Strict Readiness Verification for SOCKS5 Port 1819
                 var socksReady = false
-                val deadline = System.currentTimeMillis() + 40_000 // 40s budget for fresh scan
+                val deadline = System.currentTimeMillis() + 45_000 // 45s budget
                 while (System.currentTimeMillis() < deadline && isActive) {
-                    if (proc.isAlive == false) {
+                    if (!proc.isAlive) {
                         val exitCode = proc.exitValue()
-                        throw IllegalStateException("Aether engine terminated prematurely with exit code $exitCode")
+                        val tail = synchronized(recentLogs) { recentLogs.takeLast(3).joinToString(" | ") }
+                        throw IllegalStateException("Aether core exited ($exitCode): $tail")
                     }
                     if (isSocksPortReady("127.0.0.1", 1819)) {
                         socksReady = true
                         break
                     }
-                    delay(300)
+                    delay(250)
                 }
 
                 if (!socksReady) {
-                    throw IllegalStateException("Timed out waiting for Aether SOCKS5 proxy on 127.0.0.1:1819")
+                    val tail = synchronized(recentLogs) { recentLogs.takeLast(3).joinToString(" | ") }
+                    throw IllegalStateException("Timed out waiting for Aether SOCKS5 proxy on 127.0.0.1:1819. Last log: $tail")
                 }
 
-                // 5. Establish Android VpnService TUN Interface
-                val builder = Builder()
-                    .setSession("Aether")
-                    .setMtu(settings.mtu)
-                    .addAddress("172.19.0.1", 30)
-                    .addDnsServer(settings.primaryDns)
-                    .addDnsServer("8.8.8.8")
-                    .addRoute("0.0.0.0", 0)
-
-                try {
-                    builder.addAddress("fc00::1", 120)
-                    builder.addRoute("::", 0)
-                } catch (ignored: Exception) {}
-
-                // CRITICAL ROUTING LOOP PREVENTION:
-                // Exclude this app package so Aether core routes through physical WAN
-                try {
-                    builder.addDisallowedApplication(packageName)
-                } catch (ignored: Exception) {}
-
-                // Split Tunneling
-                if (settings.selectedPackages.isNotEmpty()) {
-                    when (settings.splitTunnelMode) {
-                        SplitTunnelMode.BYPASS_SELECTED -> {
-                            for (pkg in settings.selectedPackages) {
-                                try { builder.addDisallowedApplication(pkg) } catch (ignored: Exception) {}
-                            }
-                        }
-                        SplitTunnelMode.ONLY_SELECTED -> {
-                            for (pkg in settings.selectedPackages) {
-                                try { builder.addAllowedApplication(pkg) } catch (ignored: Exception) {}
-                            }
-                        }
-                        SplitTunnelMode.ALL_APPS -> {}
-                    }
-                }
-
-                vpnInterface = builder.establish()
+                // 5. Establish Android VpnService TUN Interface with MapDNS (anti-censorship)
+                vpnInterface = establishVpnInterface(settings)
                     ?: throw IllegalStateException("Android VpnService.Builder.establish() returned null")
 
                 val tunFd = vpnInterface!!.fd
@@ -266,13 +259,20 @@ assigned_endpoint = "162.159.192.10"
                     tunnel:
                       name: tun0
                       mtu: ${settings.mtu}
-                      ipv4: 172.19.0.1
-                      ipv6: 'fc00::1'
+                      ipv4: 198.18.0.1
+                      icmp: 'reply'
 
                     socks5:
                       port: 1819
                       address: 127.0.0.1
                       udp: 'udp'
+
+                    mapdns:
+                      address: 198.18.0.2
+                      port: 53
+                      network: 240.0.0.0
+                      netmask: 240.0.0.0
+                      cache-size: 10000
 
                     misc:
                       task-stack-size: 86016
@@ -282,9 +282,11 @@ assigned_endpoint = "162.159.192.10"
                     """.trimIndent()
                 )
 
-                val started = TProxyService.TProxyStartService(tproxyConf.absolutePath, tunFd)
-                if (!started) {
-                    throw IllegalStateException("Failed to start in-process TProxy engine on TUN fd $tunFd")
+                try {
+                    TProxyService.TProxyStartService(tproxyConf.absolutePath, tunFd)
+                } catch (t: Throwable) {
+                    Log.e(TAG, "TProxyStartService native failure", t)
+                    throw IllegalStateException("Failed to start in-process TProxy engine: ${t.message}")
                 }
 
                 // 7. Transition to CONNECTED
@@ -305,13 +307,75 @@ assigned_endpoint = "162.159.192.10"
                 updateNotification("Connected — $activeCleanIp", activeConnectedProfile.name)
                 startSpeedMonitoring()
 
-            } catch (e: Exception) {
+            } catch (t: Throwable) {
+                Log.e(TAG, "VPN start failed", t)
                 _vpnStatus.value = VpnStatus(
                     state = VpnState.ERROR,
-                    errorMessage = e.message ?: "Connection error"
+                    errorMessage = t.message ?: "Connection error: ${t.javaClass.simpleName}"
                 )
                 stopVpn()
             }
+        }
+    }
+
+    private fun establishVpnInterface(settings: AppSettings): ParcelFileDescriptor? {
+        // Attempt 1: Dual stack (IPv4 + IPv6) with mapped anti-censorship DNS
+        try {
+            val b = Builder()
+                .setSession("Aether")
+                .setMtu(settings.mtu)
+                .addAddress("198.18.0.1", 30)
+                .addRoute("0.0.0.0", 0)
+                .addDnsServer("198.18.0.2")
+                .addDnsServer(settings.primaryDns)
+
+            try {
+                b.addAddress("fc00::1", 120)
+                b.addRoute("::", 0)
+            } catch (ignored: Throwable) {}
+
+            try {
+                b.addDisallowedApplication(packageName)
+            } catch (ignored: Throwable) {}
+
+            applySplitTunneling(b, settings)
+            val pfd = b.establish()
+            if (pfd != null) return pfd
+        } catch (e: Throwable) {
+            Log.w(TAG, "Dual-stack TUN setup failed, falling back to IPv4: ${e.message}")
+        }
+
+        // Attempt 2: IPv4 Only fallback
+        val b4 = Builder()
+            .setSession("Aether")
+            .setMtu(settings.mtu)
+            .addAddress("198.18.0.1", 30)
+            .addRoute("0.0.0.0", 0)
+            .addDnsServer("198.18.0.2")
+            .addDnsServer(settings.primaryDns)
+
+        try {
+            b4.addDisallowedApplication(packageName)
+        } catch (ignored: Throwable) {}
+
+        applySplitTunneling(b4, settings)
+        return b4.establish()
+    }
+
+    private fun applySplitTunneling(builder: Builder, settings: AppSettings) {
+        if (settings.selectedPackages.isEmpty()) return
+        when (settings.splitTunnelMode) {
+            SplitTunnelMode.BYPASS_SELECTED -> {
+                for (pkg in settings.selectedPackages) {
+                    try { builder.addDisallowedApplication(pkg) } catch (ignored: Throwable) {}
+                }
+            }
+            SplitTunnelMode.ONLY_SELECTED -> {
+                for (pkg in settings.selectedPackages) {
+                    try { builder.addAllowedApplication(pkg) } catch (ignored: Throwable) {}
+                }
+            }
+            SplitTunnelMode.ALL_APPS -> {}
         }
     }
 
@@ -321,7 +385,7 @@ assigned_endpoint = "162.159.192.10"
             s.connect(InetSocketAddress(host, port), 250)
             s.close()
             true
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             false
         }
     }
@@ -362,7 +426,11 @@ assigned_endpoint = "162.159.192.10"
             while (isActive) {
                 delay(1200)
                 if (_vpnStatus.value.state == VpnState.CONNECTED) {
-                    val stats = TProxyService.TProxyGetStats()
+                    val stats = try {
+                        TProxyService.TProxyGetStats()
+                    } catch (t: Throwable) {
+                        null
+                    }
                     val now = System.currentTimeMillis()
                     val deltaSec = ((now - lastSampleTime) / 1000.0).coerceAtLeast(0.1)
 
@@ -398,20 +466,25 @@ assigned_endpoint = "162.159.192.10"
 
         try {
             TProxyService.TProxyStopService()
-        } catch (ignored: Exception) {}
+        } catch (ignored: Throwable) {}
 
         try {
             aetherProcess?.destroy()
-        } catch (ignored: Exception) {}
+        } catch (ignored: Throwable) {}
         aetherProcess = null
 
         try {
             vpnInterface?.close()
-        } catch (ignored: Exception) {}
+        } catch (ignored: Throwable) {}
         vpnInterface = null
 
         _vpnStatus.value = VpnStatus(state = VpnState.DISCONNECTED)
-        stopForeground(true)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
         stopSelf()
     }
 
@@ -443,7 +516,7 @@ assigned_endpoint = "162.159.192.10"
 
     private fun updateNotification(statusText: String, profileName: String) {
         val notification = buildNotification(statusText, profileName)
-        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.notify(NOTIFICATION_ID, notification)
     }
 
