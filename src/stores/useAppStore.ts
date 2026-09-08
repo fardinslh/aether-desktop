@@ -19,6 +19,7 @@ export function useAppStore() {
   const stateVersionRef = useRef<number>(0);
   const connectInFlightRef = useRef<boolean>(false);
   const disconnectInFlightRef = useRef<boolean>(false);
+  const operationEpochRef = useRef<number>(0);
 
   // Fetch initial state
   const refreshAll = useCallback(async () => {
@@ -47,6 +48,7 @@ export function useAppStore() {
   }, []);
 
   useEffect(() => {
+    let disposed = false;
     refreshAll();
 
     // 1. Authoritative Event-driven connection state updates
@@ -57,7 +59,11 @@ export function useAppStore() {
         setConnectionState(event.payload);
       }
     }).then((unlisten) => {
-      unlistenFn = unlisten;
+      if (disposed) {
+        unlisten();
+      } else {
+        unlistenFn = unlisten;
+      }
     }).catch((err) => {
       console.warn("Failed to attach Tauri event listener:", err);
     });
@@ -65,6 +71,7 @@ export function useAppStore() {
     // 2. Adaptive polling reconciliation with epoch protection
     let timeoutId: ReturnType<typeof setTimeout>;
     const poll = async () => {
+      if (disposed) return;
       const isTransitioning =
         stateRef.current !== "CONNECTED" &&
         stateRef.current !== "DISCONNECTED" &&
@@ -107,12 +114,15 @@ export function useAppStore() {
         stateRef.current !== "DISCONNECTED" &&
         stateRef.current !== "ERROR";
 
-      timeoutId = setTimeout(poll, nextTransitioning ? 800 : 2000);
+      if (!disposed) {
+        timeoutId = setTimeout(poll, nextTransitioning ? 800 : 2000);
+      }
     };
 
     timeoutId = setTimeout(poll, 1000);
 
     return () => {
+      disposed = true;
       if (unlistenFn) unlistenFn();
       clearTimeout(timeoutId);
     };
@@ -218,6 +228,7 @@ export function useAppStore() {
       return;
     }
     connectInFlightRef.current = true;
+    const operationEpoch = ++operationEpochRef.current;
     stateVersionRef.current += 1;
     setErrorDetails(null);
     // Instant visual feedback
@@ -225,19 +236,24 @@ export function useAppStore() {
 
     try {
       await api.connect();
+      if (operationEpochRef.current !== operationEpoch) return;
       stateVersionRef.current += 1;
       const st = await api.getConnectionState();
+      if (operationEpochRef.current !== operationEpoch) return;
       setConnectionState(st);
       if (st === "CONNECTED") {
         const hl = await api.getHealthStatus();
         setHealth(hl);
       }
     } catch (err: any) {
+      if (operationEpochRef.current !== operationEpoch) return;
       stateVersionRef.current += 1;
       setConnectionState("ERROR");
       setErrorDetails(err?.toString() || "Connection error");
     } finally {
-      connectInFlightRef.current = false;
+      if (operationEpochRef.current === operationEpoch) {
+        connectInFlightRef.current = false;
+      }
     }
   };
 
@@ -248,14 +264,17 @@ export function useAppStore() {
       return;
     }
     optimizeInFlightRef.current = true;
+    const operationEpoch = ++operationEpochRef.current;
     stateVersionRef.current += 1;
     setErrorDetails(null);
     setConnectionState("SCANNING_AETHER");
 
     try {
       const res = await api.findFasterGateway();
+      if (operationEpochRef.current !== operationEpoch) return res;
       stateVersionRef.current += 1;
       const st = await api.getConnectionState();
+      if (operationEpochRef.current !== operationEpoch) return res;
       setConnectionState(st);
       if (st === "CONNECTED") {
         const hl = await api.getHealthStatus();
@@ -263,13 +282,16 @@ export function useAppStore() {
       }
       return res;
     } catch (err: any) {
+      if (operationEpochRef.current !== operationEpoch) return;
       stateVersionRef.current += 1;
       const st = await api.getConnectionState();
       setConnectionState(st);
       setErrorDetails(err?.toString() || "Gateway scan failed");
       throw err;
     } finally {
-      optimizeInFlightRef.current = false;
+      if (operationEpochRef.current === operationEpoch) {
+        optimizeInFlightRef.current = false;
+      }
     }
   };
 
@@ -279,29 +301,31 @@ export function useAppStore() {
       return;
     }
     disconnectInFlightRef.current = true;
+    const operationEpoch = ++operationEpochRef.current;
     stateVersionRef.current += 1;
     // Instant visual feedback
     setConnectionState("DISCONNECTING");
 
     try {
       await api.disconnect();
+      if (operationEpochRef.current !== operationEpoch) return;
       stateVersionRef.current += 1;
       const st = await api.getConnectionState();
       setConnectionState(st);
     } catch (err: any) {
       console.error("Disconnect error:", err);
     } finally {
-      disconnectInFlightRef.current = false;
+      if (operationEpochRef.current === operationEpoch) {
+        disconnectInFlightRef.current = false;
+      }
     }
   };
 
   const triggerCancel = async () => {
+    ++operationEpochRef.current;
     stateVersionRef.current += 1;
     // Instant visual feedback for cancel
     setConnectionState("DISCONNECTED");
-    connectInFlightRef.current = false;
-    disconnectInFlightRef.current = false;
-    optimizeInFlightRef.current = false;
     setErrorDetails(null);
 
     try {
@@ -311,7 +335,18 @@ export function useAppStore() {
       setConnectionState(st);
     } catch (err: any) {
       console.error("Cancel error:", err);
+    } finally {
+      connectInFlightRef.current = false;
+      disconnectInFlightRef.current = false;
+      optimizeInFlightRef.current = false;
     }
+  };
+
+  const resetSettings = async () => {
+    const defaults = await api.resetSettings();
+    setSettings(defaults);
+    setErrorDetails(null);
+    return defaults;
   };
 
   return {
@@ -333,5 +368,6 @@ export function useAppStore() {
     triggerFindFasterGateway,
     triggerDisconnect,
     refreshAll,
+    resetSettings,
   };
 }

@@ -94,6 +94,14 @@ pub struct TunInbound {
 pub enum OutboundConfig {
     #[serde(rename = "socks")]
     Socks(SocksOutbound),
+    #[serde(rename = "vless")]
+    Vless(VlessOutbound),
+    #[serde(rename = "vmess")]
+    Vmess(VmessOutbound),
+    #[serde(rename = "trojan")]
+    Trojan(TrojanOutbound),
+    #[serde(rename = "shadowsocks")]
+    Shadowsocks(ShadowsocksOutbound),
     #[serde(rename = "direct")]
     Direct(DirectOutbound),
 }
@@ -109,6 +117,95 @@ pub struct SocksOutbound {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DirectOutbound {
     pub tag: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VlessOutbound {
+    pub tag: String,
+    pub server: String,
+    pub server_port: u16,
+    pub uuid: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flow: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub packet_encoding: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls: Option<OutboundTls>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transport: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VmessOutbound {
+    pub tag: String,
+    pub server: String,
+    pub server_port: u16,
+    pub uuid: String,
+    pub security: String,
+    pub alter_id: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub packet_encoding: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls: Option<OutboundTls>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transport: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TrojanOutbound {
+    pub tag: String,
+    pub server: String,
+    pub server_port: u16,
+    pub password: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls: Option<OutboundTls>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transport: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ShadowsocksOutbound {
+    pub tag: String,
+    pub server: String,
+    pub server_port: u16,
+    pub method: String,
+    pub password: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugin_opts: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OutboundTls {
+    pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_name: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub insecure: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alpn: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub utls: Option<OutboundUtls>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reality: Option<OutboundReality>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OutboundUtls {
+    pub enabled: bool,
+    pub fingerprint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OutboundReality {
+    pub enabled: bool,
+    pub public_key: String,
+    pub short_id: String,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

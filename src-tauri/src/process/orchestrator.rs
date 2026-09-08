@@ -68,8 +68,7 @@ pub fn evaluate_gateway_optimization(
 ) -> (GatewayOptimizationDecision, u64, i64, u64) {
     let required_improvement_ms = (10u64).max((baseline_median_ms as f64 * 0.05).round() as u64);
     let latency_delta_ms = (baseline_median_ms as i64) - (candidate_median_ms as i64);
-    let is_latency_sufficient =
-        candidate_median_ms + required_improvement_ms <= baseline_median_ms;
+    let is_latency_sufficient = candidate_median_ms + required_improvement_ms <= baseline_median_ms;
 
     let max_allowable_jitter_ms = (baseline_jitter_ms + 10).max(baseline_jitter_ms * 2);
     let is_jitter_acceptable = candidate_jitter_ms <= max_allowable_jitter_ms;
@@ -119,6 +118,13 @@ pub fn evaluate_prelaunch_tun_conflict(
     Ok(())
 }
 
+fn connected_health_failed(health: &HealthStatus) -> bool {
+    !health.aether_tunnel.ok
+        || !health.singbox_process.ok
+        || !health.tun_interface.ok
+        || !health.routing.ok
+}
+
 pub struct ConnectionOrchestrator {
     pub aether: Mutex<AetherRunner>,
     pub singbox: Mutex<SingBoxRunner>,
@@ -131,6 +137,7 @@ pub struct ConnectionOrchestrator {
     pub op_lock: Mutex<()>,
     pub next_attempt_id: AtomicU64,
     pub cancel_requested: Arc<AtomicBool>,
+    pub recovery_in_progress: AtomicBool,
 }
 
 impl ConnectionOrchestrator {
@@ -147,6 +154,7 @@ impl ConnectionOrchestrator {
             op_lock: Mutex::new(()),
             next_attempt_id: AtomicU64::new(1),
             cancel_requested: Arc::new(AtomicBool::new(false)),
+            recovery_in_progress: AtomicBool::new(false),
         }
     }
 
@@ -179,27 +187,37 @@ impl ConnectionOrchestrator {
 
     pub async fn cancel_connection(&self) -> Result<(), String> {
         self.cancel_requested.store(true, Ordering::SeqCst);
-        self.logger
-            .log("WARN", "STATE", "Connection cancellation requested by user.");
+        self.logger.log(
+            "WARN",
+            "STATE",
+            "Connection cancellation requested by user.",
+        );
 
         // Terminate managed processes immediately
         self.force_shutdown();
 
+        // Do not report cancellation complete until the active lifecycle operation has observed
+        // the flag and released ownership. This also keeps the UI from starting a new attempt early.
+        let _op_guard = self.op_lock.lock().await;
+        self.force_shutdown();
+
         // Broadcast state transition to Disconnected
         self.set_state(ConnectionState::Disconnected);
-        self.logger
-            .log("INFO", "STATE", "Connection cancelled; all VPN components terminated.");
+        self.logger.log(
+            "INFO",
+            "STATE",
+            "Connection cancelled; all VPN components terminated.",
+        );
         Ok(())
     }
 
     pub async fn connect(&self, settings: &AppSettings) -> Result<(), String> {
-        self.cancel_requested.store(false, Ordering::SeqCst);
-
         // 1. Acquire operation lock FIRST to guard against concurrent lifecycle operations
         let _op_guard = match self.op_lock.try_lock() {
             Ok(guard) => guard,
             Err(_) => return Err("Connection operation already in progress".to_string()),
         };
+        self.cancel_requested.store(false, Ordering::SeqCst);
 
         // 2. Synchronous atomic entry check and state transition under write lock
         let attempt_id = self.next_attempt_id.fetch_add(1, Ordering::SeqCst);
@@ -240,13 +258,16 @@ impl ConnectionOrchestrator {
         let t_connect_start = std::time::Instant::now();
         *self.last_error.write() = None;
         *self.active_aether_ip.write() = None;
+        let mut active_settings = settings.clone();
+        let app_handle_opt = self.app_handle.read().clone();
 
-        let aether_host = &settings.aether.host;
-        let aether_port = settings.aether.port;
+        let aether_host = &active_settings.aether.host;
+        let aether_port = active_settings.aether.port;
 
         // 1. Safe Existing-Aether Check with Process Owner Validation
         let t_aether_start = std::time::Instant::now();
         let is_port_occupied = HealthProber::check_port_open(aether_host, aether_port, 150).await;
+        let mut launch_managed = !is_port_occupied;
         if is_port_occupied {
             let owner_info = ProcessDetector::get_process_for_tcp_port(aether_port);
             match owner_info {
@@ -291,7 +312,18 @@ impl ConnectionOrchestrator {
                                     attempt_id, aether_host, aether_port, pid, e
                                 ),
                             );
-                            ProcessDetector::kill_process_by_pid(pid);
+                            let owns_process = self.is_aether_managed.load(Ordering::SeqCst)
+                                && self.aether.lock().await.pid() == Some(pid);
+                            if !owns_process {
+                                let err = format!(
+                                    "[Attempt #{}] Unresponsive external Aether owns {}:{}; refusing to terminate an unmanaged process.",
+                                    attempt_id, aether_host, aether_port
+                                );
+                                self.set_error(err.clone());
+                                return Err(err);
+                            }
+                            self.aether.lock().await.stop(&self.logger);
+                            launch_managed = true;
                             tokio::time::sleep(Duration::from_millis(200)).await;
                         }
                     }
@@ -322,17 +354,64 @@ impl ConnectionOrchestrator {
                                     attempt_id, aether_host, aether_port, e
                                 ),
                             );
-                            ProcessDetector::kill_port_owner_if_aether(aether_port);
-                            tokio::time::sleep(Duration::from_millis(200)).await;
+                            let err = format!(
+                                "[Attempt #{}] Unresponsive listener owns {}:{} and its process identity cannot be verified; refusing cleanup.",
+                                attempt_id, aether_host, aether_port
+                            );
+                            self.set_error(err.clone());
+                            return Err(err);
                         }
                     }
                 }
             }
-        } else {
+        }
+
+        if launch_managed {
+            let aether_path = std::path::Path::new(&active_settings.aether.executable_path);
+            let aether_valid = aether_path.exists()
+                && crate::dependencies::DependencyManager::validate_aether_binary(aether_path).is_ok();
+
+            if !aether_valid && std::env::var("AETHER_TEST_BUILD").is_err() {
+                if let Some((disc_path, _)) = crate::dependencies::DependencyManager::discover_aether_binary(&active_settings.aether.executable_path) {
+                    active_settings.aether.executable_path = disc_path.to_string_lossy().to_string();
+                    let _ = crate::settings::SettingsStorage::save(&active_settings);
+                } else {
+                    self.logger.log(
+                        "INFO",
+                        "Aether",
+                        format!("[Attempt #{}] Aether core daemon binary not found. Automatically downloading latest release from GitHub...", attempt_id),
+                    );
+                    match crate::dependencies::DependencyManager::install_aether(app_handle_opt.as_ref()).await {
+                        Ok(installed_path) => {
+                            active_settings.aether.executable_path = installed_path;
+                            let _ = crate::settings::SettingsStorage::save(&active_settings);
+                            self.logger.log(
+                                "INFO",
+                                "Aether",
+                                format!("[Attempt #{}] Aether daemon successfully installed at {}", attempt_id, active_settings.aether.executable_path),
+                            );
+                        }
+                        Err(e) => {
+                            let err_msg = format!("[Attempt #{}] Aether binary missing and auto-installation failed: {}", attempt_id, e);
+                            self.set_error(err_msg.clone());
+                            return Err(err_msg);
+                        }
+                    }
+                }
+            }
+
+            if HealthProber::check_port_open(aether_host, aether_port, 150).await {
+                let err = format!(
+                    "[Attempt #{}] Managed Aether port {}:{} did not become available after stale-process cleanup.",
+                    attempt_id, aether_host, aether_port
+                );
+                self.set_error(err.clone());
+                return Err(err);
+            }
             // Port is free: launch managed Aether instance with specified options
             let aether_pid = {
                 let mut aether_guard = self.aether.lock().await;
-                if let Err(e) = aether_guard.start_with_options(settings, options, &self.logger) {
+                if let Err(e) = aether_guard.start_with_options(&active_settings, options, &self.logger) {
                     self.set_error(format!(
                         "[Attempt #{}] Failed to start Aether: {}",
                         attempt_id, e
@@ -357,7 +436,9 @@ impl ConnectionOrchestrator {
                 .scan_mode_override
                 .as_ref()
                 .unwrap_or(&settings.aether.scan_mode);
-            let startup_deadline = if options.quick_reconnect == crate::models::settings::QuickReconnectOption::ForceEnabled {
+            let startup_deadline = if options.quick_reconnect
+                == crate::models::settings::QuickReconnectOption::ForceEnabled
+            {
                 crate::models::settings::AETHER_RESTORE_TIMEOUT
             } else {
                 crate::models::settings::aether_startup_timeout(effective_scan_mode)
@@ -517,7 +598,8 @@ impl ConnectionOrchestrator {
         } else {
             (false, None, Vec::new())
         };
-        let matched_desc = matched_info.map(|i| format!("'{}' ({})", i.friendly_name, i.description));
+        let matched_desc =
+            matched_info.map(|i| format!("'{}' ({})", i.friendly_name, i.description));
 
         if let Err(err_msg) = evaluate_prelaunch_tun_conflict(
             is_singbox_already_running,
@@ -551,10 +633,47 @@ impl ConnectionOrchestrator {
 
         // 3. Launch sing-box router
         self.set_state(ConnectionState::StartingRouter);
+
+        let sb_path = std::path::Path::new(&active_settings.sing_box.executable_path);
+        let sb_valid = sb_path.exists()
+            && crate::dependencies::DependencyManager::validate_singbox_binary(sb_path).is_ok();
+
+        if !sb_valid {
+            if let Some((disc_path, _)) = crate::dependencies::DependencyManager::discover_singbox_binary(&active_settings.sing_box.executable_path) {
+                active_settings.sing_box.executable_path = disc_path.to_string_lossy().to_string();
+                let _ = crate::settings::SettingsStorage::save(&active_settings);
+            } else {
+                self.logger.log(
+                    "INFO",
+                    "sing-box",
+                    format!("[Attempt #{}] sing-box router binary not found. Automatically downloading latest release from GitHub...", attempt_id),
+                );
+                match crate::dependencies::DependencyManager::install_singbox(app_handle_opt.as_ref()).await {
+                    Ok(installed_path) => {
+                        active_settings.sing_box.executable_path = installed_path;
+                        let _ = crate::settings::SettingsStorage::save(&active_settings);
+                        self.logger.log(
+                            "INFO",
+                            "sing-box",
+                            format!("[Attempt #{}] sing-box router successfully installed at {}", attempt_id, active_settings.sing_box.executable_path),
+                        );
+                    }
+                    Err(e) => {
+                        if self.is_aether_managed.load(Ordering::SeqCst) {
+                            self.aether.lock().await.stop(&self.logger);
+                        }
+                        let err_msg = format!("[Attempt #{}] sing-box binary missing and auto-installation failed: {}", attempt_id, e);
+                        self.set_error(err_msg.clone());
+                        return Err(err_msg);
+                    }
+                }
+            }
+        }
+
         let t_sb_start = std::time::Instant::now();
         let sb_pid = {
             let mut sb_guard = self.singbox.lock().await;
-            if let Err(e) = sb_guard.start(settings, &self.logger) {
+            if let Err(e) = sb_guard.start(&active_settings, &self.logger) {
                 if self.cancel_requested.load(Ordering::SeqCst) {
                     self.force_shutdown();
                     self.set_state(ConnectionState::Disconnected);
@@ -670,6 +789,14 @@ impl ConnectionOrchestrator {
         let d_verify = t_verify_start.elapsed();
         let total_duration = t_connect_start.elapsed();
 
+        if self.cancel_requested.load(Ordering::SeqCst) {
+            sb_guard.stop(&self.logger);
+            drop(sb_guard);
+            self.force_shutdown();
+            self.set_state(ConnectionState::Disconnected);
+            return Err("Connection cancelled by user".to_string());
+        }
+
         self.set_state(ConnectionState::Connected);
         self.logger.log(
             "INFO",
@@ -700,6 +827,7 @@ impl ConnectionOrchestrator {
             Ok(guard) => guard,
             Err(_) => return Err("Connection operation already in progress".to_string()),
         };
+        self.cancel_requested.store(false, Ordering::SeqCst);
 
         let opt_id = self.next_attempt_id.fetch_add(1, Ordering::SeqCst);
         let current_state = *self.state.read();
@@ -757,7 +885,10 @@ impl ConnectionOrchestrator {
 
                 let prev_latency_ms = Some(baseline_profile.median_ms);
                 let prev_jitter_ms = Some(baseline_profile.jitter_mad_ms);
-                let prev_pop = baseline_profile.latest_trace.as_ref().map(|t| t.colo.clone());
+                let prev_pop = baseline_profile
+                    .latest_trace
+                    .as_ref()
+                    .map(|t| t.colo.clone());
                 let prev_ip = baseline_profile.latest_trace.as_ref().map(|t| t.ip.clone());
 
                 self.logger.log(
@@ -774,7 +905,8 @@ impl ConnectionOrchestrator {
                     ),
                 );
 
-                let snapshot = match crate::settings::storage::AetherPersistenceSnapshot::create_for_settings(
+                let snapshot =
+                    match crate::settings::storage::AetherPersistenceSnapshot::create_for_settings(
                     settings,
                 ) {
                     Ok(s) => s,
@@ -791,7 +923,10 @@ impl ConnectionOrchestrator {
                 self.logger.log(
                     "INFO",
                     "Aether",
-                    format!("[Optimize #{}] Quick reconnect disabled for fresh scan", opt_id),
+                    format!(
+                        "[Optimize #{}] Quick reconnect disabled for fresh scan",
+                        opt_id
+                    ),
                 );
                 self.logger.log(
                     "INFO",
@@ -854,7 +989,10 @@ impl ConnectionOrchestrator {
                                 None,
                                 snapshot,
                                 "AbortTunTeardownFailed".to_string(),
-                                format!("TUN teardown could not be confirmed before fresh scan: {}", e),
+                                format!(
+                                    "TUN teardown could not be confirmed before fresh scan: {}",
+                                    e
+                                ),
                             )
                             .await;
                     }
@@ -865,9 +1003,9 @@ impl ConnectionOrchestrator {
                 }
 
                 // Step 3: SCAN - start Aether with Thorough scan and Quick Reconnect FORCE DISABLED (--no-quick-reconnect)
-                let opt_options = crate::models::settings::AetherLaunchOptions::force_fresh(
-                    Some(crate::models::settings::AetherScanMode::Thorough),
-                );
+                let opt_options = crate::models::settings::AetherLaunchOptions::force_fresh(Some(
+                    crate::models::settings::AetherScanMode::Thorough,
+                ));
 
                 let t_scan_start = std::time::Instant::now();
                 let aether_spawn_res = {
@@ -998,7 +1136,11 @@ impl ConnectionOrchestrator {
 
                 if was_cached_reuse {
                     let err_msg = "Fresh scan was bypassed by cached endpoint reuse; restoring previous path.".to_string();
-                    self.logger.log("ERROR", "Aether", format!("[Optimize #{}] {}", opt_id, err_msg));
+                    self.logger.log(
+                        "ERROR",
+                        "Aether",
+                        format!("[Optimize #{}] {}", opt_id, err_msg),
+                    );
                     return self
                         .rollback_and_restore(
                             settings,
@@ -1102,12 +1244,8 @@ impl ConnectionOrchestrator {
                 );
 
                 // Step 6: DECISION - evaluate whether candidate is meaningfully faster and stable
-                let (
-                    decision,
-                    required_improvement_ms,
-                    latency_delta_ms,
-                    max_allowable_jitter_ms,
-                ) = evaluate_gateway_optimization(
+                let (decision, required_improvement_ms, latency_delta_ms, max_allowable_jitter_ms) =
+                    evaluate_gateway_optimization(
                     baseline_profile.median_ms,
                     baseline_profile.jitter_mad_ms,
                     new_latency_ms,
@@ -1120,8 +1258,11 @@ impl ConnectionOrchestrator {
                             "Candidate path (Median: {} ms) was not meaningfully faster than previous path (Median: {} ms, required improvement: {} ms). Restoring previous gateway.",
                             new_latency_ms, baseline_profile.median_ms, required_improvement_ms
                         );
-                        self.logger
-                            .log("INFO", "Aether", format!("[Optimize #{}] {}", opt_id, reject_msg));
+                        self.logger.log(
+                            "INFO",
+                            "Aether",
+                            format!("[Optimize #{}] {}", opt_id, reject_msg),
+                        );
                         return self
                             .rollback_and_restore(
                                 settings,
@@ -1145,8 +1286,11 @@ impl ConnectionOrchestrator {
                             "Candidate path jitter ({} ms) exceeded maximum stability threshold ({} ms, baseline jitter: {} ms). Restoring previous gateway.",
                             new_jitter_ms, max_allowable_jitter_ms, baseline_profile.jitter_mad_ms
                         );
-                        self.logger
-                            .log("INFO", "Aether", format!("[Optimize #{}] {}", opt_id, reject_msg));
+                        self.logger.log(
+                            "INFO",
+                            "Aether",
+                            format!("[Optimize #{}] {}", opt_id, reject_msg),
+                        );
                         return self
                             .rollback_and_restore(
                                 settings,
@@ -1263,6 +1407,15 @@ impl ConnectionOrchestrator {
                 }
 
                 // Step 8: COMMIT - discard old snapshot, retain newly selected faster gateway
+                if self.cancel_requested.load(Ordering::SeqCst) {
+                    sb_guard.stop(&self.logger);
+                    drop(sb_guard);
+                    let _ = snapshot.restore();
+                    snapshot.cleanup();
+                    self.force_shutdown();
+                    self.set_state(ConnectionState::Disconnected);
+                    return Err("Gateway optimization cancelled by user".to_string());
+                }
                 snapshot.cleanup();
 
                 self.logger.log(
@@ -1301,7 +1454,8 @@ impl ConnectionOrchestrator {
                 // Task D: External Aether Ownership Guard
                 // If port 1819 is already in use by an external listener, fresh scan cannot control it.
                 let is_port_occupied =
-                    HealthProber::check_port_open(&settings.aether.host, settings.aether.port, 150).await;
+                    HealthProber::check_port_open(&settings.aether.host, settings.aether.port, 150)
+                        .await;
                 if is_port_occupied {
                     let err = "Gateway optimization requires an Aether instance managed by Aether Desktop. Port 1819 is in use by an external process. Close the external instance and try again.".to_string();
                     self.logger
@@ -1343,12 +1497,13 @@ impl ConnectionOrchestrator {
 
                 self.set_state(ConnectionState::StartingAether);
 
-                let opt_options = crate::models::settings::AetherLaunchOptions::force_fresh(
-                    Some(crate::models::settings::AetherScanMode::Thorough),
-                );
+                let opt_options = crate::models::settings::AetherLaunchOptions::force_fresh(Some(
+                    crate::models::settings::AetherScanMode::Thorough,
+                ));
 
                 // Run connection with opt_options
-                self.connect_internal(settings, opt_id, &opt_options).await?;
+                self.connect_internal(settings, opt_id, &opt_options)
+                    .await?;
 
                 let sample_profile = HealthProber::measure_socks5_latency_samples(
                     &settings.aether.host,
@@ -1379,7 +1534,10 @@ impl ConnectionOrchestrator {
 
                 let msg = match (new_latency_ms, new_jitter_ms) {
                     (Some(lat), Some(jit)) => {
-                        format!("Connected via fresh Thorough scan (Median: {} ms, Jitter: {} ms).", lat, jit)
+                        format!(
+                            "Connected via fresh Thorough scan (Median: {} ms, Jitter: {} ms).",
+                            lat, jit
+                        )
                     }
                     _ => "Connected via fresh Thorough scan.".to_string(),
                 };
@@ -1456,10 +1614,19 @@ impl ConnectionOrchestrator {
         }
         snapshot.cleanup();
 
+        if self.cancel_requested.load(Ordering::SeqCst) {
+            self.force_shutdown();
+            self.set_state(ConnectionState::Disconnected);
+            return Err("Gateway optimization cancelled by user".to_string());
+        }
+
         // 4. Launch Aether with Quick Reconnect ENABLED and bounded RESTORE timeout (25s)
         let restore_options = crate::models::settings::AetherLaunchOptions::force_quick_reconnect();
 
-        match self.connect_internal(settings, opt_id, &restore_options).await {
+        match self
+            .connect_internal(settings, opt_id, &restore_options)
+            .await
+        {
             Ok(_) => {
                 self.logger.log(
                     "INFO",
@@ -1524,9 +1691,6 @@ impl ConnectionOrchestrator {
             self.aether.lock().await.stop(&self.logger);
         }
 
-        ProcessDetector::cleanup_stray_managed_processes();
-        ProcessDetector::kill_port_owner_if_aether(1819);
-
         // Wait for TUN teardown
         let settings = crate::settings::SettingsStorage::load();
         let _ = HealthProber::wait_for_tun_teardown(
@@ -1548,16 +1712,17 @@ impl ConnectionOrchestrator {
 
     /// Synchronously and unconditionally terminates all child processes and releases port/TUN
     pub fn force_shutdown(&self) {
-        self.logger
-            .log("INFO", "Shutdown", "Forcing complete process teardown and shutdown...");
+        self.logger.log(
+            "INFO",
+            "Shutdown",
+            "Forcing complete process teardown and shutdown...",
+        );
         if let Ok(mut sb) = self.singbox.try_lock() {
             sb.stop(&self.logger);
         }
         if let Ok(mut aether) = self.aether.try_lock() {
             aether.stop(&self.logger);
         }
-        ProcessDetector::cleanup_stray_managed_processes();
-        ProcessDetector::kill_port_owner_if_aether(1819);
         *self.active_aether_ip.write() = None;
         *self.state.write() = ConnectionState::Disconnected;
     }
@@ -1586,19 +1751,54 @@ impl ConnectionOrchestrator {
         let singbox_running = self.singbox.lock().await.is_running();
         let is_conn = *self.state.read() == ConnectionState::Connected;
 
-        HealthProber::evaluate_health(
+        let health = HealthProber::evaluate_health(
             &settings.aether.host,
             settings.aether.port,
             &settings.secondary_proxy.host,
             settings.secondary_proxy.port,
             settings.secondary_proxy.enabled,
+            settings.secondary_proxy.mode == crate::models::settings::SecondaryProxyMode::Embedded,
             &settings.sing_box.interface_name,
             Some(&settings.sing_box.tun_address),
             aether_running,
             singbox_running,
             is_conn,
         )
-        .await
+        .await;
+
+        if is_conn && connected_health_failed(&health) {
+            self.set_error("Connected tunnel failed health verification".to_string());
+        }
+        health
+    }
+
+    pub async fn recover_connection(&self, settings: &AppSettings) {
+        if self
+            .recovery_in_progress
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return;
+        }
+        if *self.state.read() != ConnectionState::Error
+            || self.cancel_requested.load(Ordering::SeqCst)
+        {
+            self.recovery_in_progress.store(false, Ordering::SeqCst);
+            return;
+        }
+
+        self.set_state(ConnectionState::Reconnecting);
+        let result = async {
+            self.disconnect().await?;
+            self.connect(settings).await
+        }
+        .await;
+        if let Err(err) = result {
+            if !self.cancel_requested.load(Ordering::SeqCst) {
+                self.set_error(format!("Automatic reconnect failed: {}", err));
+            }
+        }
+        self.recovery_in_progress.store(false, Ordering::SeqCst);
     }
 }
 
@@ -1624,7 +1824,9 @@ mod tests {
             scan_mode_override: None,
         };
         let effective_scan_mode = crate::models::settings::AetherScanMode::Thorough;
-        let startup_deadline = if restore_options.quick_reconnect == crate::models::settings::QuickReconnectOption::ForceEnabled {
+        let startup_deadline = if restore_options.quick_reconnect
+            == crate::models::settings::QuickReconnectOption::ForceEnabled
+        {
             crate::models::settings::AETHER_RESTORE_TIMEOUT
         } else {
             crate::models::settings::aether_startup_timeout(&effective_scan_mode)
@@ -1648,10 +1850,7 @@ mod tests {
         // 2. Invoke find_faster_gateway while lock is held
         let res = orch.find_faster_gateway(&settings).await;
         assert!(res.is_err());
-        assert_eq!(
-            res.unwrap_err(),
-            "Connection operation already in progress"
-        );
+        assert_eq!(res.unwrap_err(), "Connection operation already in progress");
 
         // 3. Verify state remained Disconnected (no phantom state mutation)
         assert_eq!(*orch.state.read(), ConnectionState::Disconnected);
@@ -1670,10 +1869,7 @@ mod tests {
         // 2. Attempt find_faster_gateway
         let res = orch.find_faster_gateway(&settings).await;
         assert!(res.is_err());
-        assert_eq!(
-            res.unwrap_err(),
-            "Connection operation already in progress"
-        );
+        assert_eq!(res.unwrap_err(), "Connection operation already in progress");
 
         // State remains Connected
         assert_eq!(*orch.state.read(), ConnectionState::Connected);
@@ -1707,9 +1903,14 @@ mod tests {
         let _ = std::fs::create_dir_all(&temp_dir);
 
         let lastconn_file = temp_dir.join("aether-lastconn.toml");
-        std::fs::write(&lastconn_file, b"endpoint = '162.159.192.1:2408'\nrtt = 45\n").unwrap();
+        std::fs::write(
+            &lastconn_file,
+            b"endpoint = '162.159.192.1:2408'\nrtt = 45\n",
+        )
+        .unwrap();
 
-        let snapshot = crate::settings::storage::AetherPersistenceSnapshot::create(&temp_dir).unwrap();
+        let snapshot =
+            crate::settings::storage::AetherPersistenceSnapshot::create(&temp_dir).unwrap();
         // Delete snapshot backup file behind its back to force snapshot.restore() failure
         let _ = std::fs::remove_dir_all(&snapshot.snapshot_dir);
 

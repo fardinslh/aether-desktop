@@ -56,8 +56,32 @@ export interface AetherSettings {
 
 export interface SecondaryProxySettings {
   enabled: boolean;
+  mode: "externalSocks" | "embedded";
   host: string;
   port: number;
+  shareLink: string;
+  configSource: "manual" | "subscription";
+  subscriptionUrl: string;
+  subscriptionProfiles: SecondaryProxyProfile[];
+}
+
+export interface SecondaryProxyProfile {
+  name: string;
+  shareLink: string;
+}
+
+export interface SecondarySubscriptionUpdate {
+  profiles: SecondaryProxyProfile[];
+  skipped: number;
+}
+
+export interface SecondaryProfilePing {
+  index: number;
+  ok: boolean;
+  latencyMs?: number | null;
+  ip?: string | null;
+  colo?: string | null;
+  error?: string | null;
 }
 
 export interface SingBoxSettings {

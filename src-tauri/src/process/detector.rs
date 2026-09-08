@@ -206,7 +206,9 @@ impl ProcessDetector {
     #[cfg(windows)]
     pub fn kill_process_by_pid(pid: u32) -> bool {
         use windows_sys::Win32::Foundation::CloseHandle;
-        use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, TerminateProcess, PROCESS_TERMINATE,
+        };
         unsafe {
             let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
             if !handle.is_null() {
@@ -222,53 +224,14 @@ impl ProcessDetector {
     #[cfg(not(windows))]
     pub fn kill_process_by_pid(pid: u32) -> bool {
         let mut sys = System::new_all();
-        sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[Pid::from_u32(pid)]), true);
+        sys.refresh_processes(
+            sysinfo::ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
+            true,
+        );
         if let Some(process) = sys.process(Pid::from_u32(pid)) {
             process.kill()
         } else {
             false
-        }
-    }
-
-    /// Kills the process owning a target TCP port if it is an Aether process
-    pub fn kill_port_owner_if_aether(port: u16) -> bool {
-        if let Some((pid, proc_name)) = Self::get_process_for_tcp_port(port) {
-            let lower = proc_name.to_lowercase();
-            if lower.contains("aether") {
-                Self::kill_process_by_pid(pid)
-            } else {
-                false
-            }
-        } else {
-            false
-        }
-    }
-
-    /// Terminates any stray aether.exe or sing-box.exe processes belonging to AetherDesktop
-    pub fn cleanup_stray_managed_processes() {
-        let mut sys = System::new_all();
-        sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
-
-        for (pid, process) in sys.processes() {
-            let name_raw = process.name().to_string_lossy().to_string().to_lowercase();
-            let exe_path_raw = process
-                .exe()
-                .map(|p| p.to_string_lossy().to_string().to_lowercase())
-                .unwrap_or_default();
-
-            let is_target_name = name_raw == "aether.exe"
-                || name_raw == "aether"
-                || name_raw == "sing-box.exe"
-                || name_raw == "sing-box";
-
-            let is_managed_path = exe_path_raw.contains("aetherdesktop")
-                || exe_path_raw.contains("aether-desktop")
-                || exe_path_raw.contains("v1.8.0-dev-udp");
-
-            if is_target_name && (is_managed_path || name_raw.contains("aether") || name_raw.contains("sing-box")) {
-                let pid_u32 = pid.as_u32();
-                Self::kill_process_by_pid(pid_u32);
-            }
         }
     }
 
@@ -323,4 +286,74 @@ impl ProcessDetector {
             }
         }
     }
+
+    /// Locates an available Xray executable by inspecting running processes, known installation locations, or PATH.
+    pub fn find_xray_executable() -> Option<std::path::PathBuf> {
+        let mut sys = System::new_all();
+        sys.refresh_all();
+
+        // 1. Check running processes (xray.exe or v2rayN.exe)
+        for (_, process) in sys.processes() {
+            let proc_name = process.name().to_string_lossy().to_lowercase();
+            if proc_name == "xray.exe" || proc_name == "xray" {
+                if let Some(path) = process.exe() {
+                    if path.exists() {
+                        return Some(path.to_path_buf());
+                    }
+                }
+            }
+            if proc_name == "v2rayn.exe" || proc_name == "v2rayn" {
+                if let Some(v2rayn_path) = process.exe() {
+                    if let Some(parent) = v2rayn_path.parent() {
+                        let candidate1 = parent.join("bin").join("xray").join("xray.exe");
+                        if candidate1.exists() {
+                            return Some(candidate1);
+                        }
+                        let candidate2 = parent.join("xray").join("xray.exe");
+                        if candidate2.exists() {
+                            return Some(candidate2);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Check known common paths
+        let candidate_paths = [
+            r"D:\excluded\apps\v2rayN-windows-64\bin\xray\xray.exe",
+            r"C:\Program Files\v2rayN\bin\xray\xray.exe",
+            r"D:\v2rayN\bin\xray\xray.exe",
+            r"C:\v2rayN\bin\xray\xray.exe",
+        ];
+        for candidate in &candidate_paths {
+            let p = std::path::PathBuf::from(candidate);
+            if p.exists() {
+                return Some(p);
+            }
+        }
+
+        // 3. Check %LOCALAPPDATA%\AetherDesktop\dependencies\xray
+        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+            let dep_path = std::path::PathBuf::from(local_app_data)
+                .join("AetherDesktop")
+                .join("dependencies")
+                .join("xray");
+            if dep_path.join("xray.exe").exists() {
+                return Some(dep_path.join("xray.exe"));
+            }
+        }
+
+        // 4. Check system PATH
+        if let Ok(path_var) = std::env::var("PATH") {
+            for dir in std::env::split_paths(&path_var) {
+                let candidate = dir.join("xray.exe");
+                if candidate.exists() {
+                    return Some(candidate);
+                }
+            }
+        }
+
+        None
+    }
 }
+

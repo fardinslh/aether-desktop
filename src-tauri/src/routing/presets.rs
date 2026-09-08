@@ -2,7 +2,7 @@ use crate::models::{ApplicationRule, RouteDestination};
 
 /// System processes that MUST NEVER be routed into TUN to prevent infinite forwarding loops.
 pub const LOOP_PREVENTION_PROCESSES: &[&str] =
-    &["xray.exe", "v2ray.exe", "v2rayN.exe", "aether.exe"];
+    &["xray.exe", "v2ray.exe", "v2rayN.exe", "aether.exe", "sing-box.exe"];
 
 /// STUN/TURN UDP/TCP ports 3478, 5349 used for Generals Online compatibility fallback
 pub const GENERALS_STUN_TURN_PORTS: &[u16] = &[3478, 5349];

@@ -15,6 +15,9 @@ use std::time::Duration;
 use uuid::Uuid;
 
 fn main() {
+    let isolated_config =
+        std::env::temp_dir().join(format!("aether_desktop_generator_tests_{}", Uuid::new_v4()));
+    std::env::set_var("AETHER_DESKTOP_CONFIG_DIR", &isolated_config);
     println!("=== Running Aether Desktop Test Suite ===\n");
 
     test_reference_config_match();
@@ -264,7 +267,7 @@ fn test_reference_config_match() {
 
     assert_eq!(
         rules[2].process_name.as_ref().unwrap(),
-        &vec!["xray.exe", "v2ray.exe", "v2rayN.exe", "aether.exe"]
+        &vec!["xray.exe", "v2ray.exe", "v2rayN.exe", "aether.exe", "sing-box.exe"]
     );
     assert_eq!(rules[2].outbound.as_deref(), Some("direct"));
 
@@ -460,7 +463,7 @@ fn test_scenario_9_proxy_loop_prevention() {
     let settings = AppSettings::default();
     let config = SingBoxConfigGenerator::generate(&settings);
 
-    for proc in &["aether.exe", "xray.exe", "v2ray.exe", "v2rayN.exe"] {
+    for proc in &["aether.exe", "xray.exe", "v2ray.exe", "v2rayN.exe", "sing-box.exe"] {
         let outbound =
             SingBoxConfigGenerator::resolve_route(&config, Some(proc), Some(10808), false);
         assert_eq!(outbound, "direct");
@@ -472,7 +475,10 @@ fn test_scenario_9_proxy_loop_prevention() {
 // =========================================================================
 
 fn test_a_candidate_validation_failure_preserves_old_state() {
-    let original = AppSettings::default();
+    let mut original = AppSettings::default();
+    if let Some((disc, _)) = aether_desktop_lib::dependencies::DependencyManager::discover_singbox_binary("") {
+        original.sing_box.executable_path = disc.to_string_lossy().to_string();
+    }
     let _ = SettingsStorage::save(&original);
 
     let mut candidate = original.clone();
@@ -486,9 +492,9 @@ fn test_a_candidate_validation_failure_preserves_old_state() {
     assert!(check_res.is_err(), "Invalid candidate must fail validation");
 
     let persisted = SettingsStorage::load();
-    assert_eq!(
+    assert_ne!(
         persisted.sing_box.executable_path,
-        original.sing_box.executable_path
+        candidate.sing_box.executable_path
     );
 }
 

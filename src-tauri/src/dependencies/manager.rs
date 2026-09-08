@@ -39,6 +39,9 @@ pub struct DependencyManager;
 
 impl DependencyManager {
     pub fn get_base_dependencies_dir() -> PathBuf {
+        if let Some(path) = std::env::var_os("AETHER_DESKTOP_CONFIG_DIR") {
+            return PathBuf::from(path).join("dependencies");
+        }
         directories::BaseDirs::new()
             .map(|b| {
                 b.data_local_dir()
@@ -225,28 +228,172 @@ impl DependencyManager {
         Ok(first_line.to_string())
     }
 
+    pub fn collect_matching_executables(dir: &Path, exe_name: &str, results: &mut Vec<PathBuf>) {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    Self::collect_matching_executables(&path, exe_name, results);
+                } else if path.is_file() {
+                    if let Some(name) = path.file_name() {
+                        if name.to_string_lossy().eq_ignore_ascii_case(exe_name) {
+                            results.push(path);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn discover_aether_binary(configured_path: &str) -> Option<(PathBuf, String)> {
+        // 1. Check configured path
+        if !configured_path.is_empty() {
+            let p = PathBuf::from(configured_path);
+            if let Ok(ver) = Self::validate_aether_binary(&p) {
+                return Some((p, ver));
+            }
+        }
+
+        // 2. Check current exe directory and subfolders
+        if let Ok(cur_exe) = std::env::current_exe() {
+            if let Some(parent) = cur_exe.parent() {
+                let candidates = [
+                    parent.join("aether.exe"),
+                    parent.join("bin").join("aether.exe"),
+                    parent.join("dependencies").join("aether.exe"),
+                    parent.join("resources").join("aether.exe"),
+                ];
+                for cand in candidates {
+                    if cand.exists() {
+                        if let Ok(ver) = Self::validate_aether_binary(&cand) {
+                            return Some((cand, ver));
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Scan LocalAppData dependencies directory
+        let base_aether = Self::get_base_dependencies_dir().join("aether");
+        if base_aether.exists() {
+            let mut found_candidates = Vec::new();
+            Self::collect_matching_executables(&base_aether, "aether.exe", &mut found_candidates);
+            found_candidates.sort_by(|a, b| b.cmp(a));
+            for cand in found_candidates {
+                if let Ok(ver) = Self::validate_aether_binary(&cand) {
+                    return Some((cand, ver));
+                }
+            }
+        }
+
+        // 4. Check well-known system/install paths
+        let common_paths = [
+            PathBuf::from(r"C:\Aether\aether.exe"),
+            PathBuf::from(r"C:\Program Files\Aether\aether.exe"),
+            PathBuf::from(r"C:\Program Files\Aether Desktop\aether.exe"),
+        ];
+        for cand in common_paths {
+            if cand.exists() {
+                if let Ok(ver) = Self::validate_aether_binary(&cand) {
+                    return Some((cand, ver));
+                }
+            }
+        }
+
+        None
+    }
+
+    pub fn discover_singbox_binary(configured_path: &str) -> Option<(PathBuf, String)> {
+        // 1. Check configured path
+        if !configured_path.is_empty() {
+            let p = PathBuf::from(configured_path);
+            if let Ok(ver) = Self::validate_singbox_binary(&p) {
+                return Some((p, ver));
+            }
+        }
+
+        // 2. Check current exe directory and subfolders
+        if let Ok(cur_exe) = std::env::current_exe() {
+            if let Some(parent) = cur_exe.parent() {
+                let candidates = [
+                    parent.join("sing-box.exe"),
+                    parent.join("bin").join("sing-box.exe"),
+                    parent.join("dependencies").join("sing-box.exe"),
+                    parent.join("resources").join("sing-box.exe"),
+                ];
+                for cand in candidates {
+                    if cand.exists() {
+                        if let Ok(ver) = Self::validate_singbox_binary(&cand) {
+                            return Some((cand, ver));
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Scan LocalAppData dependencies directory
+        let base_sb = Self::get_base_dependencies_dir().join("sing-box");
+        if base_sb.exists() {
+            let mut found_candidates = Vec::new();
+            Self::collect_matching_executables(&base_sb, "sing-box.exe", &mut found_candidates);
+            found_candidates.sort_by(|a, b| b.cmp(a));
+            for cand in found_candidates {
+                if let Ok(ver) = Self::validate_singbox_binary(&cand) {
+                    return Some((cand, ver));
+                }
+            }
+        }
+
+        // 4. Check well-known system/install paths
+        let common_paths = [
+            PathBuf::from(r"C:\sing-box\sing-box.exe"),
+            PathBuf::from(r"C:\Program Files\sing-box\sing-box.exe"),
+            PathBuf::from(r"C:\Program Files\Aether Desktop\sing-box.exe"),
+        ];
+        for cand in common_paths {
+            if cand.exists() {
+                if let Ok(ver) = Self::validate_singbox_binary(&cand) {
+                    return Some((cand, ver));
+                }
+            }
+        }
+
+        None
+    }
+
     pub fn check_status() -> DependencyStatus {
-        let settings = SettingsStorage::load();
+        let mut settings = SettingsStorage::load();
+        let mut settings_modified = false;
 
-        let aether_path = settings.aether.executable_path.clone();
-        let (aether_installed, aether_version) = if !aether_path.is_empty() {
-            match Self::validate_aether_binary(Path::new(&aether_path)) {
-                Ok(ver) => (true, Some(ver)),
-                Err(_) => (false, None),
-            }
-        } else {
-            (false, None)
-        };
+        let (aether_path, aether_installed, aether_version) =
+            match Self::discover_aether_binary(&settings.aether.executable_path) {
+                Some((path, ver)) => {
+                    let path_str = path.to_string_lossy().to_string();
+                    if settings.aether.executable_path != path_str {
+                        settings.aether.executable_path = path_str.clone();
+                        settings_modified = true;
+                    }
+                    (path_str, true, Some(ver))
+                }
+                None => (settings.aether.executable_path.clone(), false, None),
+            };
 
-        let singbox_path = settings.sing_box.executable_path.clone();
-        let (singbox_installed, singbox_version) = if !singbox_path.is_empty() {
-            match Self::validate_singbox_binary(Path::new(&singbox_path)) {
-                Ok(ver) => (true, Some(ver)),
-                Err(_) => (false, None),
-            }
-        } else {
-            (false, None)
-        };
+        let (singbox_path, singbox_installed, singbox_version) =
+            match Self::discover_singbox_binary(&settings.sing_box.executable_path) {
+                Some((path, ver)) => {
+                    let path_str = path.to_string_lossy().to_string();
+                    if settings.sing_box.executable_path != path_str {
+                        settings.sing_box.executable_path = path_str.clone();
+                        settings_modified = true;
+                    }
+                    (path_str, true, Some(ver))
+                }
+                None => (settings.sing_box.executable_path.clone(), false, None),
+            };
+
+        if settings_modified {
+            let _ = SettingsStorage::save(&settings);
+        }
 
         DependencyStatus {
             aether_installed,

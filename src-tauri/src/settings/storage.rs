@@ -62,13 +62,63 @@ pub fn atomic_replace_file(temp_path: &Path, destination_path: &Path) -> Result<
 pub struct SettingsStorage;
 
 impl SettingsStorage {
+    #[cfg(windows)]
+    pub fn configure_start_with_windows(enabled: bool) -> Result<(), String> {
+        use std::os::windows::process::CommandExt;
+        use std::process::Command;
+
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        let mut command = Command::new("reg.exe");
+        command.creation_flags(CREATE_NO_WINDOW).args([
+            if enabled { "add" } else { "delete" },
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+            "/v",
+            "AetherDesktop",
+        ]);
+        if enabled {
+            let executable = std::env::current_exe()
+                .map_err(|e| format!("Unable to resolve application executable: {}", e))?;
+            command.args([
+                "/t",
+                "REG_SZ",
+                "/d",
+                &format!("\"{}\"", executable.display()),
+                "/f",
+            ]);
+        } else {
+            command.arg("/f");
+        }
+        let output = command
+            .output()
+            .map_err(|e| format!("Unable to update Windows startup registration: {}", e))?;
+        if output.status.success() || (!enabled && output.status.code() == Some(1)) {
+            Ok(())
+        } else {
+            Err(format!(
+                "Windows startup registration failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ))
+        }
+    }
+
+    #[cfg(not(windows))]
+    pub fn configure_start_with_windows(_enabled: bool) -> Result<(), String> {
+        Ok(())
+    }
+
     pub fn get_config_dir() -> PathBuf {
+        if let Some(path) = std::env::var_os("AETHER_DESKTOP_CONFIG_DIR") {
+            return PathBuf::from(path);
+        }
         directories::BaseDirs::new()
             .map(|b| b.config_dir().join("AetherDesktop"))
             .unwrap_or_else(|| PathBuf::from("./config"))
     }
 
     pub fn get_aether_data_dir() -> PathBuf {
+        if let Some(path) = std::env::var_os("AETHER_DESKTOP_CONFIG_DIR") {
+            return PathBuf::from(path).join("aether");
+        }
         directories::BaseDirs::new()
             .map(|b| b.data_local_dir().join("AetherDesktop").join("aether"))
             .unwrap_or_else(|| PathBuf::from("./aether_data"))
@@ -124,16 +174,35 @@ impl SettingsStorage {
                             needs_migration = true;
                         }
 
-                        // Migrate Discord factory preset from SecondaryProxy to Aether if matching old factory preset
-                        for rule in &mut settings.application_rules {
-                            if rule.source == crate::models::RuleSource::Preset
-                                && rule.process_name.eq_ignore_ascii_case("discord.exe")
-                                && rule.priority == crate::models::RulePriority::High
-                                && rule.destination == crate::models::RouteDestination::SecondaryProxy
-                            {
-                                rule.destination = crate::models::RouteDestination::Aether;
-                                needs_migration = true;
+                        // Auto-discover and validate binary paths
+                        let aether_valid = match crate::dependencies::DependencyManager::discover_aether_binary(&settings.aether.executable_path) {
+                            Some((p, _)) => {
+                                let p_str = p.to_string_lossy().to_string();
+                                if settings.aether.executable_path != p_str {
+                                    settings.aether.executable_path = p_str;
+                                    needs_migration = true;
+                                }
+                                true
                             }
+                            None => false,
+                        };
+
+                        let singbox_valid = match crate::dependencies::DependencyManager::discover_singbox_binary(&settings.sing_box.executable_path) {
+                            Some((p, _)) => {
+                                let p_str = p.to_string_lossy().to_string();
+                                if settings.sing_box.executable_path != p_str {
+                                    settings.sing_box.executable_path = p_str;
+                                    needs_migration = true;
+                                }
+                                true
+                            }
+                            None => false,
+                        };
+
+                        // If any core binary is missing or invalid on disk, first run is NOT completed
+                        if (!aether_valid || !singbox_valid) && settings.first_run_completed {
+                            settings.first_run_completed = false;
+                            needs_migration = true;
                         }
 
                         if needs_migration {
@@ -153,7 +222,13 @@ impl SettingsStorage {
                 }
             }
         } else {
-            let defaults = AppSettings::default();
+            let mut defaults = AppSettings::default();
+            if let Some((p, _)) = crate::dependencies::DependencyManager::discover_aether_binary("") {
+                defaults.aether.executable_path = p.to_string_lossy().to_string();
+            }
+            if let Some((p, _)) = crate::dependencies::DependencyManager::discover_singbox_binary("") {
+                defaults.sing_box.executable_path = p.to_string_lossy().to_string();
+            }
             let _ = Self::save(&defaults);
             defaults
         }
@@ -199,9 +274,6 @@ impl SettingsStorage {
     }
 }
 
-/// Derives a sibling path matching upstream Aether's `derive_sibling_path(config_path, suffix)`.
-/// E.g. `aether.toml` + `"lastconn"` -> `aether-lastconn.toml`
-/// E.g. `aether-masque.toml` + `"lastconn"` -> `aether-masque-lastconn.toml`
 pub fn derive_sibling_path(config_path: &Path, suffix: &str) -> PathBuf {
     let parent = config_path.parent().unwrap_or_else(|| Path::new("."));
     let file_stem = config_path
@@ -220,7 +292,6 @@ pub fn derive_sibling_path(config_path: &Path, suffix: &str) -> PathBuf {
     parent.join(new_file_name)
 }
 
-/// Derives the native lastconn persistence path for a given Aether configuration file.
 pub fn lastconn_path(config_path: &Path) -> PathBuf {
     derive_sibling_path(config_path, "lastconn")
 }

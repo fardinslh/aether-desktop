@@ -12,6 +12,7 @@ import {
   Loader2,
   ChevronDown,
   ChevronUp,
+  RefreshCw,
 } from "lucide-react";
 
 interface FirstRunWizardProps {
@@ -20,10 +21,17 @@ interface FirstRunWizardProps {
   onComplete: (updated: AppSettings) => Promise<void>;
 }
 
-export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ settings, currentSettings: propCurrent, onComplete }) => {
+export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({
+  settings,
+  currentSettings: propCurrent,
+  onComplete,
+}) => {
   const currentSettings = (settings || propCurrent)!;
 
   const [depStatus, setDepStatus] = useState<DependencyStatus | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [globalError, setGlobalError] = useState<string | null>(null);
+
   const [aetherInstalling, setAetherInstalling] = useState(false);
   const [aetherProgress, setAetherProgress] = useState<DownloadProgress | null>(null);
   const [aetherError, setAetherError] = useState<string | null>(null);
@@ -40,12 +48,16 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ settings, curren
 
   const [secProxyHost, setSecProxyHost] = useState(currentSettings.secondaryProxy.host);
   const [secProxyPort, setSecProxyPort] = useState(currentSettings.secondaryProxy.port);
+  const [secProxyMode, setSecProxyMode] = useState(currentSettings.secondaryProxy.mode);
+  const [secProxyShareLink, setSecProxyShareLink] = useState(currentSettings.secondaryProxy.shareLink);
   const [secProxyTesting, setSecProxyTesting] = useState(false);
   const [secProxyResult, setSecProxyResult] = useState<string | null>(null);
 
   const [isFinishing, setIsFinishing] = useState(false);
+  const [finishingStatusText, setFinishingStatusText] = useState<string>("INITIALIZING...");
 
   const refreshDependencies = async () => {
+    setIsRefreshing(true);
     try {
       const status = await api.checkDependencies();
       setDepStatus(status);
@@ -53,6 +65,8 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ settings, curren
       setManualSingboxPath(status.singboxPath);
     } catch (e) {
       console.error("Failed to check dependencies:", e);
+    } finally {
+      setIsRefreshing(false);
     }
   };
 
@@ -153,7 +167,13 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ settings, curren
     setSecProxyTesting(true);
     setSecProxyResult(null);
     try {
-      const trace = await api.testSecondaryProxy();
+      const trace = await api.testSecondaryProxy({
+        ...currentSettings.secondaryProxy,
+        mode: secProxyMode,
+        host: secProxyHost,
+        port: secProxyPort,
+        shareLink: secProxyShareLink,
+      });
       setSecProxyResult(`Online (POP: ${trace.colo}, ${trace.latencyMs} ms)`);
     } catch (e: any) {
       setSecProxyResult(`Unreachable (${e?.toString() || "Connection error"})`);
@@ -169,6 +189,8 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ settings, curren
   const handleFinish = async () => {
     if (!canFinish) return;
     setIsFinishing(true);
+    setFinishingStatusText("INITIALIZING...");
+    setGlobalError(null);
     try {
       const updated: AppSettings = {
         ...currentSettings,
@@ -182,16 +204,56 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ settings, curren
         },
         secondaryProxy: {
           ...currentSettings.secondaryProxy,
+          mode: secProxyMode,
           host: secProxyHost,
           port: Number(secProxyPort) || 10808,
+          shareLink: secProxyShareLink,
         },
         firstRunCompleted: true,
       };
       await onComplete(updated);
-    } catch (e) {
+    } catch (e: any) {
       console.error("Failed to complete first run wizard:", e);
+      setGlobalError(e?.toString() || "Failed to complete initialization");
     } finally {
       setIsFinishing(false);
+    }
+  };
+
+  const handleAutoDownloadAndComplete = async () => {
+    setIsFinishing(true);
+    setFinishingStatusText("DOWNLOADING & VERIFYING CORE ENGINES...");
+    setGlobalError(null);
+    try {
+      const finalStatus = await api.ensureDependenciesAndCompleteSetup();
+      setDepStatus(finalStatus);
+      const updated: AppSettings = {
+        ...currentSettings,
+        aether: {
+          ...currentSettings.aether,
+          executablePath: finalStatus.aetherPath,
+        },
+        singBox: {
+          ...currentSettings.singBox,
+          executablePath: finalStatus.singboxPath,
+        },
+        secondaryProxy: {
+          ...currentSettings.secondaryProxy,
+          mode: secProxyMode,
+          host: secProxyHost,
+          port: Number(secProxyPort) || 10808,
+          shareLink: secProxyShareLink,
+        },
+        firstRunCompleted: true,
+      };
+      await onComplete(updated);
+    } catch (e: any) {
+      console.error("Auto setup failed:", e);
+      setGlobalError(e?.toString() || "Failed to download and configure dependencies.");
+      await refreshDependencies();
+    } finally {
+      setIsFinishing(false);
+      setFinishingStatusText("INITIALIZING...");
     }
   };
 
@@ -213,9 +275,20 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ settings, curren
 
         {/* Required Dependencies Section */}
         <div className="space-y-3 font-sans">
-          <h2 className="text-xs font-bold font-mono uppercase tracking-wider text-ink-200 flex items-center gap-2">
-            <span>CORE SUBSYSTEM ENGINES</span>
-          </h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-xs font-bold font-mono uppercase tracking-wider text-ink-200 flex items-center gap-2">
+              <span>CORE SUBSYSTEM ENGINES</span>
+            </h2>
+            <button
+              onClick={refreshDependencies}
+              disabled={isRefreshing || isFinishing}
+              className="text-[10px] font-mono text-ink-400 hover:text-signal-cyan transition-colors flex items-center gap-1 cursor-pointer disabled:opacity-40"
+              title="Re-scan system for local binaries"
+            >
+              <RefreshCw className={`w-3 h-3 ${isRefreshing ? "animate-spin text-signal-cyan" : ""}`} />
+              <span>RE-SCAN</span>
+            </button>
+          </div>
 
           {/* Aether Card */}
           <div className="p-3.5 rounded-sm bg-app-surface border border-app-border space-y-2.5">
@@ -246,7 +319,7 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ settings, curren
               {!isAetherReady && (
                 <button
                   onClick={handleInstallAether}
-                  disabled={aetherInstalling}
+                  disabled={aetherInstalling || isFinishing}
                   className="px-3 py-1.5 rounded-sm bg-signal-cyan hover:bg-signal-cyan-muted text-black font-bold text-xs flex items-center gap-1.5 shadow-sm transition-all disabled:opacity-40 cursor-pointer"
                 >
                   {aetherInstalling ? (
@@ -316,7 +389,7 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ settings, curren
               {!isSingboxReady && (
                 <button
                   onClick={handleInstallSingbox}
-                  disabled={singboxInstalling}
+                  disabled={singboxInstalling || isFinishing}
                   className="px-3 py-1.5 rounded-sm bg-signal-cyan hover:bg-signal-cyan-muted text-black font-bold text-xs flex items-center gap-1.5 shadow-sm transition-all disabled:opacity-40 cursor-pointer"
                 >
                   {singboxInstalling ? (
@@ -366,26 +439,45 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ settings, curren
                 </div>
                 <div>
                   <div className="text-xs font-semibold text-ink-100 flex items-center gap-2">
-                    <span>Secondary SOCKS5 Proxy</span>
+                    <span>Secondary Proxy</span>
                     <span className="text-[9px] font-mono text-ink-400 border border-app-border-subtle px-1 py-0.1 rounded-xs">
                       OPTIONAL
                     </span>
                   </div>
                   <p className="text-[11px] text-ink-400 font-mono">
-                    Targeted proxy for AI tools and Discord (default: 127.0.0.1:10808).
+                    Paste a share link to run the secondary route without v2rayN.
                   </p>
                 </div>
               </div>
 
               <button
                 onClick={handleTestSecondaryProxy}
-                disabled={secProxyTesting}
-                className="px-3 py-1 bg-app-panel hover:bg-app-elevated border border-app-border text-ink-200 text-xs font-mono rounded-sm transition-colors cursor-pointer"
+                disabled={secProxyTesting || isFinishing}
+                className="px-3 py-1 bg-app-panel hover:bg-app-elevated border border-app-border text-ink-200 text-xs font-mono rounded-sm transition-colors cursor-pointer disabled:opacity-40"
               >
                 {secProxyTesting ? "PROBING..." : "PROBE"}
               </button>
             </div>
 
+            <select
+              value={secProxyMode}
+              onChange={(e) => setSecProxyMode(e.target.value as "externalSocks" | "embedded")}
+              className="w-full bg-app-inset border border-app-border-subtle rounded-sm px-2.5 py-1 text-xs text-ink-200 font-mono focus:outline-none focus:border-signal-cyan"
+            >
+              <option value="embedded">Built-in config (Recommended)</option>
+              <option value="externalSocks">External SOCKS proxy</option>
+            </select>
+
+            {secProxyMode === "embedded" ? (
+              <textarea
+                value={secProxyShareLink}
+                onChange={(e) => setSecProxyShareLink(e.target.value.trim())}
+                rows={3}
+                spellCheck={false}
+                placeholder="Paste one vless://, vmess://, trojan://, or ss:// link"
+                className="w-full bg-app-inset border border-app-border-subtle rounded-sm px-2.5 py-1.5 text-xs text-ink-200 font-mono focus:outline-none focus:border-signal-cyan resize-y"
+              />
+            ) : (
             <div className="grid grid-cols-2 gap-3 pt-1 font-mono text-xs">
               <div>
                 <label className="text-[10px] text-ink-400">HOST</label>
@@ -406,6 +498,7 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ settings, curren
                 />
               </div>
             </div>
+            )}
 
             {secProxyResult && (
               <div className="text-[11px] font-mono text-ink-400 pt-1">
@@ -414,6 +507,17 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ settings, curren
             )}
           </div>
         </div>
+
+        {/* Global Setup Error */}
+        {globalError && (
+          <div className="text-xs font-mono text-signal-red bg-signal-red-dim p-2.5 rounded-sm border border-signal-red/30 flex items-start gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+            <div className="space-y-0.5">
+              <span className="font-semibold">Setup Error:</span>
+              <p className="text-[11px] text-ink-300">{globalError}</p>
+            </div>
+          </div>
+        )}
 
         {/* Collapsible Advanced Section for Manual Path Selection */}
         <div className="border-t border-app-border pt-3 font-mono">
@@ -485,32 +589,53 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ settings, curren
           <div className="text-xs">
             {canFinish ? (
               <span className="text-signal-green flex items-center gap-1.5 text-[11px]">
-                <CheckCircle2 className="w-3.5 h-3.5" /> SUBSYSTEM ENGINES VERIFIED
+                <CheckCircle2 className="w-3.5 h-3.5" /> SUBSYSTEM ENGINES READY
               </span>
             ) : (
               <span className="text-signal-amber flex items-center gap-1.5 text-[11px]">
-                <AlertCircle className="w-3.5 h-3.5" /> Aether & sing-box required to proceed
+                <AlertCircle className="w-3.5 h-3.5" /> Core engines required
               </span>
             )}
           </div>
 
-          <button
-            onClick={handleFinish}
-            disabled={!canFinish || isFinishing}
-            className="px-5 py-2 rounded-sm bg-signal-cyan hover:bg-signal-cyan-muted text-black font-bold text-xs flex items-center gap-2 shadow-sm transition-all disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
-          >
-            {isFinishing ? (
-              <>
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                <span>INITIALIZING...</span>
-              </>
-            ) : (
-              <>
-                <span>COMPLETE INITIALIZATION</span>
-                <ArrowRight className="w-3.5 h-3.5" />
-              </>
-            )}
-          </button>
+          {canFinish ? (
+            <button
+              onClick={handleFinish}
+              disabled={isFinishing}
+              className="px-5 py-2 rounded-sm bg-signal-cyan hover:bg-signal-cyan-muted text-black font-bold text-xs flex items-center gap-2 shadow-sm transition-all disabled:opacity-40 cursor-pointer"
+            >
+              {isFinishing ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>{finishingStatusText}</span>
+                </>
+              ) : (
+                <>
+                  <span>COMPLETE INITIALIZATION</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </>
+              )}
+            </button>
+          ) : (
+            <button
+              onClick={handleAutoDownloadAndComplete}
+              disabled={isFinishing}
+              className="px-5 py-2 rounded-sm bg-signal-cyan hover:bg-signal-cyan-muted text-black font-bold text-xs flex items-center gap-2 shadow-sm transition-all disabled:opacity-40 cursor-pointer"
+            >
+              {isFinishing ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>{finishingStatusText}</span>
+                </>
+              ) : (
+                <>
+                  <Download className="w-3.5 h-3.5" />
+                  <span>DOWNLOAD & COMPLETE SETUP</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </>
+              )}
+            </button>
+          )}
         </div>
       </div>
     </div>

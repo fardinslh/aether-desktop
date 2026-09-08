@@ -1296,6 +1296,7 @@ impl HealthProber {
         secondary_host: &str,
         secondary_port: u16,
         secondary_enabled: bool,
+        secondary_embedded: bool,
         tun_interface_name: &str,
         tun_address: Option<&str>,
         aether_process_running: bool,
@@ -1374,7 +1375,13 @@ impl HealthProber {
         };
 
         // 6. Secondary Proxy Check
-        let secondary_proxy = if secondary_enabled {
+        let secondary_proxy = if secondary_enabled && secondary_embedded {
+            if is_connected && singbox_process_running {
+                ServiceHealth::ok("Built-in config loaded by sing-box")
+            } else {
+                ServiceHealth::err("Ready when the tunnel connects")
+            }
+        } else if secondary_enabled {
             let sec_open = Self::check_port_open(secondary_host, secondary_port, 600).await;
             if sec_open {
                 match Self::query_cloudflare_trace_via_socks5(secondary_host, secondary_port).await

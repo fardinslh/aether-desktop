@@ -13,6 +13,7 @@ use models::ConnectionState;
 use parking_lot::RwLock;
 use process::ConnectionOrchestrator;
 use std::sync::Arc;
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -82,9 +83,70 @@ pub fn run() {
         .manage(app_state)
         .setup(move |app| {
             orchestrator_setup.set_app_handle(app.handle().clone());
+
+            let show_item = tauri::menu::MenuItem::with_id(
+                app,
+                "show",
+                "Show Aether Desktop",
+                true,
+                None::<&str>,
+            )?;
+            let quit_item = tauri::menu::MenuItem::with_id(
+                app,
+                "quit",
+                "Exit Aether Desktop",
+                true,
+                None::<&str>,
+            )?;
+            let tray_menu = tauri::menu::Menu::with_items(app, &[&show_item, &quit_item])?;
+            let mut tray = tauri::tray::TrayIconBuilder::new()
+                .tooltip("Aether Desktop")
+                .menu(&tray_menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "show" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let tauri::tray::TrayIconEvent::DoubleClick {
+                        button: tauri::tray::MouseButton::Left,
+                        ..
+                    } = event
+                    {
+                        let app = tray.app_handle();
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                });
+            if let Some(icon) = app.default_window_icon() {
+                tray = tray.icon(icon.clone());
+            }
+            tray.build(app)?;
+
+            let settings = crate::settings::SettingsStorage::load();
+            if settings.general.start_minimized {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+            }
+            if settings.general.auto_connect {
+                let orchestrator = orchestrator_setup.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = orchestrator.connect(&settings).await;
+                });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+
             commands::get_settings,
             commands::save_settings,
             commands::reset_settings,
@@ -101,6 +163,8 @@ pub fn run() {
             commands::validate_singbox_path,
             commands::generate_singbox_config_preview,
             commands::test_secondary_proxy,
+            commands::update_secondary_subscription,
+            commands::ping_secondary_profiles,
             commands::test_aether_proxy,
             commands::get_logs,
             commands::export_logs,
@@ -109,25 +173,37 @@ pub fn run() {
             commands::check_dependencies,
             commands::install_aether_dependency,
             commands::install_singbox_dependency,
+            commands::ensure_dependencies_and_complete_setup,
             commands::get_best_candidate_rtt
         ])
         .build(tauri::generate_context!())
         .expect("error while building aether desktop application")
-        .run(move |_app_handle, event| {
-            match event {
-                tauri::RunEvent::WindowEvent {
-                    event: tauri::WindowEvent::CloseRequested { .. },
-                    ..
-                }
-                | tauri::RunEvent::WindowEvent {
-                    event: tauri::WindowEvent::Destroyed,
-                    ..
-                }
-                | tauri::RunEvent::ExitRequested { .. }
-                | tauri::RunEvent::Exit => {
+        .run(move |app_handle, event| match event {
+            tauri::RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::CloseRequested { api, .. },
+                ..
+            } => {
+                if crate::settings::SettingsStorage::load()
+                    .general
+                    .minimize_to_tray
+                {
+                    api.prevent_close();
+                    if let Some(window) = app_handle.get_webview_window(&label) {
+                        let _ = window.hide();
+                    }
+                } else {
                     orchestrator_exit.force_shutdown();
                 }
-                _ => {}
             }
+            tauri::RunEvent::WindowEvent {
+                event: tauri::WindowEvent::Destroyed,
+                ..
+            }
+            | tauri::RunEvent::ExitRequested { .. }
+            | tauri::RunEvent::Exit => {
+                orchestrator_exit.force_shutdown();
+            }
+            _ => {}
         });
 }

@@ -1,10 +1,11 @@
-use crate::models::settings::{CompatibilityScope, NetworkProtocol};
+use crate::models::settings::{CompatibilityScope, NetworkProtocol, SecondaryProxyMode};
 use crate::models::singbox::{
-    DirectOutbound, DnsConfig, DnsServer, InboundConfig, LocalDnsServer, LogConfig,
-    OutboundConfig, RouteConfig, RouteRule, SingBoxConfig, SocksOutbound, TunInbound,
+    DirectOutbound, DnsConfig, DnsServer, InboundConfig, LocalDnsServer, LogConfig, OutboundConfig,
+    RouteConfig, RouteRule, SingBoxConfig, SocksOutbound, TunInbound,
 };
 use crate::models::{AppSettings, RouteDestination, RulePriority};
 use crate::routing::presets::{GENERALS_STUN_TURN_PORTS, LOOP_PREVENTION_PROCESSES};
+use crate::routing::secondary::parse_share_link;
 
 pub struct SingBoxConfigGenerator;
 
@@ -24,6 +25,10 @@ impl SingBoxConfigGenerator {
     /// 6. PRIVATE NETWORK / LAN: ip_is_private: true -> DIRECT (Non-DNS private traffic bypasses proxy)
     /// 7. FINAL FALLBACK: All other traffic -> aether
     pub fn generate(settings: &AppSettings) -> SingBoxConfig {
+        Self::try_generate(settings).expect("settings must contain a valid secondary proxy")
+    }
+
+    pub fn try_generate(settings: &AppSettings) -> Result<SingBoxConfig, String> {
         // 1. Log configuration
         let log = LogConfig {
             level: settings.sing_box.log_level.clone(),
@@ -79,12 +84,7 @@ impl SingBoxConfigGenerator {
                 server_port: settings.aether.port,
                 version: "5".to_string(),
             }),
-            OutboundConfig::Socks(SocksOutbound {
-                tag: "v2ray".to_string(),
-                server: settings.secondary_proxy.host.clone(),
-                server_port: settings.secondary_proxy.port,
-                version: "5".to_string(),
-            }),
+            Self::secondary_outbound(settings)?,
             OutboundConfig::Direct(DirectOutbound {
                 tag: "direct".to_string(),
             }),
@@ -153,6 +153,7 @@ impl SingBoxConfigGenerator {
                         action: Some("route".to_string()),
                         outbound: Some(Self::outbound_tag_for_destination(
                             &compat_rule.destination,
+                            settings.secondary_proxy.enabled,
                         )),
                     });
                 }
@@ -189,11 +190,13 @@ impl SingBoxConfigGenerator {
                         }
                     }
                     RouteDestination::SecondaryProxy => {
-                        if !high_v2ray_apps
-                            .iter()
-                            .any(|p| p.eq_ignore_ascii_case(&proc))
-                        {
-                            high_v2ray_apps.push(proc);
+                        let target = if settings.secondary_proxy.enabled {
+                            &mut high_v2ray_apps
+                        } else {
+                            &mut high_aether_apps
+                        };
+                        if !target.iter().any(|p| p.eq_ignore_ascii_case(&proc)) {
+                            target.push(proc);
                         }
                     }
                     RouteDestination::Aether => {
@@ -216,11 +219,13 @@ impl SingBoxConfigGenerator {
                         }
                     }
                     RouteDestination::SecondaryProxy => {
-                        if !normal_v2ray_apps
-                            .iter()
-                            .any(|p| p.eq_ignore_ascii_case(&proc))
-                        {
-                            normal_v2ray_apps.push(proc);
+                        let target = if settings.secondary_proxy.enabled {
+                            &mut normal_v2ray_apps
+                        } else {
+                            &mut normal_aether_apps
+                        };
+                        if !target.iter().any(|p| p.eq_ignore_ascii_case(&proc)) {
+                            target.push(proc);
                         }
                     }
                     RouteDestination::Aether => {
@@ -250,37 +255,55 @@ impl SingBoxConfigGenerator {
         let steam_companions = ["steamwebhelper.exe", "steamservice.exe"];
 
         if all_configured_apps.contains(&"steam.exe".to_string()) {
-            if normal_v2ray_apps.iter().any(|p| p.eq_ignore_ascii_case("steam.exe")) {
+            if normal_v2ray_apps
+                .iter()
+                .any(|p| p.eq_ignore_ascii_case("steam.exe"))
+            {
                 for comp in &steam_companions {
                     if !all_configured_apps.contains(&comp.to_lowercase()) {
                         normal_v2ray_apps.push(comp.to_string());
                     }
                 }
-            } else if normal_aether_apps.iter().any(|p| p.eq_ignore_ascii_case("steam.exe")) {
+            } else if normal_aether_apps
+                .iter()
+                .any(|p| p.eq_ignore_ascii_case("steam.exe"))
+            {
                 for comp in &steam_companions {
                     if !all_configured_apps.contains(&comp.to_lowercase()) {
                         normal_aether_apps.push(comp.to_string());
                     }
                 }
-            } else if normal_direct_apps.iter().any(|p| p.eq_ignore_ascii_case("steam.exe")) {
+            } else if normal_direct_apps
+                .iter()
+                .any(|p| p.eq_ignore_ascii_case("steam.exe"))
+            {
                 for comp in &steam_companions {
                     if !all_configured_apps.contains(&comp.to_lowercase()) {
                         normal_direct_apps.push(comp.to_string());
                     }
                 }
-            } else if high_v2ray_apps.iter().any(|p| p.eq_ignore_ascii_case("steam.exe")) {
+            } else if high_v2ray_apps
+                .iter()
+                .any(|p| p.eq_ignore_ascii_case("steam.exe"))
+            {
                 for comp in &steam_companions {
                     if !all_configured_apps.contains(&comp.to_lowercase()) {
                         high_v2ray_apps.push(comp.to_string());
                     }
                 }
-            } else if high_aether_apps.iter().any(|p| p.eq_ignore_ascii_case("steam.exe")) {
+            } else if high_aether_apps
+                .iter()
+                .any(|p| p.eq_ignore_ascii_case("steam.exe"))
+            {
                 for comp in &steam_companions {
                     if !all_configured_apps.contains(&comp.to_lowercase()) {
                         high_aether_apps.push(comp.to_string());
                     }
                 }
-            } else if high_direct_apps.iter().any(|p| p.eq_ignore_ascii_case("steam.exe")) {
+            } else if high_direct_apps
+                .iter()
+                .any(|p| p.eq_ignore_ascii_case("steam.exe"))
+            {
                 for comp in &steam_companions {
                     if !all_configured_apps.contains(&comp.to_lowercase()) {
                         high_direct_apps.push(comp.to_string());
@@ -346,7 +369,10 @@ impl SingBoxConfigGenerator {
                 network: network_str,
                 ip_is_private: None,
                 action: Some("route".to_string()),
-                outbound: Some(Self::outbound_tag_for_destination(&compat_rule.destination)),
+                outbound: Some(Self::outbound_tag_for_destination(
+                    &compat_rule.destination,
+                    settings.secondary_proxy.enabled,
+                )),
             });
         }
 
@@ -429,19 +455,37 @@ impl SingBoxConfigGenerator {
             final_outbound: "aether".to_string(),
         };
 
-        SingBoxConfig {
+        Ok(SingBoxConfig {
             log,
             dns,
             inbounds,
             outbounds,
             route,
+        })
+    }
+
+    pub fn secondary_outbound(settings: &AppSettings) -> Result<OutboundConfig, String> {
+        if !settings.secondary_proxy.enabled {
+            return Ok(OutboundConfig::Direct(DirectOutbound {
+                tag: "v2ray".to_string(),
+            }));
+        }
+        match settings.secondary_proxy.mode {
+            SecondaryProxyMode::ExternalSocks => Ok(OutboundConfig::Socks(SocksOutbound {
+                tag: "v2ray".to_string(),
+                server: settings.secondary_proxy.host.clone(),
+                server_port: settings.secondary_proxy.port,
+                version: "5".to_string(),
+            })),
+            SecondaryProxyMode::Embedded => parse_share_link(&settings.secondary_proxy.share_link),
         }
     }
 
-    fn outbound_tag_for_destination(dest: &RouteDestination) -> String {
+    fn outbound_tag_for_destination(dest: &RouteDestination, secondary_enabled: bool) -> String {
         match dest {
             RouteDestination::Direct => "direct".to_string(),
-            RouteDestination::SecondaryProxy => "v2ray".to_string(),
+            RouteDestination::SecondaryProxy if secondary_enabled => "v2ray".to_string(),
+            RouteDestination::SecondaryProxy => "aether".to_string(),
             RouteDestination::Aether => "aether".to_string(),
         }
     }
@@ -522,16 +566,15 @@ impl SingBoxConfigGenerator {
             // Check port match if rule requires it (either port list or port_range)
             let port_matches = match (port, &rule.port, &rule.port_range) {
                 (Some(dst_port), Some(ports), _) if ports.contains(&dst_port) => true,
-                (Some(dst_port), _, Some(ranges)) => {
-                    ranges.iter().any(|range_str| {
+                (Some(dst_port), _, Some(ranges)) => ranges.iter().any(|range_str| {
                         if let Some((start_s, end_s)) = range_str.split_once(':') {
-                            if let (Ok(start), Ok(end)) = (start_s.parse::<u16>(), end_s.parse::<u16>()) {
+                        if let (Ok(start), Ok(end)) = (start_s.parse::<u16>(), end_s.parse::<u16>())
+                        {
                                 return dst_port >= start && dst_port <= end;
                             }
                         }
                         false
-                    })
-                }
+                }),
                 (None, Some(_), _) | (None, _, Some(_)) => false,
                 (_, None, None) => true,
                 _ => false,
@@ -573,6 +616,52 @@ impl SingBoxConfigGenerator {
             }
         } else {
             false
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{ApplicationRule, RuleSource};
+
+    #[test]
+    fn disabled_secondary_proxy_falls_back_to_aether() {
+        let mut settings = AppSettings::default();
+        settings.secondary_proxy.enabled = false;
+        settings.application_rules = vec![ApplicationRule {
+            id: "secondary-disabled".to_string(),
+            display_name: "Example".to_string(),
+            executable_path: None,
+            process_name: "example.exe".to_string(),
+            destination: RouteDestination::SecondaryProxy,
+            enabled: true,
+            source: RuleSource::User,
+            priority: RulePriority::Normal,
+            icon_base64: None,
+        }];
+
+        let config = SingBoxConfigGenerator::generate(&settings);
+        assert_eq!(
+            SingBoxConfigGenerator::resolve_route(&config, Some("example.exe"), Some(443), false,),
+            "aether"
+        );
+    }
+
+    #[test]
+    fn embedded_vless_replaces_external_socks_outbound() {
+        let mut settings = AppSettings::default();
+        settings.secondary_proxy.mode = SecondaryProxyMode::Embedded;
+        settings.secondary_proxy.share_link = "vless://123e4567-e89b-12d3-a456-426614174000@example.com:443?encryption=none&security=tls&sni=example.com&type=ws&host=example.com&path=%2Fproxy".to_string();
+
+        let config = SingBoxConfigGenerator::try_generate(&settings).unwrap();
+        match &config.outbounds[1] {
+            OutboundConfig::Vless(outbound) => {
+                assert_eq!(outbound.tag, "v2ray");
+                assert_eq!(outbound.server, "example.com");
+                assert_eq!(outbound.server_port, 443);
+            }
+            other => panic!("Expected embedded VLESS outbound, got {other:?}"),
         }
     }
 }

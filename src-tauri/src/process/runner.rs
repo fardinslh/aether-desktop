@@ -244,7 +244,8 @@ impl AetherRunner {
         self.cached_endpoint_reused.store(false, Ordering::SeqCst);
         self.fresh_scan_observed.store(false, Ordering::SeqCst);
 
-        let aether_config_path = SettingsStorage::get_aether_config_path();
+        let aether_config_path =
+            SettingsStorage::get_aether_config_path_for_protocol(&settings.aether.protocol);
         let cli_args = settings
             .aether
             .build_cli_arguments_with_options(Some(&aether_config_path), options);
@@ -748,7 +749,7 @@ impl SingBoxRunner {
         logger: &RingBufferLogger,
     ) -> Result<(), String> {
         let exe_path = &settings.sing_box.executable_path;
-        let config = SingBoxConfigGenerator::generate(settings);
+        let config = SingBoxConfigGenerator::try_generate(settings)?;
 
         let config_path = self.config_path.clone();
         self.write_config_to_path(&config, &config_path)?;
@@ -826,7 +827,7 @@ impl SingBoxRunner {
         let candidate_exe = settings.sing_box.executable_path.clone();
         let candidate_interface = settings.sing_box.interface_name.clone();
         let candidate_tun_address = settings.sing_box.tun_address.clone();
-        let candidate_config = SingBoxConfigGenerator::generate(settings);
+        let candidate_config = SingBoxConfigGenerator::try_generate(settings)?;
 
         let config_path = self.config_path.clone();
         let candidate_path =

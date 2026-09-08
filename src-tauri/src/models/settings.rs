@@ -217,8 +217,41 @@ pub const AETHER_RESTORE_TIMEOUT: std::time::Duration = std::time::Duration::fro
 #[serde(rename_all = "camelCase")]
 pub struct SecondaryProxySettings {
     pub enabled: bool,
+    #[serde(default)]
+    pub mode: SecondaryProxyMode,
     pub host: String,
     pub port: u16,
+    #[serde(default)]
+    pub share_link: String,
+    #[serde(default)]
+    pub config_source: SecondaryConfigSource,
+    #[serde(default)]
+    pub subscription_url: String,
+    #[serde(default)]
+    pub subscription_profiles: Vec<SecondaryProxyProfile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum SecondaryProxyMode {
+    #[default]
+    ExternalSocks,
+    Embedded,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum SecondaryConfigSource {
+    #[default]
+    Manual,
+    Subscription,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SecondaryProxyProfile {
+    pub name: String,
+    pub share_link: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -300,8 +333,13 @@ impl Default for AppSettings {
             },
             secondary_proxy: SecondaryProxySettings {
                 enabled: true,
+                mode: SecondaryProxyMode::ExternalSocks,
                 host: "127.0.0.1".to_string(),
                 port: 10808,
+                share_link: String::new(),
+                config_source: SecondaryConfigSource::Manual,
+                subscription_url: String::new(),
+                subscription_profiles: Vec::new(),
             },
             sing_box: SingBoxSettings {
                 executable_path: "C:\\sing-box\\sing-box.exe".to_string(),

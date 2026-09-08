@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Sliders,
   Radio,
@@ -11,16 +11,17 @@ import {
   ChevronDown,
   ChevronRight,
 } from "lucide-react";
-import { AppSettings, CloudflareTrace } from "../../types";
+import { AppSettings, CloudflareTrace, SecondaryProfilePing } from "../../types";
 import { api } from "../../services/api";
 
 interface SettingsViewProps {
   settings: AppSettings;
-  onSave: (settings: AppSettings) => void;
-  onReset: () => void;
+  onSave: (settings: AppSettings) => Promise<void>;
+  onReset: () => Promise<AppSettings>;
+  errorDetails?: string | null;
 }
 
-export const SettingsView: React.FC<SettingsViewProps> = ({ settings, onSave, onReset }) => {
+export const SettingsView: React.FC<SettingsViewProps> = ({ settings, onSave, onReset, errorDetails }) => {
   const [localSettings, setLocalSettings] = useState<AppSettings>(settings);
   const [activeTab, setActiveTab] = useState<
     "general" | "aether" | "secondary" | "singbox" | "compatibility"
@@ -29,14 +30,22 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, onSave, on
   const [testLoading, setTestLoading] = useState<boolean>(false);
   const [testError, setTestError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState<boolean>(false);
+  const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [showAdvancedAether, setShowAdvancedAether] = useState<boolean>(false);
+  const [subscriptionLoading, setSubscriptionLoading] = useState(false);
+  const [subscriptionMessage, setSubscriptionMessage] = useState<string | null>(null);
+  const [subscriptionError, setSubscriptionError] = useState<string | null>(null);
+  const [profilePings, setProfilePings] = useState<Record<number, SecondaryProfilePing>>({});
+  const [pingAllLoading, setPingAllLoading] = useState(false);
+  const [pingingProfile, setPingingProfile] = useState<number | null>(null);
 
   const handleTestSecondaryProxy = async () => {
     setTestLoading(true);
     setTestError(null);
     setTestTrace(null);
     try {
-      const trace = await api.testSecondaryProxy();
+      const trace = await api.testSecondaryProxy(localSettings.secondaryProxy);
       setTestTrace(trace);
     } catch (err: any) {
       setTestError(err.toString());
@@ -45,10 +54,115 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, onSave, on
     }
   };
 
-  const handleSave = () => {
-    onSave(localSettings);
-    setSaveSuccess(true);
-    setTimeout(() => setSaveSuccess(false), 2500);
+  const handleUpdateSubscription = async () => {
+    setSubscriptionLoading(true);
+    setSubscriptionError(null);
+    setSubscriptionMessage(null);
+    try {
+      const result = await api.updateSecondarySubscription(localSettings.secondaryProxy.subscriptionUrl);
+      setLocalSettings((current) => {
+        const selectedStillExists = result.profiles.some(
+          (profile) => profile.shareLink === current.secondaryProxy.shareLink,
+        );
+        return {
+          ...current,
+          secondaryProxy: {
+            ...current.secondaryProxy,
+            subscriptionProfiles: result.profiles,
+            shareLink: selectedStillExists
+              ? current.secondaryProxy.shareLink
+              : result.profiles[0]?.shareLink || "",
+          },
+        };
+      });
+      setProfilePings({});
+      setSubscriptionMessage(
+        `${result.profiles.length} profiles loaded${result.skipped ? `, ${result.skipped} unsupported skipped` : ""}. Click Apply Settings to save.`,
+      );
+    } catch (err: any) {
+      setSubscriptionError(err?.toString() || "Failed to update subscription");
+    } finally {
+      setSubscriptionLoading(false);
+    }
+  };
+
+  const handlePingAllProfiles = async () => {
+    setPingAllLoading(true);
+    setSubscriptionError(null);
+    try {
+      const results = await api.pingSecondaryProfiles(localSettings.secondaryProxy.subscriptionProfiles);
+      setProfilePings(Object.fromEntries(results.map((result) => [result.index, result])));
+    } catch (err: any) {
+      setSubscriptionError(err?.toString() || "Failed to test subscription profiles");
+    } finally {
+      setPingAllLoading(false);
+    }
+  };
+
+  const handlePingProfile = async (index: number) => {
+    const profile = localSettings.secondaryProxy.subscriptionProfiles[index];
+    if (!profile) return;
+    setPingingProfile(index);
+    setSubscriptionError(null);
+    try {
+      const trace = await api.testSecondaryProxy({
+        ...localSettings.secondaryProxy,
+        enabled: true,
+        mode: "embedded",
+        shareLink: profile.shareLink,
+      });
+      setProfilePings((current) => ({
+        ...current,
+        [index]: {
+          index,
+          ok: true,
+          latencyMs: trace.latencyMs,
+          ip: trace.ip,
+          colo: trace.colo,
+        },
+      }));
+    } catch (err: any) {
+      setProfilePings((current) => ({
+        ...current,
+        [index]: {
+          index,
+          ok: false,
+          error: err?.toString() || "Profile test failed",
+        },
+      }));
+    } finally {
+      setPingingProfile(null);
+    }
+  };
+
+  useEffect(() => {
+    setLocalSettings(settings);
+    setProfilePings({});
+  }, [settings]);
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    setSaveSuccess(false);
+    setSaveError(null);
+    try {
+      await onSave(localSettings);
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 2500);
+    } catch (err: any) {
+      setSaveError(err?.toString() || "Failed to apply settings");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleReset = async () => {
+    setSaveError(null);
+    try {
+      const defaults = await onReset();
+      setLocalSettings(defaults);
+    } catch (err: any) {
+      setSaveError(err?.toString() || "Failed to reset settings");
+    }
   };
 
   return (
@@ -60,13 +174,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, onSave, on
             ENGINE CONFIGURATION & SUBSYSTEMS
           </h2>
           <p className="text-[11px] text-ink-400 font-sans mt-0.5">
-            Configure Aether, Secondary SOCKS5, sing-box Wintun driver, and compatibility layer parameters.
+            Configure Aether, built-in secondary proxy, sing-box Wintun driver, and compatibility parameters.
           </p>
         </div>
 
         <div className="flex items-center gap-2 font-mono">
           <button
-            onClick={onReset}
+            onClick={handleReset}
+            disabled={isSaving}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-sm border border-app-border bg-app-surface hover:bg-app-elevated text-ink-300 text-xs transition-colors cursor-pointer"
           >
             <RotateCcw className="w-3.5 h-3.5" />
@@ -74,20 +189,27 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, onSave, on
           </button>
           <button
             onClick={handleSave}
+            disabled={isSaving}
             className="flex items-center gap-1.5 px-4 py-1.5 rounded-sm bg-signal-cyan hover:bg-signal-cyan-muted text-black text-xs font-bold transition-all shadow-sm cursor-pointer"
           >
             {saveSuccess ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Save className="w-3.5 h-3.5" />}
-            <span>{saveSuccess ? "APPLIED" : "APPLY SETTINGS"}</span>
+            <span>{isSaving ? "APPLYING..." : saveSuccess ? "APPLIED" : "APPLY SETTINGS"}</span>
           </button>
         </div>
       </div>
+
+      {(saveError || errorDetails) && (
+        <div className="rounded-sm border border-signal-red/40 bg-signal-red/10 px-3 py-2 text-[11px] text-signal-red font-mono">
+          {saveError || errorDetails}
+        </div>
+      )}
 
       {/* Configuration Subsystem Tabs */}
       <div className="flex border-b border-app-border gap-1 font-mono text-xs">
         {[
           { id: "general", label: "GENERAL", icon: Sliders },
           { id: "aether", label: "AETHER DAEMON", icon: Radio },
-          { id: "secondary", label: "SECONDARY SOCKS", icon: Network },
+          { id: "secondary", label: "SECONDARY / V2RAY", icon: Network },
           { id: "singbox", label: "SING-BOX TUN", icon: Shield },
           { id: "compatibility", label: "COMPATIBILITY", icon: HelpCircle },
         ].map((t) => {
@@ -161,6 +283,24 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, onSave, on
                   setLocalSettings({
                     ...localSettings,
                     general: { ...localSettings.general, minimizeToTray: e.target.checked },
+                  })
+                }
+                className="w-3.5 h-3.5 rounded-xs text-signal-cyan focus:ring-signal-cyan bg-app-inset border-app-border cursor-pointer"
+              />
+            </div>
+
+            <div className="flex items-center justify-between p-3 rounded-sm bg-app-surface border border-app-border">
+              <div>
+                <div className="text-xs font-semibold text-ink-100">Start Minimized</div>
+                <div className="text-[10px] text-ink-400">Hide the main window on launch and keep it available from the tray</div>
+              </div>
+              <input
+                type="checkbox"
+                checked={localSettings.general.startMinimized}
+                onChange={(e) =>
+                  setLocalSettings({
+                    ...localSettings,
+                    general: { ...localSettings.general, startMinimized: e.target.checked },
                   })
                 }
                 className="w-3.5 h-3.5 rounded-xs text-signal-cyan focus:ring-signal-cyan bg-app-inset border-app-border cursor-pointer"
@@ -365,7 +505,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, onSave, on
             <div className="flex items-center justify-between p-3 rounded-sm bg-app-surface border border-app-border">
               <div>
                 <div className="text-xs font-semibold text-ink-100 font-mono">ENABLE SECONDARY PROXY ROUTE</div>
-                <div className="text-[10px] text-ink-400">Routes selected AI & development applications through v2rayN/Xray</div>
+                <div className="text-[10px] text-ink-400">Routes selected applications through a built-in config or local SOCKS proxy</div>
               </div>
               <input
                 type="checkbox"
@@ -380,6 +520,209 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, onSave, on
               />
             </div>
 
+            <div>
+              <label className="block text-[11px] font-mono font-semibold uppercase text-ink-300 mb-1">
+                Secondary Proxy Source
+              </label>
+              <select
+                value={localSettings.secondaryProxy.mode}
+                onChange={(e) =>
+                  setLocalSettings({
+                    ...localSettings,
+                    secondaryProxy: {
+                      ...localSettings.secondaryProxy,
+                      mode: e.target.value as "externalSocks" | "embedded",
+                    },
+                  })
+                }
+                className="w-full px-3 py-1.5 bg-app-inset border border-app-border-subtle rounded-sm text-xs text-ink-200 font-mono focus:outline-none focus:border-signal-cyan"
+              >
+                <option value="embedded">Built-in V2Ray config (Recommended)</option>
+                <option value="externalSocks">External local SOCKS proxy</option>
+              </select>
+            </div>
+
+            {localSettings.secondaryProxy.mode === "embedded" ? (
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-[11px] font-mono font-semibold uppercase text-ink-300 mb-1">
+                    Config Input
+                  </label>
+                  <select
+                    value={localSettings.secondaryProxy.configSource}
+                    onChange={(e) => {
+                      const configSource = e.target.value as "manual" | "subscription";
+                      const profiles = localSettings.secondaryProxy.subscriptionProfiles;
+                      const currentExists = profiles.some(
+                        (profile) => profile.shareLink === localSettings.secondaryProxy.shareLink,
+                      );
+                      setLocalSettings({
+                        ...localSettings,
+                        secondaryProxy: {
+                          ...localSettings.secondaryProxy,
+                          configSource,
+                          shareLink:
+                            configSource === "subscription" && !currentExists
+                              ? profiles[0]?.shareLink || ""
+                              : localSettings.secondaryProxy.shareLink,
+                        },
+                      });
+                    }}
+                    className="w-full px-3 py-1.5 bg-app-inset border border-app-border-subtle rounded-sm text-xs text-ink-200 font-mono focus:outline-none focus:border-signal-cyan"
+                  >
+                    <option value="manual">Single share link</option>
+                    <option value="subscription">Subscription URL</option>
+                  </select>
+                </div>
+
+                {localSettings.secondaryProxy.configSource === "manual" ? (
+                  <div>
+                    <label className="block text-[11px] font-mono font-semibold uppercase text-ink-300 mb-1">
+                      Share Link
+                    </label>
+                    <textarea
+                      value={localSettings.secondaryProxy.shareLink}
+                      onChange={(e) =>
+                        setLocalSettings({
+                          ...localSettings,
+                          secondaryProxy: { ...localSettings.secondaryProxy, shareLink: e.target.value.trim() },
+                        })
+                      }
+                      rows={4}
+                      spellCheck={false}
+                      placeholder="Paste one vless://, vmess://, trojan://, or ss:// link"
+                      className="w-full px-3 py-2 bg-app-inset border border-app-border-subtle rounded-sm text-xs text-ink-200 font-mono break-all resize-y focus:outline-none focus:border-signal-cyan"
+                    />
+                  </div>
+                ) : (
+                  <div className="space-y-2.5">
+                    <div>
+                      <label className="block text-[11px] font-mono font-semibold uppercase text-ink-300 mb-1">
+                        Subscription URL
+                      </label>
+                      <div className="flex gap-2">
+                        <input
+                          type="url"
+                          value={localSettings.secondaryProxy.subscriptionUrl}
+                          onChange={(e) =>
+                            setLocalSettings({
+                              ...localSettings,
+                              secondaryProxy: {
+                                ...localSettings.secondaryProxy,
+                                subscriptionUrl: e.target.value,
+                              },
+                            })
+                          }
+                          spellCheck={false}
+                          placeholder="https://provider.example/subscription/token"
+                          className="min-w-0 flex-1 px-3 py-1.5 bg-app-inset border border-app-border-subtle rounded-sm text-xs text-ink-200 font-mono focus:outline-none focus:border-signal-cyan"
+                        />
+                        <button
+                          onClick={handleUpdateSubscription}
+                          disabled={subscriptionLoading || !localSettings.secondaryProxy.subscriptionUrl.trim()}
+                          className="shrink-0 px-3 py-1.5 bg-signal-cyan hover:bg-signal-cyan-muted disabled:opacity-40 text-black text-[11px] font-bold font-mono rounded-sm transition-colors cursor-pointer"
+                        >
+                          {subscriptionLoading ? "UPDATING..." : "UPDATE SUBSCRIPTION"}
+                        </button>
+                      </div>
+                    </div>
+
+                    {subscriptionMessage && (
+                      <div className="px-2.5 py-2 text-[10px] text-signal-green border border-signal-green/30 bg-signal-green-dim rounded-sm font-mono">
+                        {subscriptionMessage}
+                      </div>
+                    )}
+                    {subscriptionError && (
+                      <div className="px-2.5 py-2 text-[10px] text-signal-red border border-signal-red/30 bg-signal-red-dim rounded-sm font-mono">
+                        {subscriptionError}
+                      </div>
+                    )}
+
+                    <div className="border border-app-border rounded-sm bg-app-inset overflow-hidden">
+                      <div className="flex items-center justify-between px-3 py-2 border-b border-app-border bg-app-surface font-mono">
+                        <span className="text-[11px] font-semibold text-ink-200">
+                          PROFILES ({localSettings.secondaryProxy.subscriptionProfiles.length})
+                        </span>
+                        <button
+                          onClick={handlePingAllProfiles}
+                          disabled={
+                            pingAllLoading ||
+                            pingingProfile !== null ||
+                            localSettings.secondaryProxy.subscriptionProfiles.length === 0
+                          }
+                          className="px-2.5 py-1 border border-app-border bg-app-panel hover:bg-app-elevated disabled:opacity-40 text-[10px] text-ink-200 rounded-sm cursor-pointer"
+                        >
+                          {pingAllLoading ? "PINGING..." : "PING ALL"}
+                        </button>
+                      </div>
+
+                      {localSettings.secondaryProxy.subscriptionProfiles.length === 0 ? (
+                        <div className="px-3 py-5 text-center text-[10px] text-ink-500 font-mono">
+                          Enter URL, then select Update Subscription.
+                        </div>
+                      ) : (
+                        <div className="max-h-56 overflow-y-auto divide-y divide-app-border-subtle">
+                          {localSettings.secondaryProxy.subscriptionProfiles.map((profile, index) => {
+                            const selected = profile.shareLink === localSettings.secondaryProxy.shareLink;
+                            const ping = profilePings[index];
+                            const protocol = profile.shareLink.split("://", 1)[0]?.toUpperCase() || "PROXY";
+                            return (
+                              <div
+                                key={`${profile.name}-${index}`}
+                                className={`flex items-center gap-2 px-3 py-2 ${selected ? "bg-signal-cyan/10" : "bg-app-inset"}`}
+                              >
+                                <button
+                                  onClick={() =>
+                                    setLocalSettings({
+                                      ...localSettings,
+                                      secondaryProxy: {
+                                        ...localSettings.secondaryProxy,
+                                        shareLink: profile.shareLink,
+                                      },
+                                    })
+                                  }
+                                  className={`w-3 h-3 shrink-0 rounded-full border cursor-pointer ${
+                                    selected
+                                      ? "border-signal-cyan bg-signal-cyan shadow-[0_0_6px_rgba(0,210,255,0.55)]"
+                                      : "border-ink-500 bg-transparent"
+                                  }`}
+                                  title="Use this profile"
+                                />
+                                <div className="min-w-0 flex-1">
+                                  <div className="truncate text-[11px] text-ink-200 font-medium" title={profile.name}>
+                                    {profile.name}
+                                  </div>
+                                  <div className="flex gap-2 text-[9px] font-mono text-ink-500">
+                                    <span>{protocol}</span>
+                                    {ping?.ok && <span className="text-signal-green">{ping.latencyMs} ms · {ping.colo}</span>}
+                                    {ping && !ping.ok && (
+                                      <span className="max-w-72 truncate text-signal-red" title={ping.error || "Failed"}>
+                                        FAILED · {ping.error}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                                <button
+                                  onClick={() => handlePingProfile(index)}
+                                  disabled={pingAllLoading || pingingProfile !== null}
+                                  className="shrink-0 px-2 py-1 border border-app-border bg-app-panel hover:bg-app-elevated disabled:opacity-40 text-[9px] text-ink-300 font-mono rounded-sm cursor-pointer"
+                                >
+                                  {pingingProfile === index ? "PINGING..." : "PING"}
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                <p className="text-[10px] text-ink-400">
+                  Stored locally. Selected config runs inside Aether Desktop&apos;s managed sing-box process.
+                </p>
+              </div>
+            ) : (
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-[11px] font-mono font-semibold uppercase text-ink-300 mb-1">
@@ -414,6 +757,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, onSave, on
                 />
               </div>
             </div>
+            )}
 
             <div className="p-3 rounded-sm border border-app-border bg-app-surface space-y-2 font-mono">
               <div className="flex items-center justify-between">
@@ -423,7 +767,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, onSave, on
                   disabled={testLoading}
                   className="px-3 py-1 bg-app-panel hover:bg-app-elevated disabled:opacity-40 text-ink-200 text-xs border border-app-border rounded-sm transition-colors cursor-pointer"
                 >
-                  {testLoading ? "PROBING..." : "PROBE PORT 10808"}
+                  {testLoading ? "TESTING..." : "TEST CONFIG"}
                 </button>
               </div>
 

@@ -12,6 +12,10 @@ import {
   LogEntry,
   RouteOptimizationResult,
   RunningProcessInfo,
+  SecondaryProfilePing,
+  SecondaryProxyProfile,
+  SecondaryProxySettings,
+  SecondarySubscriptionUpdate,
 } from "../types";
 
 export const api = {
@@ -92,6 +96,10 @@ export const api = {
     return invoke<string>("install_singbox_dependency");
   },
 
+  async ensureDependenciesAndCompleteSetup(): Promise<DependencyStatus> {
+    return invoke<DependencyStatus>("ensure_dependencies_and_complete_setup");
+  },
+
   async onDependencyProgress(callback: (progress: DownloadProgress) => void): Promise<UnlistenFn> {
     return listen<DownloadProgress>("dependency-progress", (event) => {
       callback(event.payload);
@@ -99,8 +107,16 @@ export const api = {
   },
 
   // Proxy Connectivity Probes
-  async testSecondaryProxy(): Promise<CloudflareTrace> {
-    return invoke<CloudflareTrace>("test_secondary_proxy");
+  async testSecondaryProxy(settings: SecondaryProxySettings): Promise<CloudflareTrace> {
+    return invoke<CloudflareTrace>("test_secondary_proxy", { settings });
+  },
+
+  async updateSecondarySubscription(subscriptionUrl: string): Promise<SecondarySubscriptionUpdate> {
+    return invoke<SecondarySubscriptionUpdate>("update_secondary_subscription", { subscriptionUrl });
+  },
+
+  async pingSecondaryProfiles(profiles: SecondaryProxyProfile[]): Promise<SecondaryProfilePing[]> {
+    return invoke<SecondaryProfilePing[]>("ping_secondary_profiles", { profiles });
   },
 
   async testAetherProxy(): Promise<CloudflareTrace> {

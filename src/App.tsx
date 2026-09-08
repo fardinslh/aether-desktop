@@ -30,6 +30,7 @@ export function App() {
     triggerFindFasterGateway,
     triggerDisconnect,
     refreshAll,
+    resetSettings,
   } = useAppStore();
 
   const [activeTab, setActiveTab] = useState<NavTab>("dashboard");
@@ -121,9 +122,8 @@ export function App() {
           <SettingsView
             settings={settings}
             onSave={updateSettings}
-            onReset={async () => {
-              await refreshAll();
-            }}
+            onReset={resetSettings}
+            errorDetails={errorDetails}
           />
         )}
 
