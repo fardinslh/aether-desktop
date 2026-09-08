@@ -1,6 +1,9 @@
+#[cfg(windows)]
 use std::ffi::OsString;
+#[cfg(windows)]
 use std::os::windows::ffi::OsStringExt;
 
+#[cfg(windows)]
 #[repr(C)]
 #[allow(non_snake_case)]
 struct OPENFILENAMEW {

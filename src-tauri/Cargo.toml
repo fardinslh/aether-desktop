@@ -8,7 +8,7 @@ default-run = "aether-desktop"
 
 [lib]
 name = "aether_desktop_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["lib"]
 
 [[bin]]
 name = "aether-desktop"
@@ -26,7 +26,7 @@ path = "src/bin/test_generator.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2.2.4", features = ["tray-icon"] }
+tauri = { version = "2.2.4", features = [] }
 tauri-plugin-opener = "2.2.5"
 tauri-plugin-dialog = "2"
 serde = { version = "1.0", features = ["derive"] }
@@ -63,6 +63,9 @@ windows-sys = { version = "0.59", features = [
     "Win32_Networking_WinSock",
     "Win32_Storage_FileSystem"
 ] }
+
+[target.'cfg(any(windows, target_os = "macos", target_os = "linux"))'.dependencies]
+tauri = { version = "2.2.4", features = ["tray-icon"] }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

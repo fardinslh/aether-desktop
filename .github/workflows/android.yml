@@ -25,11 +25,11 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: 'npm'
 
       - name: Setup Java JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
@@ -58,6 +58,7 @@ jobs:
 
       - name: Initialize Tauri Android Target (if needed)
         run: |
+          sed -i 's/crate-type = \["lib"\]/crate-type = ["staticlib", "cdylib", "rlib"]/' src-tauri/Cargo.toml
           if [ ! -d "src-tauri/gen/android" ]; then
             echo "Initializing Tauri Android target..."
             npx tauri android init --ci

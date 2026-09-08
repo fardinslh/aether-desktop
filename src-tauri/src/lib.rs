@@ -84,54 +84,58 @@ pub fn run() {
         .setup(move |app| {
             orchestrator_setup.set_app_handle(app.handle().clone());
 
-            let show_item = tauri::menu::MenuItem::with_id(
-                app,
-                "show",
-                "Show Aether Desktop",
-                true,
-                None::<&str>,
-            )?;
-            let quit_item = tauri::menu::MenuItem::with_id(
-                app,
-                "quit",
-                "Exit Aether Desktop",
-                true,
-                None::<&str>,
-            )?;
-            let tray_menu = tauri::menu::Menu::with_items(app, &[&show_item, &quit_item])?;
-            let mut tray = tauri::tray::TrayIconBuilder::new()
-                .tooltip("Aether Desktop")
-                .menu(&tray_menu)
-                .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| match event.id().as_ref() {
-                    "show" => {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
+            #[cfg(desktop)]
+            {
+                let show_item = tauri::menu::MenuItem::with_id(
+                    app,
+                    "show",
+                    "Show Aether Desktop",
+                    true,
+                    None::<&str>,
+                )?;
+                let quit_item = tauri::menu::MenuItem::with_id(
+                    app,
+                    "quit",
+                    "Exit Aether Desktop",
+                    true,
+                    None::<&str>,
+                )?;
+                let tray_menu = tauri::menu::Menu::with_items(app, &[&show_item, &quit_item])?;
+                let mut tray = tauri::tray::TrayIconBuilder::new()
+                    .tooltip("Aether Desktop")
+                    .menu(&tray_menu)
+                    .show_menu_on_left_click(false)
+                    .on_menu_event(|app, event| match event.id().as_ref() {
+                        "show" => {
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
                         }
-                    }
-                    "quit" => app.exit(0),
-                    _ => {}
-                })
-                .on_tray_icon_event(|tray, event| {
-                    if let tauri::tray::TrayIconEvent::DoubleClick {
-                        button: tauri::tray::MouseButton::Left,
-                        ..
-                    } = event
-                    {
-                        let app = tray.app_handle();
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
+                        "quit" => app.exit(0),
+                        _ => {}
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        if let tauri::tray::TrayIconEvent::DoubleClick {
+                            button: tauri::tray::MouseButton::Left,
+                            ..
+                        } = event
+                        {
+                            let app = tray.app_handle();
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
                         }
-                    }
-                });
-            if let Some(icon) = app.default_window_icon() {
-                tray = tray.icon(icon.clone());
+                    });
+                if let Some(icon) = app.default_window_icon() {
+                    tray = tray.icon(icon.clone());
+                }
+                tray.build(app)?;
             }
-            tray.build(app)?;
 
             let settings = crate::settings::SettingsStorage::load();
+            #[cfg(desktop)]
             if settings.general.start_minimized {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.hide();
@@ -184,6 +188,7 @@ pub fn run() {
                 event: tauri::WindowEvent::CloseRequested { api, .. },
                 ..
             } => {
+                #[cfg(desktop)]
                 if crate::settings::SettingsStorage::load()
                     .general
                     .minimize_to_tray
@@ -192,9 +197,14 @@ pub fn run() {
                     if let Some(window) = app_handle.get_webview_window(&label) {
                         let _ = window.hide();
                     }
-                } else {
-                    orchestrator_exit.force_shutdown();
+                    return;
                 }
+                #[cfg(not(desktop))]
+                {
+                    let _ = label;
+                    let _ = api;
+                }
+                orchestrator_exit.force_shutdown();
             }
             tauri::RunEvent::WindowEvent {
                 event: tauri::WindowEvent::Destroyed,

@@ -1129,7 +1129,7 @@ impl HealthProber {
             .into_iter()
             .map(|(name, _)| DetectedAdapterInfo {
                 friendly_name: name.clone(),
-                description: name,
+                description: name.to_string(),
                 adapter_name: String::new(),
                 if_index: 0,
                 is_up: true,
