@@ -172,10 +172,11 @@ class AetherVpnService : VpnService() {
                     candidateMonitoringJob = launch {
                         try {
                             val reader = BufferedReader(InputStreamReader(proc.inputStream))
-                            var line: String?
+                            var line: String? = null
                             while (isActive && reader.readLine().also { line = it } != null) {
-                                line?.let { l ->
-                                    val parsed = parseCandidateFromLine(l)
+                                val currentLine = line
+                                if (currentLine != null) {
+                                    val parsed = parseCandidateFromLine(currentLine)
                                     if (parsed != null) {
                                         _vpnStatus.value = _vpnStatus.value.copy(
                                             huntingStatus = "Candidate: ${parsed.first} (${parsed.second} ms)",
