@@ -19,6 +19,14 @@ import {
 } from "../types";
 
 export const api = {
+  async getPlatform(): Promise<string> {
+    try {
+      return await invoke<string>("get_platform");
+    } catch {
+      return "unknown";
+    }
+  },
+
   // Settings & Configuration
   async getSettings(): Promise<AppSettings> {
     return invoke<AppSettings>("get_settings");

@@ -54,7 +54,7 @@ export const StatusOverview: React.FC<StatusOverviewProps> = ({ health, connecti
   ];
 
   return (
-    <div className="px-4 mt-2 select-none">
+    <div className="px-2 sm:px-4 mt-2 select-none">
       <div className="w-full bg-app-panel border border-app-border rounded-md p-2.5">
         <div className="flex items-center justify-between px-1 mb-2">
           <div className="text-[10px] font-mono font-semibold tracking-wider text-ink-400 uppercase flex items-center gap-1.5">

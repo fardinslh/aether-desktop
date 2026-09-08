@@ -84,6 +84,14 @@ pub fn run() {
         .setup(move |app| {
             orchestrator_setup.set_app_handle(app.handle().clone());
 
+            #[cfg(target_os = "android")]
+            {
+                if let Ok(data_dir) = app.path().app_data_dir() {
+                    std::env::set_var("AETHER_DESKTOP_CONFIG_DIR", &data_dir);
+                    let _ = std::fs::create_dir_all(&data_dir);
+                }
+            }
+
             #[cfg(desktop)]
             {
                 let show_item = tauri::menu::MenuItem::with_id(
@@ -150,7 +158,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-
+            commands::get_platform,
             commands::get_settings,
             commands::save_settings,
             commands::reset_settings,

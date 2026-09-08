@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { WindowTitleBar } from "./components/layout/WindowTitleBar";
 import { Navbar, NavTab } from "./components/layout/Navbar";
+import { MobileHeader } from "./components/layout/MobileHeader";
+import { MobileNavbar } from "./components/layout/MobileNavbar";
 import { ConnectionHero } from "./features/connection/ConnectionHero";
 import { StatusOverview } from "./features/connection/StatusOverview";
 import { ApplicationRoutingView } from "./features/routing/ApplicationRoutingView";
@@ -8,6 +10,7 @@ import { SettingsView } from "./features/settings/SettingsView";
 import { DiagnosticsView } from "./features/diagnostics/DiagnosticsView";
 import { FirstRunWizard } from "./features/wizard/FirstRunWizard";
 import { useAppStore } from "./stores/useAppStore";
+import { useIsMobile } from "./hooks/useIsMobile";
 import { ArrowRight } from "lucide-react";
 
 export function App() {
@@ -34,6 +37,7 @@ export function App() {
   } = useAppStore();
 
   const [activeTab, setActiveTab] = useState<NavTab>("dashboard");
+  const { isMobile } = useIsMobile();
 
   if (isLoading || !settings) {
     return (
@@ -50,10 +54,16 @@ export function App() {
 
   return (
     <div className="h-screen w-screen flex flex-col bg-app-bg text-ink-200 overflow-hidden font-sans select-none">
-      <WindowTitleBar connectionState={connectionState} />
-      <Navbar activeTab={activeTab} onSelectTab={setActiveTab} rulesCount={activeRulesCount} />
+      {isMobile ? (
+        <MobileHeader connectionState={connectionState} />
+      ) : (
+        <>
+          <WindowTitleBar connectionState={connectionState} />
+          <Navbar activeTab={activeTab} onSelectTab={setActiveTab} rulesCount={activeRulesCount} />
+        </>
+      )}
 
-      <main className="flex-1 overflow-hidden">
+      <main className={`flex-1 ${isMobile ? "overflow-y-auto pb-20" : "overflow-hidden"}`}>
         {activeTab === "dashboard" && (
           <div className="h-full flex flex-col justify-between overflow-y-auto pb-3">
             <ConnectionHero
@@ -132,7 +142,15 @@ export function App() {
         )}
       </main>
 
-      {!settings.firstRunCompleted && (
+      {isMobile && (
+        <MobileNavbar
+          activeTab={activeTab}
+          onSelectTab={setActiveTab}
+          rulesCount={activeRulesCount}
+        />
+      )}
+
+      {!isMobile && !settings.firstRunCompleted && (
         <FirstRunWizard
           settings={settings}
           onComplete={async (updated) => {

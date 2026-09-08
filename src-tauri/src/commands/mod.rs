@@ -797,19 +797,55 @@ pub fn save_exported_logs(path: String, state: State<'_, AppState>) -> Result<()
 }
 
 #[tauri::command]
-pub fn validate_binaries() -> Result<BinaryValidationResult, String> {
-    let settings = SettingsStorage::load();
-    let aether_exists = !settings.aether.executable_path.is_empty()
-        && Path::new(&settings.aether.executable_path).exists();
-    let singbox_exists = !settings.sing_box.executable_path.is_empty()
-        && Path::new(&settings.sing_box.executable_path).exists();
+pub fn get_platform() -> String {
+    #[cfg(target_os = "android")]
+    {
+        "android".to_string()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        "windows".to_string()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        "macos".to_string()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        "linux".to_string()
+    }
+    #[cfg(not(any(target_os = "android", target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        "unknown".to_string()
+    }
+}
 
-    Ok(BinaryValidationResult {
-        aether_exists,
-        aether_path: settings.aether.executable_path,
-        singbox_exists,
-        singbox_path: settings.sing_box.executable_path,
-    })
+#[tauri::command]
+pub fn validate_binaries() -> Result<BinaryValidationResult, String> {
+    #[cfg(target_os = "android")]
+    {
+        return Ok(BinaryValidationResult {
+            aether_exists: true,
+            aether_path: "internal://android-vpn".to_string(),
+            singbox_exists: true,
+            singbox_path: "internal://android-box".to_string(),
+        });
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let settings = SettingsStorage::load();
+        let aether_exists = !settings.aether.executable_path.is_empty()
+            && Path::new(&settings.aether.executable_path).exists();
+        let singbox_exists = !settings.sing_box.executable_path.is_empty()
+            && Path::new(&settings.sing_box.executable_path).exists();
+
+        Ok(BinaryValidationResult {
+            aether_exists,
+            aether_path: settings.aether.executable_path,
+            singbox_exists,
+            singbox_path: settings.sing_box.executable_path,
+        })
+    }
 }
 
 #[tauri::command]
@@ -831,32 +867,43 @@ pub async fn install_singbox_dependency(app: AppHandle) -> Result<String, String
 pub async fn ensure_dependencies_and_complete_setup(
     app: AppHandle,
 ) -> Result<DependencyStatus, String> {
-    // 1. Check with discovery
-    let mut status = DependencyManager::check_status();
-
-    // 2. Install Aether if missing
-    if !status.aether_installed {
-        DependencyManager::install_aether(Some(&app)).await?;
-        status = DependencyManager::check_status();
+    #[cfg(target_os = "android")]
+    {
+        let _ = app;
+        let mut settings = SettingsStorage::load();
+        settings.first_run_completed = true;
+        let _ = SettingsStorage::save(&settings);
+        return Ok(DependencyManager::check_status());
     }
+    #[cfg(not(target_os = "android"))]
+    {
+        // 1. Check with discovery
+        let mut status = DependencyManager::check_status();
 
-    // 3. Install sing-box if missing
-    if !status.singbox_installed {
-        DependencyManager::install_singbox(Some(&app)).await?;
-        status = DependencyManager::check_status();
+        // 2. Install Aether if missing
+        if !status.aether_installed {
+            DependencyManager::install_aether(Some(&app)).await?;
+            status = DependencyManager::check_status();
+        }
+
+        // 3. Install sing-box if missing
+        if !status.singbox_installed {
+            DependencyManager::install_singbox(Some(&app)).await?;
+            status = DependencyManager::check_status();
+        }
+
+        // 4. Verify both are installed
+        if !status.aether_installed || !status.singbox_installed {
+            return Err("One or more core engines failed validation after installation.".to_string());
+        }
+
+        // 5. Mark first run completed and persist
+        let mut settings = SettingsStorage::load();
+        settings.first_run_completed = true;
+        SettingsStorage::save(&settings)?;
+
+        Ok(status)
     }
-
-    // 4. Verify both are installed
-    if !status.aether_installed || !status.singbox_installed {
-        return Err("One or more core engines failed validation after installation.".to_string());
-    }
-
-    // 5. Mark first run completed and persist
-    let mut settings = SettingsStorage::load();
-    settings.first_run_completed = true;
-    SettingsStorage::save(&settings)?;
-
-    Ok(status)
 }
 
 #[tauri::command]

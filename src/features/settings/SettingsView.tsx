@@ -166,9 +166,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, onSave, on
   };
 
   return (
-    <div className="flex flex-col h-full px-4 py-2.5 space-y-2.5 select-none">
+    <div className="flex flex-col h-full px-2 sm:px-4 py-2 sm:py-2.5 space-y-2.5 select-none">
       {/* Settings Top Bar */}
-      <div className="flex items-center justify-between bg-app-panel border border-app-border rounded-md p-3">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 bg-app-panel border border-app-border rounded-md p-3">
         <div>
           <h2 className="text-xs font-bold tracking-wider uppercase text-ink-100 font-mono">
             ENGINE CONFIGURATION & SUBSYSTEMS
@@ -178,7 +178,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, onSave, on
           </p>
         </div>
 
-        <div className="flex items-center gap-2 font-mono">
+        <div className="flex items-center gap-2 font-mono self-end sm:self-auto">
           <button
             onClick={handleReset}
             disabled={isSaving}
@@ -205,7 +205,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, onSave, on
       )}
 
       {/* Configuration Subsystem Tabs */}
-      <div className="flex border-b border-app-border gap-1 font-mono text-xs">
+      <div className="flex border-b border-app-border gap-1 font-mono text-xs overflow-x-auto whitespace-nowrap scrollbar-none pb-0.5">
         {[
           { id: "general", label: "GENERAL", icon: Sliders },
           { id: "aether", label: "AETHER DAEMON", icon: Radio },
@@ -219,7 +219,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, onSave, on
             <button
               key={t.id}
               onClick={() => setActiveTab(t.id as any)}
-              className={`flex items-center gap-1.5 px-3 pb-2 border-b-2 transition-all cursor-pointer text-[11px] ${
+              className={`flex items-center gap-1.5 px-3 pb-2 border-b-2 transition-all cursor-pointer text-[11px] shrink-0 ${
                 isActive
                   ? "border-signal-cyan text-signal-cyan font-bold"
                   : "border-transparent text-ink-400 hover:text-ink-200"
@@ -232,7 +232,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, onSave, on
         })}
       </div>
 
-      <div className="flex-1 overflow-y-auto rounded-md border border-app-border bg-app-panel p-4 space-y-3.5 max-h-[380px]">
+      <div className="flex-1 min-h-0 overflow-y-auto rounded-md border border-app-border bg-app-panel p-3 sm:p-4 space-y-3.5">
         {activeTab === "general" && (
           <div className="space-y-2.5 font-sans">
             <div className="flex items-center justify-between p-3 rounded-sm bg-app-surface border border-app-border">

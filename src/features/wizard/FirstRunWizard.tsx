@@ -71,6 +71,15 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({
   };
 
   useEffect(() => {
+    api.getPlatform().then((p) => {
+      if (p === "android") {
+        onComplete({
+          ...currentSettings,
+          firstRunCompleted: true,
+        });
+      }
+    });
+
     refreshDependencies();
 
     let unlisten: (() => void) | undefined;

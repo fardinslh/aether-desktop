@@ -149,18 +149,18 @@ export const ConnectionHero: React.FC<ConnectionHeroProps> = ({
   };
 
   return (
-    <div className="flex flex-col items-center px-4 pt-2 pb-1 select-none">
+    <div className="flex flex-col items-center px-2 sm:px-4 pt-1 sm:pt-2 pb-1 select-none">
       {/* Precision Routing Topology Display */}
-      <div className="w-full max-w-xl bg-app-panel border border-app-border rounded-md p-4 flex flex-col items-center relative overflow-hidden shadow-sm">
+      <div className="w-full max-w-xl bg-app-panel border border-app-border rounded-md p-3 sm:p-4 flex flex-col items-center relative overflow-hidden shadow-sm">
         {/* Subtle background rail line */}
         <div className="absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r from-transparent via-app-border to-transparent" />
 
         {/* Top: Public Gateway Node with Find Faster Gateway Trigger */}
-        <div className="w-full flex items-center justify-between px-3 py-1.5 rounded-sm bg-app-inset border border-app-border-subtle text-xs font-mono mb-3">
-          <div className="flex items-center gap-2">
+        <div className="w-full flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-3 py-2 sm:py-1.5 rounded-sm bg-app-inset border border-app-border-subtle text-xs font-mono mb-3">
+          <div className="flex items-center gap-2 flex-wrap">
             <Globe className={`w-3.5 h-3.5 ${isConnected ? "text-signal-green" : isTransitioning ? "text-signal-cyan animate-pulse" : "text-ink-400"}`} />
-            <span className="text-ink-300 uppercase tracking-wide text-[11px] font-medium">WAN Gateway:</span>
-            <span className={`text-[11px] ${isConnected ? "text-signal-green font-semibold" : "text-ink-400"}`}>
+            <span className="text-ink-300 uppercase tracking-wide text-[11px] font-medium">WAN:</span>
+            <span className={`text-[11px] truncate max-w-[200px] ${isConnected ? "text-signal-green font-semibold" : "text-ink-400"}`}>
               {isConnected && health?.cloudflareTrace
                 ? `${health.cloudflareTrace.ip} (${health.cloudflareTrace.colo})`
                 : isTransitioning
@@ -169,7 +169,7 @@ export const ConnectionHero: React.FC<ConnectionHeroProps> = ({
             </span>
           </div>
 
-          <div className="flex items-center gap-2.5 text-[11px]">
+          <div className="flex items-center justify-between sm:justify-end gap-2 text-[11px]">
             {isConnected && health?.cloudflareTrace?.latencyMs !== undefined && (
               <span className="text-signal-green flex items-center gap-1">
                 <Activity className="w-3 h-3" />
@@ -181,17 +181,17 @@ export const ConnectionHero: React.FC<ConnectionHeroProps> = ({
             <button
               onClick={handleOptimizeClick}
               disabled={isTransitioning || isOptimizing}
-              className="flex items-center gap-1 px-2 py-0.5 rounded-xs bg-app-surface hover:bg-app-panel border border-app-border hover:border-signal-cyan/60 text-ink-200 hover:text-signal-cyan text-[10px] font-mono transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+              className="flex items-center gap-1 px-2 py-1 sm:py-0.5 rounded-xs bg-app-surface hover:bg-app-panel border border-app-border hover:border-signal-cyan/60 text-ink-200 hover:text-signal-cyan text-[10px] font-mono transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
               title={isConnected ? "Perform a fresh Thorough sweep for a lower latency gateway" : "Connect using a fresh Thorough candidate sweep"}
             >
               <Zap className={`w-3 h-3 ${isOptimizing ? "animate-pulse text-signal-cyan" : "text-signal-cyan"}`} />
-              <span>{isConnected ? "Find Faster Gateway" : "Find Best Gateway"}</span>
+              <span>{isConnected ? "Optimize" : "Find Best"}</span>
             </button>
 
-            <span className="flex items-center gap-1.5 ml-1">
+            <span className="flex items-center gap-1 ml-0.5">
               <span className={`w-1.5 h-1.5 rounded-full ${isConnected ? "bg-signal-green" : isTransitioning ? "bg-signal-cyan animate-pulse" : "bg-ink-500"}`} />
               <span className="text-ink-400 font-sans text-[10px] uppercase">
-                {isConnected ? "Active" : isTransitioning ? "Syncing" : "Standby"}
+                {isConnected ? "Active" : isTransitioning ? "Sync" : "Standby"}
               </span>
             </span>
           </div>

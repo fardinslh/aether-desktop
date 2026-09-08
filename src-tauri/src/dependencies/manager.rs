@@ -42,6 +42,11 @@ impl DependencyManager {
         if let Some(path) = std::env::var_os("AETHER_DESKTOP_CONFIG_DIR") {
             return PathBuf::from(path).join("dependencies");
         }
+        #[cfg(target_os = "android")]
+        {
+            return SettingsStorage::get_config_dir().join("dependencies");
+        }
+        #[cfg(not(target_os = "android"))]
         directories::BaseDirs::new()
             .map(|b| {
                 b.data_local_dir()
@@ -362,60 +367,81 @@ impl DependencyManager {
     }
 
     pub fn check_status() -> DependencyStatus {
-        let mut settings = SettingsStorage::load();
-        let mut settings_modified = false;
-
-        let (aether_path, aether_installed, aether_version) =
-            match Self::discover_aether_binary(&settings.aether.executable_path) {
-                Some((path, ver)) => {
-                    let path_str = path.to_string_lossy().to_string();
-                    if settings.aether.executable_path != path_str {
-                        settings.aether.executable_path = path_str.clone();
-                        settings_modified = true;
-                    }
-                    (path_str, true, Some(ver))
-                }
-                None => (settings.aether.executable_path.clone(), false, None),
+        #[cfg(target_os = "android")]
+        {
+            return DependencyStatus {
+                aether_installed: true,
+                aether_path: "internal://android-vpn".to_string(),
+                aether_version: Some("v1.9.0-android".to_string()),
+                singbox_installed: true,
+                singbox_path: "internal://android-box".to_string(),
+                singbox_version: Some("v1.14.0-android".to_string()),
             };
-
-        let (singbox_path, singbox_installed, singbox_version) =
-            match Self::discover_singbox_binary(&settings.sing_box.executable_path) {
-                Some((path, ver)) => {
-                    let path_str = path.to_string_lossy().to_string();
-                    if settings.sing_box.executable_path != path_str {
-                        settings.sing_box.executable_path = path_str.clone();
-                        settings_modified = true;
-                    }
-                    (path_str, true, Some(ver))
-                }
-                None => (settings.sing_box.executable_path.clone(), false, None),
-            };
-
-        if settings_modified {
-            let _ = SettingsStorage::save(&settings);
         }
+        #[cfg(not(target_os = "android"))]
+        {
+            let mut settings = SettingsStorage::load();
+            let mut settings_modified = false;
 
-        DependencyStatus {
-            aether_installed,
-            aether_path,
-            aether_version,
-            singbox_installed,
-            singbox_path,
-            singbox_version,
+            let (aether_path, aether_installed, aether_version) =
+                match Self::discover_aether_binary(&settings.aether.executable_path) {
+                    Some((path, ver)) => {
+                        let path_str = path.to_string_lossy().to_string();
+                        if settings.aether.executable_path != path_str {
+                            settings.aether.executable_path = path_str.clone();
+                            settings_modified = true;
+                        }
+                        (path_str, true, Some(ver))
+                    }
+                    None => (settings.aether.executable_path.clone(), false, None),
+                };
+
+            let (singbox_path, singbox_installed, singbox_version) =
+                match Self::discover_singbox_binary(&settings.sing_box.executable_path) {
+                    Some((path, ver)) => {
+                        let path_str = path.to_string_lossy().to_string();
+                        if settings.sing_box.executable_path != path_str {
+                            settings.sing_box.executable_path = path_str.clone();
+                            settings_modified = true;
+                        }
+                        (path_str, true, Some(ver))
+                    }
+                    None => (settings.sing_box.executable_path.clone(), false, None),
+                };
+
+            if settings_modified {
+                let _ = SettingsStorage::save(&settings);
+            }
+
+            DependencyStatus {
+                aether_installed,
+                aether_path,
+                aether_version,
+                singbox_installed,
+                singbox_path,
+                singbox_version,
+            }
         }
     }
 
     pub async fn install_aether(app: Option<&AppHandle>) -> Result<String, String> {
-        Self::emit_progress(
-            app,
-            "aether",
-            "Resolving latest release from GitHub...",
-            0,
-            0,
-            0,
-        );
+        #[cfg(target_os = "android")]
+        {
+            let _ = app;
+            return Ok("Android runtime uses embedded mobile engine".to_string());
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            Self::emit_progress(
+                app,
+                "aether",
+                "Resolving latest release from GitHub...",
+                0,
+                0,
+                0,
+            );
 
-        let release = GithubClient::fetch_latest_release("CluvexStudio/Aether").await?;
+            let release = GithubClient::fetch_latest_release("CluvexStudio/Aether").await?;
         let asset = GithubClient::find_aether_asset(&release)?;
 
         if asset.size > MAX_ARCHIVE_BYTES {
@@ -583,21 +609,29 @@ impl DependencyManager {
             asset.size,
             asset.size,
         );
-        Ok(exe_str)
+            Ok(exe_str)
+        }
     }
 
     pub async fn install_singbox(app: Option<&AppHandle>) -> Result<String, String> {
-        Self::emit_progress(
-            app,
-            "sing-box",
-            "Resolving latest release from GitHub...",
-            0,
-            0,
-            0,
-        );
+        #[cfg(target_os = "android")]
+        {
+            let _ = app;
+            return Ok("Android runtime uses embedded mobile engine".to_string());
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            Self::emit_progress(
+                app,
+                "sing-box",
+                "Resolving latest release from GitHub...",
+                0,
+                0,
+                0,
+            );
 
-        let release = GithubClient::fetch_latest_release("SagerNet/sing-box").await?;
-        let asset = GithubClient::find_singbox_asset(&release)?;
+            let release = GithubClient::fetch_latest_release("SagerNet/sing-box").await?;
+            let asset = GithubClient::find_singbox_asset(&release)?;
 
         if asset.size > MAX_ARCHIVE_BYTES {
             return Err(format!(
@@ -764,7 +798,8 @@ impl DependencyManager {
             asset.size,
             asset.size,
         );
-        Ok(exe_str)
+            Ok(exe_str)
+        }
     }
 
     /// Safely promotes a staging directory to final target directory without destroying the previous installation.

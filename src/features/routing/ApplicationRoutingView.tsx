@@ -51,9 +51,9 @@ export const ApplicationRoutingView: React.FC<ApplicationRoutingViewProps> = ({
   });
 
   return (
-    <div className="flex flex-col h-full space-y-2.5 px-4 py-2.5 select-none">
+    <div className="flex flex-col h-full space-y-2.5 px-2 sm:px-4 py-2 sm:py-2.5 select-none">
       {/* Header Bar */}
-      <div className="flex items-center justify-between gap-3 bg-app-panel border border-app-border rounded-md p-3">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 bg-app-panel border border-app-border rounded-md p-3">
         <div>
           <div className="flex items-center gap-2">
             <h2 className="text-xs font-bold tracking-wider uppercase text-ink-100 font-mono">
@@ -62,7 +62,7 @@ export const ApplicationRoutingView: React.FC<ApplicationRoutingViewProps> = ({
             {isApplying && (
               <span className="inline-flex items-center gap-1.5 px-2 py-0.2 rounded-xs text-[10px] font-mono bg-signal-cyan-dim text-signal-cyan border border-signal-cyan/30 animate-pulse">
                 <RefreshCw className="w-2.5 h-2.5 animate-spin" />
-                <span>Applying Routing Stack...</span>
+                <span>Applying...</span>
               </span>
             )}
           </div>
@@ -73,7 +73,7 @@ export const ApplicationRoutingView: React.FC<ApplicationRoutingViewProps> = ({
 
         <button
           onClick={() => setIsAddModalOpen(true)}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-sm bg-signal-cyan hover:bg-signal-cyan-muted text-black text-xs font-bold transition-all shadow-sm cursor-pointer flex-shrink-0"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-sm bg-signal-cyan hover:bg-signal-cyan-muted text-black text-xs font-bold transition-all shadow-sm cursor-pointer flex-shrink-0 self-end sm:self-auto"
         >
           <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
           <span>Add Process</span>
@@ -82,10 +82,10 @@ export const ApplicationRoutingView: React.FC<ApplicationRoutingViewProps> = ({
 
       {/* Filter and Search Bar */}
       <div className="flex flex-wrap items-center justify-between gap-2 bg-app-panel border border-app-border rounded-md p-2">
-        <div className="flex items-center gap-1 bg-app-inset p-0.5 rounded-sm border border-app-border-subtle">
+        <div className="flex items-center gap-1 bg-app-inset p-0.5 rounded-sm border border-app-border-subtle overflow-x-auto whitespace-nowrap scrollbar-none max-w-full">
           {(
             [
-              { id: "all", label: `All Routes (${rules.length})` },
+              { id: "all", label: `All (${rules.length})` },
               {
                 id: "secondaryProxy",
                 label: `Secondary (${rules.filter((r) => (r.destination || r.route) === "secondaryProxy").length})`,
@@ -103,7 +103,7 @@ export const ApplicationRoutingView: React.FC<ApplicationRoutingViewProps> = ({
             <button
               key={t.id}
               onClick={() => setActiveTab(t.id)}
-              className={`px-2 py-1 text-[11px] font-mono rounded-xs transition-all cursor-pointer ${
+              className={`px-2 py-1 text-[11px] font-mono rounded-xs transition-all cursor-pointer shrink-0 ${
                 activeTab === t.id
                   ? "bg-app-surface text-ink-100 border border-app-border font-semibold shadow-sm"
                   : "text-ink-400 hover:text-ink-200 border border-transparent"
@@ -114,8 +114,8 @@ export const ApplicationRoutingView: React.FC<ApplicationRoutingViewProps> = ({
           ))}
         </div>
 
-        <div className="relative w-56">
-          <Search className="w-3.5 h-3.5 absolute left-2.5 top-2 text-ink-400" />
+        <div className="relative flex-1 min-w-[140px] max-w-xs">
+          <Search className="w-3.5 h-3.5 text-ink-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
           <input
             type="text"
             placeholder="Filter process or app name..."
@@ -127,7 +127,7 @@ export const ApplicationRoutingView: React.FC<ApplicationRoutingViewProps> = ({
       </div>
 
       {/* Rule List Matrix Container */}
-      <div className="flex-1 overflow-y-auto rounded-md border border-app-border bg-app-panel divide-y divide-app-border-subtle max-h-[380px]">
+      <div className="flex-1 min-h-0 overflow-y-auto rounded-md border border-app-border bg-app-panel divide-y divide-app-border-subtle">
         {filteredRules.length === 0 ? (
           <div className="p-8 text-center text-ink-400 text-xs font-mono flex flex-col items-center justify-center space-y-2">
             <div>No matching application process rules found.</div>

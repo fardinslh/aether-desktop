@@ -110,6 +110,19 @@ impl SettingsStorage {
         if let Some(path) = std::env::var_os("AETHER_DESKTOP_CONFIG_DIR") {
             return PathBuf::from(path);
         }
+        #[cfg(target_os = "android")]
+        {
+            let android_files = PathBuf::from("/data/data/com.aether.desktop/files");
+            if android_files.exists() {
+                return android_files;
+            }
+            let user_files = PathBuf::from("/data/user/0/com.aether.desktop/files");
+            if user_files.exists() {
+                return user_files;
+            }
+            return PathBuf::from("/data/local/tmp");
+        }
+        #[cfg(not(target_os = "android"))]
         directories::BaseDirs::new()
             .map(|b| b.config_dir().join("AetherDesktop"))
             .unwrap_or_else(|| PathBuf::from("./config"))
@@ -119,6 +132,11 @@ impl SettingsStorage {
         if let Some(path) = std::env::var_os("AETHER_DESKTOP_CONFIG_DIR") {
             return PathBuf::from(path).join("aether");
         }
+        #[cfg(target_os = "android")]
+        {
+            return Self::get_config_dir().join("aether");
+        }
+        #[cfg(not(target_os = "android"))]
         directories::BaseDirs::new()
             .map(|b| b.data_local_dir().join("AetherDesktop").join("aether"))
             .unwrap_or_else(|| PathBuf::from("./aether_data"))
@@ -199,10 +217,28 @@ impl SettingsStorage {
                             None => false,
                         };
 
-                        // If any core binary is missing or invalid on disk, first run is NOT completed
-                        if (!aether_valid || !singbox_valid) && settings.first_run_completed {
-                            settings.first_run_completed = false;
-                            needs_migration = true;
+                        #[cfg(not(target_os = "android"))]
+                        {
+                            // If any core binary is missing or invalid on disk, first run is NOT completed
+                            if (!aether_valid || !singbox_valid) && settings.first_run_completed {
+                                settings.first_run_completed = false;
+                                needs_migration = true;
+                            }
+                        }
+                        #[cfg(target_os = "android")]
+                        {
+                            if !settings.first_run_completed {
+                                settings.first_run_completed = true;
+                                needs_migration = true;
+                            }
+                            if settings.aether.executable_path.is_empty() {
+                                settings.aether.executable_path = "internal://android-vpn".to_string();
+                                needs_migration = true;
+                            }
+                            if settings.sing_box.executable_path.is_empty() {
+                                settings.sing_box.executable_path = "internal://android-box".to_string();
+                                needs_migration = true;
+                            }
                         }
 
                         if needs_migration {
@@ -223,11 +259,20 @@ impl SettingsStorage {
             }
         } else {
             let mut defaults = AppSettings::default();
-            if let Some((p, _)) = crate::dependencies::DependencyManager::discover_aether_binary("") {
-                defaults.aether.executable_path = p.to_string_lossy().to_string();
+            #[cfg(target_os = "android")]
+            {
+                defaults.first_run_completed = true;
+                defaults.aether.executable_path = "internal://android-vpn".to_string();
+                defaults.sing_box.executable_path = "internal://android-box".to_string();
             }
-            if let Some((p, _)) = crate::dependencies::DependencyManager::discover_singbox_binary("") {
-                defaults.sing_box.executable_path = p.to_string_lossy().to_string();
+            #[cfg(not(target_os = "android"))]
+            {
+                if let Some((p, _)) = crate::dependencies::DependencyManager::discover_aether_binary("") {
+                    defaults.aether.executable_path = p.to_string_lossy().to_string();
+                }
+                if let Some((p, _)) = crate::dependencies::DependencyManager::discover_singbox_binary("") {
+                    defaults.sing_box.executable_path = p.to_string_lossy().to_string();
+                }
             }
             let _ = Self::save(&defaults);
             defaults
