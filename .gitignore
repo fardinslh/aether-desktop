@@ -58,3 +58,7 @@ android/app/build/
 android/keystore.properties
 *.jks
 *.keystore
+
+# Local release staging (artifacts live in GitHub Releases)
+release-staging/
+
