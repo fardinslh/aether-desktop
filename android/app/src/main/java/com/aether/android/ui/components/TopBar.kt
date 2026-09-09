@@ -22,7 +22,8 @@ fun TopBar(
 ) {
     val (statusText, statusColor, statusBg) = when (state) {
         VpnState.CONNECTED -> Triple("CONNECTED", StatusGreen, StatusGreenGlow)
-        VpnState.CONNECTING, VpnState.RECONNECTING -> Triple("CONNECTING", StatusAmber, StatusAmber.copy(alpha = 0.2f))
+        VpnState.CONNECTING -> Triple("CONNECTING", StatusAmber, StatusAmber.copy(alpha = 0.2f))
+        VpnState.RECONNECTING -> Triple("RECONNECTING", StatusAmber, StatusAmber.copy(alpha = 0.2f))
         VpnState.DISCONNECTED -> Triple("STANDBY", StatusSlate, SurfaceVariantDark)
         VpnState.ERROR -> Triple("ERROR", StatusRed, StatusRed.copy(alpha = 0.2f))
     }
