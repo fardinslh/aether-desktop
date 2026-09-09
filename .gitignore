@@ -51,3 +51,10 @@ dist-android/
 logs/
 config.json
 sing-box-config.json
+# Android local build state
+android/local.properties
+android/.gradle/
+android/app/build/
+android/keystore.properties
+*.jks
+*.keystore
