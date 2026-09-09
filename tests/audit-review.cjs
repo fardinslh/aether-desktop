@@ -110,6 +110,7 @@ function descendants(node) {
   const app = harness('src/App.tsx', {
     './stores/useAppStore': { useAppStore: () => ({ settings: { ...settings, firstRunCompleted: true }, resetSettings: async () => { resetCalls++; return settings; } }) },
     './features/settings/SettingsView': { SettingsView: 'SettingsView' },
+    './hooks/useIsMobile': { useIsMobile: () => ({ isMobile: false }) },
   });
   app.slots[0] = 'settings';
   const appTree = app.render(() => app.exports.App());
