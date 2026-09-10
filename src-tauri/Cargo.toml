@@ -14,13 +14,18 @@ crate-type = ["lib"]
 name = "aether-desktop"
 path = "src/main.rs"
 
+# Dev/diagnostic binaries. Gated behind the dev-bins feature so release
+# bundling (tauri build) never ships them to end users; build locally with
+# `cargo run --features dev-bins --bin test_generator`.
 [[bin]]
 name = "dump_config"
 path = "src/bin/dump_config.rs"
+required-features = ["dev-bins"]
 
 [[bin]]
 name = "test_generator"
 path = "src/bin/test_generator.rs"
+required-features = ["dev-bins"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -70,3 +75,4 @@ tauri = { version = "2.2.4", features = ["tray-icon"] }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
+dev-bins = []

@@ -24,6 +24,38 @@
     File /oname=libcronet.dll "..\..\..\..\..\runtime\libcronet.dll"
   !endif
 
+  ; 1b. Runtime DLLs required by the gnullvm-built application binary.
+  ;     libunwind.dll: Rust x86_64-pc-windows-gnullvm runtime dependency.
+  ;     WebView2Loader.dll: dynamically loaded by wry on non-MSVC toolchains.
+  ;     Without these the installed app dies at process start with
+  ;     "DLL not found" on any machine without a Rust/LLVM-MinGW dev PATH.
+  !if /FileExists "E:\MyProjects\aether-desktop\src-tauri\target\release\libunwind.dll"
+    SetOutPath "$INSTDIR"
+    File /oname=libunwind.dll "E:\MyProjects\aether-desktop\src-tauri\target\release\libunwind.dll"
+  !else if /FileExists "..\..\..\libunwind.dll"
+    SetOutPath "$INSTDIR"
+    File /oname=libunwind.dll "..\..\..\libunwind.dll"
+  !endif
+
+  !if /FileExists "E:\MyProjects\aether-desktop\src-tauri\target\release\WebView2Loader.dll"
+    SetOutPath "$INSTDIR"
+    File /oname=WebView2Loader.dll "E:\MyProjects\aether-desktop\src-tauri\target\release\WebView2Loader.dll"
+  !else if /FileExists "..\..\..\WebView2Loader.dll"
+    SetOutPath "$INSTDIR"
+    File /oname=WebView2Loader.dll "..\..\..\WebView2Loader.dll"
+  !endif
+
+  IfFileExists "$INSTDIR\libunwind.dll" check_wv2 0
+    DetailPrint "FATAL: libunwind.dll was not staged into the installer."
+    MessageBox MB_ICONSTOP "Installer is incomplete: libunwind.dll is missing. The application would not start. Please report this build."
+    Abort
+  check_wv2:
+  IfFileExists "$INSTDIR\WebView2Loader.dll" done_rt 0
+    DetailPrint "FATAL: WebView2Loader.dll was not staged into the installer."
+    MessageBox MB_ICONSTOP "Installer is incomplete: WebView2Loader.dll is missing. The application would not start. Please report this build."
+    Abort
+  done_rt:
+
   ; 2. Runtime fallback: verify dependencies exist in $INSTDIR; if missing, run download script
   IfFileExists "$INSTDIR\aether.exe" check_sb 0
     Goto run_fallback
