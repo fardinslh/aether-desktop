@@ -36,6 +36,21 @@ pub struct DependencyStatus {
     pub singbox_version: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DependencyUpdateInfo {
+    pub aether_update_available: bool,
+    pub aether_current_version: Option<String>,
+    pub aether_latest_version: String,
+    pub singbox_update_available: bool,
+    pub singbox_current_version: Option<String>,
+    pub singbox_latest_version: String,
+    pub app_update_available: bool,
+    pub app_current_version: String,
+    pub app_latest_version: String,
+    pub app_release_url: Option<String>,
+}
+
 pub struct DependencyManager;
 
 impl DependencyManager {
@@ -422,6 +437,139 @@ impl DependencyManager {
                 singbox_path,
                 singbox_version,
             }
+        }
+    }
+
+    pub fn parse_version_tuple(s: &str) -> Option<Vec<u64>> {
+        let cleaned: String = s
+            .chars()
+            .skip_while(|c| !c.is_ascii_digit())
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .collect();
+        if cleaned.is_empty() {
+            return None;
+        }
+        let parts: Vec<u64> = cleaned
+            .split('.')
+            .filter_map(|p| p.parse::<u64>().ok())
+            .collect();
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts)
+        }
+    }
+
+    pub fn is_newer_version(latest_tag: &str, current_ver_str: &str) -> bool {
+        let latest_parts = match Self::parse_version_tuple(latest_tag) {
+            Some(p) => p,
+            None => return false,
+        };
+        let current_parts = match Self::parse_version_tuple(current_ver_str) {
+            Some(p) => p,
+            None => return true,
+        };
+        latest_parts > current_parts
+    }
+
+    pub async fn check_for_dependency_updates() -> Result<DependencyUpdateInfo, String> {
+        #[cfg(target_os = "android")]
+        {
+            let app_current = env!("CARGO_PKG_VERSION").to_string();
+            let app_release_res = GithubClient::fetch_latest_release("fardinslh/aether-desktop").await;
+            let (app_latest_tag, app_update_available, app_url) = match app_release_res {
+                Ok(rel) => {
+                    let is_newer = Self::is_newer_version(&rel.tag_name, &app_current);
+                    let url = rel.html_url.clone().unwrap_or_else(|| {
+                        format!("https://github.com/fardinslh/aether-desktop/releases/tag/{}", rel.tag_name)
+                    });
+                    (rel.tag_name, is_newer, Some(url))
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to fetch latest aether-desktop release: {}", e);
+                    (app_current.clone(), false, None)
+                }
+            };
+
+            return Ok(DependencyUpdateInfo {
+                aether_update_available: false,
+                aether_current_version: Some("v2.3.0-android".to_string()),
+                aether_latest_version: "v2.3.0".to_string(),
+                singbox_update_available: false,
+                singbox_current_version: Some("v1.14.2-android".to_string()),
+                singbox_latest_version: "v1.14.2".to_string(),
+                app_update_available,
+                app_current_version: app_current,
+                app_latest_version: app_latest_tag,
+                app_release_url: app_url,
+            });
+        }
+
+        #[cfg(not(target_os = "android"))]
+        {
+            let current_status = Self::check_status();
+
+            // 1. Check Aether upstream release
+            let aether_release_res = GithubClient::fetch_latest_release("CluvexStudio/Aether").await;
+            let (aether_latest_tag, aether_update_available) = match aether_release_res {
+                Ok(rel) => {
+                    let is_newer = match &current_status.aether_version {
+                        Some(cur) => Self::is_newer_version(&rel.tag_name, cur),
+                        None => true,
+                    };
+                    (rel.tag_name, is_newer)
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to fetch latest Aether release: {}", e);
+                    ("unknown".to_string(), false)
+                }
+            };
+
+            // 2. Check sing-box upstream release
+            let singbox_release_res = GithubClient::fetch_latest_release("SagerNet/sing-box").await;
+            let (singbox_latest_tag, singbox_update_available) = match singbox_release_res {
+                Ok(rel) => {
+                    let is_newer = match &current_status.singbox_version {
+                        Some(cur) => Self::is_newer_version(&rel.tag_name, cur),
+                        None => true,
+                    };
+                    (rel.tag_name, is_newer)
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to fetch latest sing-box release: {}", e);
+                    ("unknown".to_string(), false)
+                }
+            };
+
+            // 3. Check Aether Desktop app release
+            let app_current = env!("CARGO_PKG_VERSION").to_string();
+            let app_release_res = GithubClient::fetch_latest_release("fardinslh/aether-desktop").await;
+            let (app_latest_tag, app_update_available, app_url) = match app_release_res {
+                Ok(rel) => {
+                    let is_newer = Self::is_newer_version(&rel.tag_name, &app_current);
+                    let url = rel.html_url.clone().unwrap_or_else(|| {
+                        format!("https://github.com/fardinslh/aether-desktop/releases/tag/{}", rel.tag_name)
+                    });
+                    (rel.tag_name, is_newer, Some(url))
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to fetch latest aether-desktop release: {}", e);
+                    (app_current.clone(), false, None)
+                }
+            };
+
+            Ok(DependencyUpdateInfo {
+                aether_update_available,
+                aether_current_version: current_status.aether_version,
+                aether_latest_version: aether_latest_tag,
+                singbox_update_available,
+                singbox_current_version: current_status.singbox_version,
+                singbox_latest_version: singbox_latest_tag,
+                app_update_available,
+                app_current_version: app_current,
+                app_latest_version: app_latest_tag,
+                app_release_url: app_url,
+            })
         }
     }
 

@@ -42,6 +42,14 @@ export type AetherScanMode =
   | "stealth"
   | "ironclad";
 
+export type AetherNoizeProfile =
+  | "off"
+  | "light"
+  | "balanced"
+  | "firewall"
+  | "gfw"
+  | "aggressive";
+
 export interface AetherSettings {
   executablePath: string;
   host: string;
@@ -50,6 +58,13 @@ export interface AetherSettings {
   ipMode: AetherIpMode;
   scanMode: AetherScanMode;
   quickReconnect: boolean;
+  masqueHttp2?: boolean;
+  tlsFragment?: boolean;
+  fragmentSize?: string | null;
+  fragmentDelay?: string | null;
+  noizeProfile?: AetherNoizeProfile;
+  bypassIranTraffic?: boolean;
+  preventIranExit?: boolean;
   additionalArguments: string[];
   launchArguments?: string[];
 }
@@ -198,6 +213,19 @@ export interface DependencyStatus {
   singboxInstalled: boolean;
   singboxPath: string;
   singboxVersion?: string | null;
+}
+
+export interface DependencyUpdateInfo {
+  aetherUpdateAvailable: boolean;
+  aetherCurrentVersion?: string | null;
+  aetherLatestVersion: string;
+  singboxUpdateAvailable: boolean;
+  singboxCurrentVersion?: string | null;
+  singboxLatestVersion: string;
+  appUpdateAvailable: boolean;
+  appCurrentVersion: string;
+  appLatestVersion: string;
+  appReleaseUrl?: string | null;
 }
 
 export interface DownloadProgress {

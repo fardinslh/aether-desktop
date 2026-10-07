@@ -10,8 +10,19 @@ import {
   HelpCircle,
   ChevronDown,
   ChevronRight,
+  Download,
+  RefreshCw,
+  AlertCircle,
+  ArrowUpCircle,
+  Sparkles,
 } from "lucide-react";
-import { AppSettings, CloudflareTrace, SecondaryProfilePing } from "../../types";
+import {
+  AppSettings,
+  CloudflareTrace,
+  DependencyUpdateInfo,
+  DownloadProgress,
+  SecondaryProfilePing,
+} from "../../types";
 import { api } from "../../services/api";
 
 interface SettingsViewProps {
@@ -39,6 +50,62 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, onSave, on
   const [profilePings, setProfilePings] = useState<Record<number, SecondaryProfilePing>>({});
   const [pingAllLoading, setPingAllLoading] = useState(false);
   const [pingingProfile, setPingingProfile] = useState<number | null>(null);
+
+  const [updateInfo, setUpdateInfo] = useState<DependencyUpdateInfo | null>(null);
+  const [isCheckingUpdates, setIsCheckingUpdates] = useState<boolean>(false);
+  const [updatingComponent, setUpdatingComponent] = useState<string | null>(null);
+  const [updateProgress, setUpdateProgress] = useState<DownloadProgress | null>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+
+  const handleCheckUpdates = async () => {
+    setIsCheckingUpdates(true);
+    setUpdateError(null);
+    try {
+      const info = await api.checkDependencyUpdates();
+      setUpdateInfo(info);
+    } catch (err: any) {
+      setUpdateError(err?.toString() || "Failed to check for updates");
+    } finally {
+      setIsCheckingUpdates(false);
+    }
+  };
+
+  const handleUpdateComponent = async (component: "aether" | "singbox") => {
+    setUpdatingComponent(component);
+    setUpdateError(null);
+    setUpdateProgress(null);
+
+    let unlisten: (() => void) | null = null;
+    try {
+      unlisten = await api.onDependencyProgress((p) => {
+        if (p.component.toLowerCase().includes(component)) {
+          setUpdateProgress(p);
+        }
+      });
+
+      if (component === "aether") {
+        const newPath = await api.installAether();
+        setLocalSettings((cur) => ({
+          ...cur,
+          aether: { ...cur.aether, executablePath: newPath },
+        }));
+      } else {
+        const newPath = await api.installSingbox();
+        setLocalSettings((cur) => ({
+          ...cur,
+          singBox: { ...cur.singBox, executablePath: newPath },
+        }));
+      }
+
+      await handleCheckUpdates();
+    } catch (err: any) {
+      setUpdateError(err?.toString() || `Failed to update ${component}`);
+    } finally {
+      if (unlisten) unlisten();
+      setUpdatingComponent(null);
+      setUpdateProgress(null);
+    }
+  };
 
   const handleTestSecondaryProxy = async () => {
     setTestLoading(true);
@@ -494,6 +561,248 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, onSave, on
                     placeholder="e.g. --verbose"
                     className="w-full px-3 py-1.5 bg-app-panel border border-app-border rounded-sm text-xs text-ink-200 font-mono focus:outline-none focus:border-signal-cyan"
                   />
+                </div>
+              )}
+            </div>
+
+            {/* Iran Anti-Censorship & DPI Bypass Controls */}
+            <div className="border border-signal-cyan/30 bg-app-surface/60 rounded-sm p-3.5 space-y-3">
+              <div className="flex items-center gap-2 text-xs font-mono font-bold text-signal-cyan">
+                <Shield className="w-4 h-4 text-signal-cyan" />
+                <span>IRAN NETWORK CENSORSHIP BYPASS</span>
+              </div>
+              <p className="text-[10px] text-ink-400">
+                Optimized anti-censorship settings for Iranian operators (Irancell, MCI, Shatel) to bypass severe UDP throttling, handshake drops, and DPI inspection.
+              </p>
+
+              {/* Carrier Mode for MASQUE */}
+              {localSettings.aether.protocol === "masque" && (
+                <div className="space-y-3 pt-1 border-t border-app-border-subtle">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-xs font-semibold text-ink-100 font-mono">MASQUE CARRIER MODE</div>
+                      <div className="text-[10px] text-ink-400">
+                        {localSettings.aether.masqueHttp2
+                          ? "HTTP/2 (TCP over TLS) — Recommended if UDP/QUIC is throttled in Iran"
+                          : "HTTP/3 (QUIC over UDP) — High speed on unthrottled links"}
+                      </div>
+                    </div>
+                    <select
+                      value={localSettings.aether.masqueHttp2 ? "h2" : "h3"}
+                      onChange={(e) =>
+                        setLocalSettings({
+                          ...localSettings,
+                          aether: {
+                            ...localSettings.aether,
+                            masqueHttp2: e.target.value === "h2",
+                          },
+                        })
+                      }
+                      className="px-2.5 py-1 bg-app-inset border border-app-border-subtle rounded-sm text-xs text-ink-200 font-mono focus:outline-none focus:border-signal-cyan"
+                    >
+                      <option value="h3">HTTP/3 (QUIC / UDP)</option>
+                      <option value="h2">HTTP/2 (TCP / TLS) [--h2]</option>
+                    </select>
+                  </div>
+
+                  {localSettings.aether.masqueHttp2 && (
+                    <div className="flex items-center justify-between p-2 rounded-sm bg-app-inset border border-app-border-subtle">
+                      <div>
+                        <div className="text-xs font-semibold text-signal-cyan font-mono flex items-center gap-1.5">
+                          <Sparkles className="w-3.5 h-3.5" />
+                          <span>TLS CLIENTHELLO FRAGMENTATION</span>
+                        </div>
+                        <div className="text-[10px] text-ink-400 font-sans">
+                          Splits SNI handshake packets to evade Deep Packet Inspection (DPI) [--fragment]
+                        </div>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={localSettings.aether.tlsFragment ?? true}
+                        onChange={(e) =>
+                          setLocalSettings({
+                            ...localSettings,
+                            aether: {
+                              ...localSettings.aether,
+                              tlsFragment: e.target.checked,
+                            },
+                          })
+                        }
+                        className="w-3.5 h-3.5 rounded-xs text-signal-cyan focus:ring-signal-cyan bg-app-surface border-app-border cursor-pointer"
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Obfuscation (Noize) Profile */}
+              <div className="grid grid-cols-2 gap-3 pt-1 border-t border-app-border-subtle">
+                <div>
+                  <label className="block text-[11px] font-mono font-semibold uppercase text-ink-300 mb-1">
+                    DPI Obfuscation Profile (--noize)
+                  </label>
+                  <select
+                    value={localSettings.aether.noizeProfile || (localSettings.aether.protocol === "masque" ? "firewall" : "balanced")}
+                    onChange={(e) =>
+                      setLocalSettings({
+                        ...localSettings,
+                        aether: {
+                          ...localSettings.aether,
+                          noizeProfile: e.target.value as any,
+                        },
+                      })
+                    }
+                    className="w-full px-3 py-1.5 bg-app-inset border border-app-border-subtle rounded-sm text-xs text-ink-200 font-mono focus:outline-none focus:border-signal-cyan"
+                  >
+                    <option value="firewall">Firewall (Recommended for MASQUE in Iran)</option>
+                    <option value="gfw">GFW (Aggressive Anti-DPI)</option>
+                    <option value="balanced">Balanced (Default for WireGuard)</option>
+                    <option value="light">Light</option>
+                    <option value="off">Off (Clean connection)</option>
+                  </select>
+                </div>
+
+                <div className="flex items-center justify-between p-2 rounded-sm bg-app-inset border border-app-border-subtle self-end">
+                  <div>
+                    <div className="text-xs font-semibold text-ink-100 font-mono">NEVER USE IRAN EXIT</div>
+                    <div className="text-[10px] text-ink-400 font-sans">Enforce non-Iran exit node (--exit-loc !IR)</div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={localSettings.aether.preventIranExit ?? true}
+                    onChange={(e) =>
+                      setLocalSettings({
+                        ...localSettings,
+                        aether: {
+                          ...localSettings.aether,
+                          preventIranExit: e.target.checked,
+                        },
+                      })
+                    }
+                    className="w-3.5 h-3.5 rounded-xs text-signal-cyan focus:ring-signal-cyan bg-app-surface border-app-border cursor-pointer"
+                  />
+                </div>
+              </div>
+
+              {/* Domestic Iran Traffic Bypass */}
+              <div className="flex items-center justify-between p-2.5 rounded-sm bg-app-inset border border-app-border-subtle">
+                <div>
+                  <div className="text-xs font-semibold text-ink-100 font-mono">BYPASS DOMESTIC IRAN TRAFFIC (.IR)</div>
+                  <div className="text-[10px] text-ink-400 font-sans">
+                    Iranian banking and domestic sites connect directly for maximum speed without "Foreign IP" blocks
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={localSettings.aether.bypassIranTraffic ?? true}
+                  onChange={(e) =>
+                    setLocalSettings({
+                      ...localSettings,
+                      aether: {
+                        ...localSettings.aether,
+                        bypassIranTraffic: e.target.checked,
+                      },
+                    })
+                  }
+                  className="w-3.5 h-3.5 rounded-xs text-signal-cyan focus:ring-signal-cyan bg-app-surface border-app-border cursor-pointer"
+                />
+              </div>
+            </div>
+
+            {/* Core Engine Updates & GitHub Releases */}
+            <div className="border border-app-border rounded-sm p-3.5 bg-app-surface/40 space-y-3 font-sans">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <ArrowUpCircle className="w-4 h-4 text-signal-cyan" />
+                  <span className="text-xs font-mono font-bold text-ink-100 uppercase">
+                    CORE ENGINES & RELEASES
+                  </span>
+                </div>
+                <button
+                  onClick={handleCheckUpdates}
+                  disabled={isCheckingUpdates}
+                  className="px-2.5 py-1 rounded-sm bg-app-inset hover:bg-app-surface text-ink-200 border border-app-border text-[11px] font-mono flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3 h-3 ${isCheckingUpdates ? "animate-spin text-signal-cyan" : ""}`} />
+                  <span>{isCheckingUpdates ? "Checking GitHub..." : "Check for Updates"}</span>
+                </button>
+              </div>
+
+              {updateError && (
+                <div className="p-2 rounded-xs bg-signal-amber/10 border border-signal-amber/30 text-signal-amber text-xs flex items-center gap-2">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                  <span>{updateError}</span>
+                </div>
+              )}
+
+              {/* Status cards */}
+              <div className="grid grid-cols-2 gap-3 font-mono">
+                {/* Aether Card */}
+                <div className="p-2.5 rounded-sm bg-app-inset border border-app-border-subtle flex flex-col justify-between">
+                  <div>
+                    <div className="text-[10px] text-ink-400">AETHER CORE</div>
+                    <div className="text-xs font-bold text-ink-100 truncate">
+                      {updateInfo?.aetherCurrentVersion || "Installed"}
+                    </div>
+                    {updateInfo?.aetherUpdateAvailable && (
+                      <div className="text-[10px] text-signal-cyan mt-1 flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-signal-cyan animate-pulse" />
+                        <span>Update available: {updateInfo.aetherLatestVersion}</span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="mt-2.5">
+                    <button
+                      onClick={() => handleUpdateComponent("aether")}
+                      disabled={updatingComponent !== null}
+                      className="w-full py-1 px-2 rounded-xs bg-signal-cyan/20 hover:bg-signal-cyan/30 text-signal-cyan border border-signal-cyan/40 text-[10px] font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer disabled:opacity-40"
+                    >
+                      <Download className="w-3 h-3" />
+                      <span>{updatingComponent === "aether" ? "Updating..." : updateInfo?.aetherUpdateAvailable ? `Update to ${updateInfo.aetherLatestVersion}` : "Reinstall / Update"}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Sing-Box Card */}
+                <div className="p-2.5 rounded-sm bg-app-inset border border-app-border-subtle flex flex-col justify-between">
+                  <div>
+                    <div className="text-[10px] text-ink-400">SING-BOX ROUTER</div>
+                    <div className="text-xs font-bold text-ink-100 truncate">
+                      {updateInfo?.singboxCurrentVersion || "Installed"}
+                    </div>
+                    {updateInfo?.singboxUpdateAvailable && (
+                      <div className="text-[10px] text-signal-cyan mt-1 flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-signal-cyan animate-pulse" />
+                        <span>Update available: {updateInfo.singboxLatestVersion}</span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="mt-2.5">
+                    <button
+                      onClick={() => handleUpdateComponent("singbox")}
+                      disabled={updatingComponent !== null}
+                      className="w-full py-1 px-2 rounded-xs bg-signal-cyan/20 hover:bg-signal-cyan/30 text-signal-cyan border border-signal-cyan/40 text-[10px] font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer disabled:opacity-40"
+                    >
+                      <Download className="w-3 h-3" />
+                      <span>{updatingComponent === "singbox" ? "Updating..." : updateInfo?.singboxUpdateAvailable ? `Update to ${updateInfo.singboxLatestVersion}` : "Reinstall / Update"}</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Download progress bar */}
+              {updateProgress && (
+                <div className="p-2 rounded-xs bg-app-inset border border-app-border-subtle space-y-1.5 font-mono">
+                  <div className="flex items-center justify-between text-[10px]">
+                    <span className="text-signal-cyan font-bold">{updateProgress.status}</span>
+                    <span className="text-ink-300">{updateProgress.percent}%</span>
+                  </div>
+                  <div className="w-full h-1.5 bg-app-surface rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-signal-cyan transition-all duration-300"
+                      style={{ width: `${updateProgress.percent}%` }}
+                    />
+                  </div>
                 </div>
               )}
             </div>

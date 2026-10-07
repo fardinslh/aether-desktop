@@ -6,6 +6,7 @@ import {
   CloudflareTrace,
   ConnectionState,
   DependencyStatus,
+  DependencyUpdateInfo,
   DownloadProgress,
   ExecutableInspection,
   HealthStatus,
@@ -94,6 +95,10 @@ export const api = {
   // Dependencies Management
   async checkDependencies(): Promise<DependencyStatus> {
     return invoke<DependencyStatus>("check_dependencies");
+  },
+
+  async checkDependencyUpdates(): Promise<DependencyUpdateInfo> {
+    return invoke<DependencyUpdateInfo>("check_dependency_updates");
   },
 
   async installAether(): Promise<string> {

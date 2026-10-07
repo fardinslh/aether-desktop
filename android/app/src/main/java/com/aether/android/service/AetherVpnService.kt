@@ -14,8 +14,10 @@ import androidx.core.app.NotificationCompat
 import com.aether.android.AetherApplication
 import com.aether.android.R
 import com.aether.android.model.AppSettings
+import com.aether.android.model.NoizeProfile
 import com.aether.android.model.Profile
 import com.aether.android.model.SplitTunnelMode
+import com.aether.android.model.VpnProtocol
 import com.aether.android.model.VpnState
 import com.aether.android.model.VpnStatus
 import com.aether.android.ui.MainActivity
@@ -261,10 +263,51 @@ class AetherVpnService : VpnService() {
                     aetherBin.absolutePath,
                     "--config", configFile.absolutePath,
                     "--bind", "127.0.0.1:1819",
-                    "--wg",
-                    "-4",
-                    "--noize", "gfw"
+                    "-4"
                 )
+
+                when (settings.vpnProtocol) {
+                    VpnProtocol.MASQUE_H2 -> {
+                        cmd.add("--h2")
+                    }
+                    VpnProtocol.MASQUE -> {
+                        // Default MASQUE HTTP/3 mode in Aether v2.3.0
+                    }
+                    VpnProtocol.WIREGUARD -> {
+                        cmd.add("--wg")
+                    }
+                }
+
+                when (settings.noizeProfile) {
+                    NoizeProfile.FIREWALL -> {
+                        cmd.add("--noize")
+                        cmd.add("firewall")
+                    }
+                    NoizeProfile.GFW -> {
+                        cmd.add("--noize")
+                        cmd.add("gfw")
+                    }
+                    NoizeProfile.NONE -> {
+                        // Obfuscation disabled
+                    }
+                }
+
+                if (settings.enableFragmentation && settings.vpnProtocol == VpnProtocol.MASQUE_H2) {
+                    cmd.add("--fragment")
+                    if (settings.fragmentSize.isNotBlank()) {
+                        cmd.add("--fragment-size")
+                        cmd.add(settings.fragmentSize)
+                    }
+                    if (settings.fragmentDelay.isNotBlank()) {
+                        cmd.add("--fragment-delay")
+                        cmd.add(settings.fragmentDelay)
+                    }
+                }
+
+                if (settings.preventIranExit) {
+                    cmd.add("--exit-loc")
+                    cmd.add("!IR")
+                }
 
                 if (forceFreshScan || !lastconnFile.exists()) {
                     cmd.add("--no-quick-reconnect")
@@ -278,6 +321,9 @@ class AetherVpnService : VpnService() {
                 var activeCleanRtt = 45L
 
                 val pb = ProcessBuilder(cmd)
+                if (settings.vpnProtocol == VpnProtocol.MASQUE_H2) {
+                    pb.environment()["AETHER_MASQUE_HTTP2"] = "1"
+                }
                 pb.directory(filesDir)
                 pb.redirectErrorStream(true)
                 val proc = pb.start()

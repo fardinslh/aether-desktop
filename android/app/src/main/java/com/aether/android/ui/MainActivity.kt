@@ -55,6 +55,7 @@ class MainActivity : ComponentActivity() {
         val app = AetherApplication.instance
         val profileRepo = app.profileRepository
         val settingsRepo = app.settingsRepository
+        val updateRepo = app.updateRepository
         val appListRepo = AppListRepository(this)
 
         setContent {
@@ -62,13 +63,16 @@ class MainActivity : ComponentActivity() {
                 val vpnStatus by AetherVpnService.vpnStatus.collectAsState()
                 val profiles by profileRepo.profiles.collectAsState()
                 val settings by settingsRepo.settings.collectAsState()
+                val updateInfo by updateRepo.updateInfo.collectAsState()
+                val isCheckingUpdates by updateRepo.isChecking.collectAsState()
 
                 var currentRoute by remember { mutableStateOf(Screen.Home.route) }
                 var installedApps by remember { mutableStateOf<List<AppInfo>>(emptyList()) }
 
-                // Load installed apps once
+                // Load installed apps and check for updates on startup
                 LaunchedEffect(Unit) {
                     installedApps = appListRepo.getInstalledApps()
+                    updateRepo.checkForUpdates()
                 }
 
                 // Selected profile lookup
@@ -115,6 +119,10 @@ class MainActivity : ComponentActivity() {
                                     },
                                     onRescanGateway = {
                                         AetherVpnService.rescan(this@MainActivity)
+                                    },
+                                    updateInfo = updateInfo,
+                                    onDownloadUpdate = { url ->
+                                        updateRepo.openDownloadUrl(url)
                                     }
                                 )
                             }
@@ -165,6 +173,16 @@ class MainActivity : ComponentActivity() {
                                     settings = settings,
                                     onUpdateSettings = { transform ->
                                         settingsRepo.updateSettings(transform)
+                                    },
+                                    updateInfo = updateInfo,
+                                    isCheckingUpdates = isCheckingUpdates,
+                                    onCheckUpdates = {
+                                        lifecycleScope.launch {
+                                            updateRepo.checkForUpdates()
+                                        }
+                                    },
+                                    onDownloadUpdate = { url ->
+                                        updateRepo.openDownloadUrl(url)
                                     }
                                 )
                             }

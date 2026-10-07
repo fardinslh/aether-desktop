@@ -55,6 +55,30 @@ fn default_scan_mode() -> AetherScanMode {
 fn default_true() -> bool {
     true
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AetherNoizeProfile {
+    Off,
+    Light,
+    #[default]
+    Balanced,
+    Firewall,
+    Gfw,
+    Aggressive,
+}
+
+impl AetherNoizeProfile {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AetherNoizeProfile::Off => "off",
+            AetherNoizeProfile::Light => "light",
+            AetherNoizeProfile::Balanced => "balanced",
+            AetherNoizeProfile::Firewall => "firewall",
+            AetherNoizeProfile::Gfw => "gfw",
+            AetherNoizeProfile::Aggressive => "aggressive",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -71,9 +95,46 @@ pub struct AetherSettings {
     #[serde(default = "default_true")]
     pub quick_reconnect: bool,
     #[serde(default)]
+    pub masque_http2: bool,
+    #[serde(default = "default_true")]
+    pub tls_fragment: bool,
+    #[serde(default)]
+    pub fragment_size: Option<String>,
+    #[serde(default)]
+    pub fragment_delay: Option<String>,
+    #[serde(default)]
+    pub noize_profile: AetherNoizeProfile,
+    #[serde(default = "default_true")]
+    pub bypass_iran_traffic: bool,
+    #[serde(default = "default_true")]
+    pub prevent_iran_exit: bool,
+    #[serde(default)]
     pub additional_arguments: Vec<String>,
     #[serde(default)]
     pub launch_arguments: Vec<String>,
+}
+
+impl Default for AetherSettings {
+    fn default() -> Self {
+        Self {
+            executable_path: "C:\\Aether\\aether.exe".to_string(),
+            host: "127.0.0.1".to_string(),
+            port: 1819,
+            protocol: AetherProtocol::Wireguard,
+            ip_mode: AetherIpMode::Ipv4,
+            scan_mode: AetherScanMode::Thorough,
+            quick_reconnect: true,
+            masque_http2: false,
+            tls_fragment: true,
+            fragment_size: None,
+            fragment_delay: None,
+            noize_profile: AetherNoizeProfile::Balanced,
+            bypass_iran_traffic: true,
+            prevent_iran_exit: true,
+            additional_arguments: vec![],
+            launch_arguments: vec![],
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,11 +197,47 @@ impl AetherSettings {
         args.push("--bind".to_string());
         args.push(format!("{}:{}", self.host, self.port));
 
-        // 3. Protocol
+        // 3. Protocol & Obfuscation
         match self.protocol {
-            AetherProtocol::Wireguard => args.push("--wg".to_string()),
-            AetherProtocol::Masque => args.push("--masque".to_string()),
+            AetherProtocol::Wireguard => {
+                args.push("--wg".to_string());
+                if self.noize_profile != AetherNoizeProfile::Off {
+                    args.push("--noize".to_string());
+                    args.push(self.noize_profile.as_str().to_string());
+                }
+            }
+            AetherProtocol::Masque => {
+                args.push("--masque".to_string());
+                if self.masque_http2 {
+                    args.push("--h2".to_string());
+                    if self.tls_fragment {
+                        args.push("--fragment".to_string());
+                        if let Some(ref sz) = self.fragment_size {
+                            if !sz.trim().is_empty() {
+                                args.push("--fragment-size".to_string());
+                                args.push(sz.trim().to_string());
+                            }
+                        }
+                        if let Some(ref delay) = self.fragment_delay {
+                            if !delay.trim().is_empty() {
+                                args.push("--fragment-delay".to_string());
+                                args.push(delay.trim().to_string());
+                            }
+                        }
+                    }
+                }
+                if self.noize_profile != AetherNoizeProfile::Off {
+                    args.push("--noize".to_string());
+                    args.push(self.noize_profile.as_str().to_string());
+                }
+            }
             AetherProtocol::WarpInWarp => args.push("--gool".to_string()),
+        }
+
+        // Exit location filter (never route through domestic/Iranian exit nodes)
+        if self.prevent_iran_exit {
+            args.push("--exit-loc".to_string());
+            args.push("!IR".to_string());
         }
 
         // 4. IP Mode
@@ -320,17 +417,7 @@ pub struct GeneralSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            aether: AetherSettings {
-                executable_path: "C:\\Aether\\aether.exe".to_string(),
-                host: "127.0.0.1".to_string(),
-                port: 1819,
-                protocol: AetherProtocol::Wireguard,
-                ip_mode: AetherIpMode::Ipv4,
-                scan_mode: AetherScanMode::Thorough,
-                quick_reconnect: true,
-                additional_arguments: vec![],
-                launch_arguments: vec![],
-            },
+            aether: AetherSettings::default(),
             secondary_proxy: SecondaryProxySettings {
                 enabled: true,
                 mode: SecondaryProxyMode::ExternalSocks,
@@ -374,15 +461,9 @@ mod tests {
     #[test]
     fn test_a_normal_connect_includes_quick_reconnect_when_configured() {
         let settings = AetherSettings {
-            executable_path: "C:\\Aether\\aether.exe".to_string(),
-            host: "127.0.0.1".to_string(),
-            port: 1819,
-            protocol: AetherProtocol::Wireguard,
-            ip_mode: AetherIpMode::Ipv4,
             scan_mode: AetherScanMode::Turbo,
             quick_reconnect: true,
-            additional_arguments: vec![],
-            launch_arguments: vec![],
+            ..Default::default()
         };
 
         let args = settings.build_cli_arguments(None);
@@ -394,15 +475,9 @@ mod tests {
     #[test]
     fn test_b_optimization_launch_does_not_include_quick_reconnect() {
         let settings = AetherSettings {
-            executable_path: "C:\\Aether\\aether.exe".to_string(),
-            host: "127.0.0.1".to_string(),
-            port: 1819,
-            protocol: AetherProtocol::Wireguard,
-            ip_mode: AetherIpMode::Ipv4,
             scan_mode: AetherScanMode::Turbo,
             quick_reconnect: true, // Saved user setting is true
-            additional_arguments: vec![],
-            launch_arguments: vec![],
+            ..Default::default()
         };
 
         let opt_options = AetherLaunchOptions {
@@ -417,15 +492,9 @@ mod tests {
     #[test]
     fn test_c_optimization_launch_forces_thorough_without_mutating_saved_settings() {
         let settings = AetherSettings {
-            executable_path: "C:\\Aether\\aether.exe".to_string(),
-            host: "127.0.0.1".to_string(),
-            port: 1819,
-            protocol: AetherProtocol::Wireguard,
-            ip_mode: AetherIpMode::Ipv4,
             scan_mode: AetherScanMode::Turbo, // Saved user setting is Turbo
             quick_reconnect: true,
-            additional_arguments: vec![],
-            launch_arguments: vec![],
+            ..Default::default()
         };
 
         let opt_options = AetherLaunchOptions {
@@ -444,15 +513,9 @@ mod tests {
     #[test]
     fn test_d_after_optimization_normal_connect_again_includes_quick_reconnect() {
         let settings = AetherSettings {
-            executable_path: "C:\\Aether\\aether.exe".to_string(),
-            host: "127.0.0.1".to_string(),
-            port: 1819,
-            protocol: AetherProtocol::Wireguard,
-            ip_mode: AetherIpMode::Ipv4,
             scan_mode: AetherScanMode::Balanced,
             quick_reconnect: true,
-            additional_arguments: vec![],
-            launch_arguments: vec![],
+            ..Default::default()
         };
 
         // 1. Simulate optimization run
@@ -506,5 +569,26 @@ mod tests {
 
         // Restore timeout is bounded to quick reconnect
         assert_eq!(AETHER_RESTORE_TIMEOUT, std::time::Duration::from_secs(25));
+    }
+
+    #[test]
+    fn test_e_anti_censorship_flags() {
+        let settings = AetherSettings {
+            protocol: AetherProtocol::Masque,
+            masque_http2: true,
+            tls_fragment: true,
+            noize_profile: AetherNoizeProfile::Firewall,
+            prevent_iran_exit: true,
+            ..Default::default()
+        };
+
+        let args = settings.build_cli_arguments(None);
+        assert!(args.contains(&"--masque".to_string()));
+        assert!(args.contains(&"--h2".to_string()));
+        assert!(args.contains(&"--fragment".to_string()));
+        assert!(args.contains(&"--noize".to_string()));
+        assert!(args.contains(&"firewall".to_string()));
+        assert!(args.contains(&"--exit-loc".to_string()));
+        assert!(args.contains(&"!IR".to_string()));
     }
 }

@@ -16,19 +16,26 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aether.android.model.AppSettings
+import com.aether.android.model.NoizeProfile
+import com.aether.android.model.VpnProtocol
+import com.aether.android.repository.AppUpdateInfo
 import com.aether.android.ui.theme.*
 
 @SuppressLint("BatteryLife")
@@ -36,6 +43,10 @@ import com.aether.android.ui.theme.*
 fun SettingsScreen(
     settings: AppSettings,
     onUpdateSettings: ((AppSettings) -> AppSettings) -> Unit,
+    updateInfo: AppUpdateInfo? = null,
+    isCheckingUpdates: Boolean = false,
+    onCheckUpdates: () -> Unit = {},
+    onDownloadUpdate: (String?) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -52,13 +63,167 @@ fun SettingsScreen(
             .padding(horizontal = 20.dp)
     ) {
         Text(
-            text = "NETWORK SETTINGS",
+            text = "NETWORK & RESILIENCE",
             fontSize = 18.sp,
             fontWeight = FontWeight.Bold,
             fontFamily = FontFamily.Monospace,
             color = TextPrimary,
             modifier = Modifier.padding(top = 12.dp, bottom = 12.dp)
         )
+
+        // Iran Anti-Censorship Section
+        Text(
+            text = "ANTI-CENSORSHIP (IRAN CARRIER MODE)",
+            fontSize = 11.sp,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
+            color = PrimaryCyan,
+            modifier = Modifier.padding(bottom = 6.dp)
+        )
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = SurfaceDark)
+        ) {
+            Column(modifier = Modifier.padding(14.dp)) {
+                // Protocol Selector
+                Text(
+                    text = "CARRIER PROTOCOL",
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    color = TextSecondary,
+                    modifier = Modifier.padding(bottom = 6.dp)
+                )
+
+                val protocolOptions = listOf(
+                    Triple(VpnProtocol.MASQUE_H2, "MASQUE over HTTP/2 (Recommended for Iran)", "Defeats UDP throttling via TCP 443 stream"),
+                    Triple(VpnProtocol.MASQUE, "MASQUE HTTP/3", "Standard QUIC transport over UDP"),
+                    Triple(VpnProtocol.WIREGUARD, "WireGuard", "Standard Cloudflare WARP protocol")
+                )
+
+                protocolOptions.forEach { (proto, title, desc) ->
+                    val selected = settings.vpnProtocol == proto
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onUpdateSettings { it.copy(vpnProtocol = proto) } }
+                            .padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(title, color = if (selected) PrimaryCyan else TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            Text(desc, color = TextSecondary, fontSize = 11.sp)
+                        }
+                        RadioButton(
+                            selected = selected,
+                            onClick = { onUpdateSettings { it.copy(vpnProtocol = proto) } },
+                            colors = RadioButtonDefaults.colors(selectedColor = PrimaryCyan, unselectedColor = BorderDark)
+                        )
+                    }
+                }
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp), color = BorderDark)
+
+                // Obfuscation Profile
+                Text(
+                    text = "DPI OBFUSCATION (NOIZE)",
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    color = TextSecondary,
+                    modifier = Modifier.padding(bottom = 6.dp)
+                )
+
+                val noizeOptions = listOf(
+                    NoizeProfile.FIREWALL to "Firewall (Recommended for Iranian DPI)",
+                    NoizeProfile.GFW to "GFW (Strict Padding)",
+                    NoizeProfile.NONE to "Disabled (Standard Packets)"
+                )
+
+                noizeOptions.forEach { (profile, label) ->
+                    val selected = settings.noizeProfile == profile
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onUpdateSettings { it.copy(noizeProfile = profile) } }
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(label, color = if (selected) TextPrimary else TextSecondary, fontSize = 13.sp)
+                        RadioButton(
+                            selected = selected,
+                            onClick = { onUpdateSettings { it.copy(noizeProfile = profile) } },
+                            colors = RadioButtonDefaults.colors(selectedColor = PrimaryCyan, unselectedColor = BorderDark)
+                        )
+                    }
+                }
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp), color = BorderDark)
+
+                // Fragmentation Toggle
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("TLS ClientHello Fragmentation", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        Text("Splits SNI across TCP segments to bypass Deep Packet Inspection", color = TextSecondary, fontSize = 11.sp)
+                    }
+                    Switch(
+                        checked = settings.enableFragmentation,
+                        onCheckedChange = { chk -> onUpdateSettings { it.copy(enableFragmentation = chk) } },
+                        colors = SwitchDefaults.colors(checkedThumbColor = PrimaryCyan, checkedTrackColor = SurfaceVariantDark)
+                    )
+                }
+
+                // Prevent Iran Exit Toggle
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Prevent Domestic (.IR) Exit", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        Text("Strictly prohibits exit nodes situated inside Iran (--exit-loc !IR)", color = TextSecondary, fontSize = 11.sp)
+                    }
+                    Switch(
+                        checked = settings.preventIranExit,
+                        onCheckedChange = { chk -> onUpdateSettings { it.copy(preventIranExit = chk) } },
+                        colors = SwitchDefaults.colors(checkedThumbColor = PrimaryCyan, checkedTrackColor = SurfaceVariantDark)
+                    )
+                }
+
+                // Bypass Iran Domestic Traffic Toggle
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Bypass Domestic Iranian Traffic", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        Text("Directly routes national .ir domains and domestic banking", color = TextSecondary, fontSize = 11.sp)
+                    }
+                    Switch(
+                        checked = settings.bypassIranTraffic,
+                        onCheckedChange = { chk -> onUpdateSettings { it.copy(bypassIranTraffic = chk) } },
+                        colors = SwitchDefaults.colors(checkedThumbColor = PrimaryCyan, checkedTrackColor = SurfaceVariantDark)
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(18.dp))
 
         // DNS Server Selector
         Text(
@@ -135,7 +300,7 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.width(10.dp))
                     Column {
                         Text("Maximum Transmission Unit", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                        Text("Standard 1500 for optimal UDP throughput", color = TextSecondary, fontSize = 12.sp)
+                        Text("1500 for high-throughput TCP & HTTP/2", color = TextSecondary, fontSize = 12.sp)
                     }
                 }
                 Box(
@@ -206,6 +371,102 @@ fun SettingsScreen(
             }
         }
 
+        Spacer(modifier = Modifier.height(18.dp))
+
+        // Core Engine & App Updates Section
+        Text(
+            text = "UPDATES & RELEASES",
+            fontSize = 11.sp,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
+            color = TextSecondary,
+            modifier = Modifier.padding(bottom = 6.dp)
+        )
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = SurfaceDark)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text("Aether Android Release", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                        Text("Installed: v0.1.3 · Core: ${updateInfo?.aetherCoreVersion ?: "v2.3.0"}", color = TextSecondary, fontSize = 12.sp)
+                    }
+                    Button(
+                        onClick = onCheckUpdates,
+                        enabled = !isCheckingUpdates,
+                        colors = ButtonDefaults.buttonColors(containerColor = SurfaceVariantDark),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        if (isCheckingUpdates) {
+                            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = PrimaryCyan)
+                        } else {
+                            Icon(Icons.Default.Refresh, contentDescription = null, tint = PrimaryCyan, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Check", color = PrimaryCyan, fontSize = 12.sp)
+                        }
+                    }
+                }
+
+                if (updateInfo != null) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    if (updateInfo.hasUpdate) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(PrimaryCyan.copy(alpha = 0.12f))
+                                .padding(12.dp)
+                        ) {
+                            Column {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "New Update Available: v${updateInfo.latestVersion}",
+                                        color = PrimaryCyan,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Button(
+                                        onClick = { onDownloadUpdate(updateInfo.downloadUrl) },
+                                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryCyan),
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Text("Download APK", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                                if (!updateInfo.releaseNotes.isNullOrBlank()) {
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Text(
+                                        text = updateInfo.releaseNotes.take(150) + if (updateInfo.releaseNotes.length > 150) "..." else "",
+                                        color = TextSecondary,
+                                        fontSize = 11.sp
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        Text(
+                            text = "✓ You are running the latest version",
+                            color = StatusGreen,
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+            }
+        }
+
         Spacer(modifier = Modifier.height(24.dp))
 
         // About / Build Info
@@ -219,7 +480,7 @@ fun SettingsScreen(
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
-                    text = "AETHER ANDROID",
+                    text = "AETHER MOBILE",
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Bold,
                     fontSize = 13.sp,
@@ -228,7 +489,7 @@ fun SettingsScreen(
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Version 1.0.0 · Native Mobile Core",
+                    text = "Version 0.1.3 · Powered by Aether Core v2.3.0",
                     fontSize = 11.sp,
                     fontFamily = FontFamily.Monospace,
                     color = TextTertiary

@@ -28,17 +28,19 @@ sealed class ScanState {
 object WarpScanner {
 
     private val SUBNETS = listOf(
+        "162.159.204",
+        "162.159.200",
+        "162.159.193",
+        "162.159.192",
+        "162.159.195",
         "188.114.99",
         "188.114.98",
         "188.114.97",
-        "188.114.96",
-        "162.159.193",
-        "162.159.192",
-        "162.159.195"
+        "188.114.96"
     )
 
     private val PORTS = listOf(
-        942, 2408, 1701, 500, 854, 859, 864, 878, 880, 890, 891, 894, 903, 908
+        500, 854, 859, 864, 878, 880, 890, 891, 894, 903, 908, 942, 1701, 2408, 4500
     )
 
     private val _scanState = MutableStateFlow<ScanState>(ScanState.Idle)
@@ -48,7 +50,9 @@ object WarpScanner {
         val list = mutableListOf<Pair<String, Int>>()
         // Pre-seed known resilient Cloudflare endpoints
         list.add("188.114.99.215" to 942)
+        list.add("162.159.204.12" to 4500)
         list.add("188.114.96.226" to 1701)
+        list.add("162.159.200.1" to 942)
         list.add("162.159.193.10" to 2408)
         list.add("162.159.192.1" to 2408)
         list.add("188.114.97.15" to 854)

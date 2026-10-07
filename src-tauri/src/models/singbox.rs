@@ -239,6 +239,9 @@ pub struct RouteRule {
     pub ip_is_private: Option<bool>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain_suffix: Option<Vec<String>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub action: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]

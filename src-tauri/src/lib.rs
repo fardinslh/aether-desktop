@@ -183,6 +183,7 @@ pub fn run() {
             commands::save_exported_logs,
             commands::validate_binaries,
             commands::check_dependencies,
+            commands::check_dependency_updates,
             commands::install_aether_dependency,
             commands::install_singbox_dependency,
             commands::ensure_dependencies_and_complete_setup,

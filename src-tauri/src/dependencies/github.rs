@@ -45,6 +45,8 @@ pub struct GithubRelease {
     pub name: Option<String>,
     pub draft: bool,
     pub prerelease: bool,
+    #[serde(default)]
+    pub html_url: Option<String>,
     pub assets: Vec<ReleaseAsset>,
 }
 

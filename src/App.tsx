@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { WindowTitleBar } from "./components/layout/WindowTitleBar";
 import { Navbar, NavTab } from "./components/layout/Navbar";
 import { MobileHeader } from "./components/layout/MobileHeader";
@@ -11,7 +11,9 @@ import { DiagnosticsView } from "./features/diagnostics/DiagnosticsView";
 import { FirstRunWizard } from "./features/wizard/FirstRunWizard";
 import { useAppStore } from "./stores/useAppStore";
 import { useIsMobile } from "./hooks/useIsMobile";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, X } from "lucide-react";
+import { api } from "./services/api";
+import { DependencyUpdateInfo } from "./types";
 
 export function App() {
   const {
@@ -37,7 +39,36 @@ export function App() {
   } = useAppStore();
 
   const [activeTab, setActiveTab] = useState<NavTab>("dashboard");
+  const [availableUpdates, setAvailableUpdates] = useState<string[]>([]);
+  const [dismissUpdateBanner, setDismissUpdateBanner] = useState(false);
   const { isMobile } = useIsMobile();
+
+  useEffect(() => {
+    let mounted = true;
+    api.checkDependencyUpdates()
+      .then((info: DependencyUpdateInfo) => {
+        if (!mounted || !info) return;
+        const labels: string[] = [];
+        if (info.aetherUpdateAvailable) {
+          labels.push(`Aether Core (v${info.aetherLatestVersion})`);
+        }
+        if (info.singboxUpdateAvailable) {
+          labels.push(`sing-box (v${info.singboxLatestVersion})`);
+        }
+        if (info.appUpdateAvailable) {
+          labels.push(`Aether App (v${info.appLatestVersion})`);
+        }
+        if (labels.length > 0) {
+          setAvailableUpdates(labels);
+        }
+      })
+      .catch((err) => {
+        console.warn("Failed to check dependency updates on startup:", err);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   if (isLoading || !settings) {
     return (
@@ -61,6 +92,36 @@ export function App() {
           <WindowTitleBar connectionState={connectionState} />
           <Navbar activeTab={activeTab} onSelectTab={setActiveTab} rulesCount={activeRulesCount} />
         </>
+      )}
+
+      {!dismissUpdateBanner && availableUpdates.length > 0 && (
+        <div className="bg-signal-cyan/10 border-b border-signal-cyan/30 px-4 py-2 flex items-center justify-between text-xs animate-in fade-in duration-300 z-10 shrink-0">
+          <div className="flex items-center gap-2 text-ink-200">
+            <span className="flex h-2 w-2 rounded-full bg-signal-cyan animate-pulse" />
+            <span className="font-medium text-signal-cyan">Updates Available:</span>
+            <span className="text-ink-300">
+              {availableUpdates.join(", ")}
+            </span>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => {
+                setActiveTab("settings");
+                setDismissUpdateBanner(true);
+              }}
+              className="text-signal-cyan hover:underline font-semibold flex items-center gap-1 cursor-pointer"
+            >
+              Update Now <ArrowRight className="w-3 h-3" />
+            </button>
+            <button
+              onClick={() => setDismissUpdateBanner(true)}
+              className="text-ink-400 hover:text-ink-200 cursor-pointer p-0.5 rounded hover:bg-white/5"
+              title="Dismiss"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
       )}
 
       <main className={`flex-1 ${isMobile ? "overflow-y-auto pb-20" : "overflow-hidden"}`}>

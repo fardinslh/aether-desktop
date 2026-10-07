@@ -1,4 +1,4 @@
-use crate::dependencies::{DependencyManager, DependencyStatus};
+use crate::dependencies::{DependencyManager, DependencyStatus, DependencyUpdateInfo};
 use crate::health::HealthProber;
 use crate::logging::{LogEntry, RingBufferLogger};
 use crate::models::health::CloudflareTrace;
@@ -851,6 +851,11 @@ pub fn validate_binaries() -> Result<BinaryValidationResult, String> {
 #[tauri::command]
 pub fn check_dependencies() -> DependencyStatus {
     DependencyManager::check_status()
+}
+
+#[tauri::command]
+pub async fn check_dependency_updates() -> Result<DependencyUpdateInfo, String> {
+    DependencyManager::check_for_dependency_updates().await
 }
 
 #[tauri::command]

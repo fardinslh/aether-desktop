@@ -43,16 +43,16 @@ jobs:
           mkdir -p android/app/src/main/jniLibs/armeabi-v7a
           mkdir -p android/app/src/main/jniLibs/x86_64
 
-          echo "=== Fetching Aether Core v1.9.0 ==="
-          curl -sSL "https://github.com/CluvexStudio/Aether/releases/download/v1.9.0/aether-android-arm64.tar.gz" | tar -xz -C android/app/src/main/jniLibs/arm64-v8a/
+          echo "=== Fetching Aether Core v2.3.0 ==="
+          curl -sSL "https://github.com/CluvexStudio/Aether/releases/download/v2.3.0/aether-android-arm64.tar.gz" | tar -xz -C android/app/src/main/jniLibs/arm64-v8a/
           mv android/app/src/main/jniLibs/arm64-v8a/aether android/app/src/main/jniLibs/arm64-v8a/libaether.so
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libaether.so
 
-          curl -sSL "https://github.com/CluvexStudio/Aether/releases/download/v1.9.0/aether-android-armv7.tar.gz" | tar -xz -C android/app/src/main/jniLibs/armeabi-v7a/
+          curl -sSL "https://github.com/CluvexStudio/Aether/releases/download/v2.3.0/aether-android-armv7.tar.gz" | tar -xz -C android/app/src/main/jniLibs/armeabi-v7a/
           mv android/app/src/main/jniLibs/armeabi-v7a/aether android/app/src/main/jniLibs/armeabi-v7a/libaether.so
           chmod +x android/app/src/main/jniLibs/armeabi-v7a/libaether.so
 
-          curl -sSL "https://github.com/CluvexStudio/Aether/releases/download/v1.9.0/aether-android-x86_64.tar.gz" | tar -xz -C android/app/src/main/jniLibs/x86_64/
+          curl -sSL "https://github.com/CluvexStudio/Aether/releases/download/v2.3.0/aether-android-x86_64.tar.gz" | tar -xz -C android/app/src/main/jniLibs/x86_64/
           mv android/app/src/main/jniLibs/x86_64/aether android/app/src/main/jniLibs/x86_64/libaether.so
           chmod +x android/app/src/main/jniLibs/x86_64/libaether.so
 

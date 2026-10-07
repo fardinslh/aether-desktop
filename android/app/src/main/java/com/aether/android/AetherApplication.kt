@@ -7,6 +7,7 @@ import android.content.Context
 import android.os.Build
 import com.aether.android.repository.ProfileRepository
 import com.aether.android.repository.SettingsRepository
+import com.aether.android.repository.UpdateRepository
 
 class AetherApplication : Application() {
 
@@ -22,6 +23,9 @@ class AetherApplication : Application() {
     lateinit var settingsRepository: SettingsRepository
         private set
 
+    lateinit var updateRepository: UpdateRepository
+        private set
+
     override fun onCreate() {
         super.onCreate()
         instance = this
@@ -32,6 +36,7 @@ class AetherApplication : Application() {
         }
         profileRepository = ProfileRepository(this)
         settingsRepository = SettingsRepository(this)
+        updateRepository = UpdateRepository(this)
         createNotificationChannels()
     }
 

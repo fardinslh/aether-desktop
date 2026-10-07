@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.sp
 import com.aether.android.model.Profile
 import com.aether.android.model.VpnState
 import com.aether.android.model.VpnStatus
+import com.aether.android.repository.AppUpdateInfo
 import com.aether.android.ui.theme.*
 
 @Composable
@@ -38,6 +39,8 @@ fun HomeScreen(
     onToggleConnect: () -> Unit,
     onNavigateToServers: () -> Unit,
     onRescanGateway: () -> Unit = {},
+    updateInfo: AppUpdateInfo? = null,
+    onDownloadUpdate: (String?) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val isConnected = status.state == VpnState.CONNECTED
@@ -63,6 +66,59 @@ fun HomeScreen(
         verticalArrangement = Arrangement.SpaceBetween
     ) {
         Spacer(modifier = Modifier.height(16.dp))
+
+        if (updateInfo?.hasUpdate == true) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 12.dp)
+                    .clickable { onDownloadUpdate(updateInfo.downloadUrl) },
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = PrimaryCyan.copy(alpha = 0.12f)),
+                border = androidx.compose.foundation.BorderStroke(1.dp, PrimaryCyan.copy(alpha = 0.4f))
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(PrimaryCyan)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "UPDATE AVAILABLE: v${updateInfo.latestVersion}",
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                color = PrimaryCyan
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "New release on GitHub with updated Aether Core v2.3.0",
+                            fontSize = 11.sp,
+                            color = TextSecondary
+                        )
+                    }
+                    Button(
+                        onClick = { onDownloadUpdate(updateInfo.downloadUrl) },
+                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryCyan),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("Update", color = Color.Black, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
 
         // Active Node Card
         Card(

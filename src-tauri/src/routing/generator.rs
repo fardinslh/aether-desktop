@@ -101,6 +101,7 @@ impl SingBoxConfigGenerator {
             port_range: None,
             network: None,
             ip_is_private: None,
+            domain_suffix: None,
             action: Some("hijack-dns".to_string()),
             outbound: None,
         });
@@ -111,6 +112,7 @@ impl SingBoxConfigGenerator {
             port_range: None,
             network: None,
             ip_is_private: None,
+            domain_suffix: None,
             action: Some("hijack-dns".to_string()),
             outbound: None,
         });
@@ -127,6 +129,7 @@ impl SingBoxConfigGenerator {
             port_range: None,
             network: None,
             ip_is_private: None,
+            domain_suffix: None,
             action: Some("route".to_string()),
             outbound: Some("direct".to_string()),
         });
@@ -150,6 +153,7 @@ impl SingBoxConfigGenerator {
                         port_range: compat_rule.port_ranges.clone(),
                         network: network_str,
                         ip_is_private: None,
+                        domain_suffix: None,
                         action: Some("route".to_string()),
                         outbound: Some(Self::outbound_tag_for_destination(
                             &compat_rule.destination,
@@ -321,6 +325,7 @@ impl SingBoxConfigGenerator {
                 port_range: None,
                 network: None,
                 ip_is_private: None,
+                domain_suffix: None,
                 action: Some("route".to_string()),
                 outbound: Some("direct".to_string()),
             });
@@ -333,6 +338,7 @@ impl SingBoxConfigGenerator {
                 port_range: None,
                 network: None,
                 ip_is_private: None,
+                domain_suffix: None,
                 action: Some("route".to_string()),
                 outbound: Some("v2ray".to_string()),
             });
@@ -345,6 +351,7 @@ impl SingBoxConfigGenerator {
                 port_range: None,
                 network: None,
                 ip_is_private: None,
+                domain_suffix: None,
                 action: Some("route".to_string()),
                 outbound: Some("aether".to_string()),
             });
@@ -368,6 +375,7 @@ impl SingBoxConfigGenerator {
                 port_range: compat_rule.port_ranges.clone(),
                 network: network_str,
                 ip_is_private: None,
+                domain_suffix: None,
                 action: Some("route".to_string()),
                 outbound: Some(Self::outbound_tag_for_destination(
                     &compat_rule.destination,
@@ -385,6 +393,7 @@ impl SingBoxConfigGenerator {
                 port_range: None,
                 network: None,
                 ip_is_private: None,
+                domain_suffix: None,
                 action: Some("route".to_string()),
                 outbound: Some("direct".to_string()),
             });
@@ -400,6 +409,7 @@ impl SingBoxConfigGenerator {
                 port_range: None,
                 network: None,
                 ip_is_private: None,
+                domain_suffix: None,
                 action: Some("route".to_string()),
                 outbound: Some("direct".to_string()),
             });
@@ -414,6 +424,7 @@ impl SingBoxConfigGenerator {
                 port_range: None,
                 network: None,
                 ip_is_private: None,
+                domain_suffix: None,
                 action: Some("route".to_string()),
                 outbound: Some("v2ray".to_string()),
             });
@@ -428,12 +439,28 @@ impl SingBoxConfigGenerator {
                 port_range: None,
                 network: None,
                 ip_is_private: None,
+                domain_suffix: None,
                 action: Some("route".to_string()),
                 outbound: Some("aether".to_string()),
             });
         }
 
-        // 5.6 Priority 6: Private IP network bypass -> DIRECT
+        // 5.6 Domestic Iran Traffic Bypass -> DIRECT (.ir domains)
+        if settings.aether.bypass_iran_traffic {
+            rules.push(RouteRule {
+                protocol: None,
+                process_name: None,
+                port: None,
+                port_range: None,
+                network: None,
+                ip_is_private: None,
+                domain_suffix: Some(vec![".ir".to_string()]),
+                action: Some("route".to_string()),
+                outbound: Some("direct".to_string()),
+            });
+        }
+
+        // 5.7 Priority 6: Private IP network bypass -> DIRECT
         if settings.compatibility.private_ip_bypass {
             rules.push(RouteRule {
                 protocol: None,
@@ -442,6 +469,7 @@ impl SingBoxConfigGenerator {
                 port_range: None,
                 network: None,
                 ip_is_private: Some(true),
+                domain_suffix: None,
                 action: Some("route".to_string()),
                 outbound: Some("direct".to_string()),
             });
