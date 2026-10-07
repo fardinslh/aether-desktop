@@ -45,7 +45,7 @@ class UpdateRepository(private val context: Context) {
         private const val TAG = "UpdateRepository"
         private const val APP_REPO_URL = "https://api.github.com/repos/fardinslh/aether-desktop/releases/latest"
         private const val AETHER_CORE_REPO_URL = "https://api.github.com/repos/CluvexStudio/Aether/releases/latest"
-        const val CURRENT_APP_VERSION = "0.1.3"
+        const val CURRENT_APP_VERSION = "0.1.4"
     }
 
     private val client = OkHttpClient.Builder()
