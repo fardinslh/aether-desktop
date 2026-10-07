@@ -234,11 +234,8 @@ impl AetherSettings {
             AetherProtocol::WarpInWarp => args.push("--gool".to_string()),
         }
 
-        // Exit location filter (never route through domestic/Iranian exit nodes)
-        if self.prevent_iran_exit {
-            args.push("--exit-loc".to_string());
-            args.push("!IR".to_string());
-        }
+        // Exit-country policy is checked against the SOCKS egress trace.
+        // The bundled core does not implement an --exit-loc CLI option.
 
         // 4. IP Mode
         match self.ip_mode {
@@ -588,7 +585,7 @@ mod tests {
         assert!(args.contains(&"--fragment".to_string()));
         assert!(args.contains(&"--noize".to_string()));
         assert!(args.contains(&"firewall".to_string()));
-        assert!(args.contains(&"--exit-loc".to_string()));
-        assert!(args.contains(&"!IR".to_string()));
+        assert!(!args.contains(&"--exit-loc".to_string()));
+        assert!(!args.contains(&"!IR".to_string()));
     }
 }

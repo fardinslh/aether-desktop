@@ -16,6 +16,22 @@ pub struct DetectedAdapterInfo {
 pub struct HealthProber;
 
 impl HealthProber {
+    pub fn enforce_exit_location(
+        trace: CloudflareTrace,
+        prevent_iran_exit: bool,
+    ) -> Result<CloudflareTrace, String> {
+        if prevent_iran_exit {
+            let loc = trace.loc.trim();
+            if loc.len() != 2 || !loc.bytes().all(|b| b.is_ascii_alphabetic()) {
+                return Err("Exit-country verification failed: trace has no valid country".into());
+            }
+            if loc.eq_ignore_ascii_case("IR") {
+                return Err("Exit-country policy rejected an Iranian egress (IR)".into());
+            }
+        }
+        Ok(trace)
+    }
+
     /// Probes if a local TCP / SOCKS5 port is accepting connections
     pub async fn check_port_open(host: &str, port: u16, timeout_ms: u64) -> bool {
         let addr = format!("{}:{}", host, port);
@@ -1438,6 +1454,23 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
+
+    #[test]
+    fn exit_country_policy_checks_real_trace() {
+        let trace = |loc: &str| CloudflareTrace {
+            ip: "203.0.113.1".into(),
+            warp: "on".into(),
+            colo: "FRA".into(),
+            loc: loc.into(),
+            latency_ms: 1,
+        };
+        assert!(HealthProber::enforce_exit_location(trace("DE"), true).is_ok());
+        for loc in ["IR", "ir", "", "unknown"] {
+            assert!(HealthProber::enforce_exit_location(trace(loc), true).is_err());
+        }
+        assert!(HealthProber::enforce_exit_location(trace("IR"), false).is_ok());
+        assert!(HealthProber::enforce_exit_location(trace(""), false).is_ok());
+    }
 
     #[tokio::test]
     async fn test_e_tun_teardown_wait_succeeds_when_adapter_is_released() {

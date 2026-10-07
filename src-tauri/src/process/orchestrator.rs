@@ -312,6 +312,7 @@ impl ConnectionOrchestrator {
 
                     match HealthProber::query_cloudflare_trace_via_socks5(aether_host, aether_port)
                         .await
+                        .and_then(|trace| HealthProber::enforce_exit_location(trace, active_settings.aether.prevent_iran_exit))
                     {
                         Ok(trace) => {
                             self.logger.log(
@@ -354,6 +355,7 @@ impl ConnectionOrchestrator {
                     // Could not query PID owner, probe SOCKS directly
                     match HealthProber::query_cloudflare_trace_via_socks5(aether_host, aether_port)
                         .await
+                        .and_then(|trace| HealthProber::enforce_exit_location(trace, active_settings.aether.prevent_iran_exit))
                     {
                         Ok(trace) => {
                             self.logger.log(
@@ -534,6 +536,7 @@ impl ConnectionOrchestrator {
                         Some(&log_cb),
                     )
                     .await
+                    .and_then(|trace| HealthProber::enforce_exit_location(trace, active_settings.aether.prevent_iran_exit))
                     {
                         Ok(trace) => {
                             self.logger.log(
@@ -1118,6 +1121,7 @@ impl ConnectionOrchestrator {
                             settings.aether.port,
                         )
                         .await
+                        .and_then(|trace| HealthProber::enforce_exit_location(trace, settings.aether.prevent_iran_exit))
                         {
                             Ok(trace) => {
                                 *self.active_aether_ip.write() = Some(trace.ip.clone());

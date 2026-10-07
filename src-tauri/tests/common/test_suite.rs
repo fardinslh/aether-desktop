@@ -68,7 +68,7 @@ pub fn test_reference_config_match() {
     }
 
     let rules = &config.route.rules;
-    assert_eq!(rules.len(), 9);
+    assert_eq!(rules.len(), 10);
 
     // Rule 0 & 1: DNS Hijack Infrastructure rules
     assert_eq!(
@@ -124,8 +124,10 @@ pub fn test_reference_config_match() {
     );
     assert_eq!(rules[7].outbound.as_deref(), Some("aether"));
 
-    assert_eq!(rules[8].ip_is_private, Some(true));
+    assert_eq!(rules[8].domain_suffix.as_ref().unwrap(), &vec![".ir".to_string()]);
     assert_eq!(rules[8].outbound.as_deref(), Some("direct"));
+    assert_eq!(rules[9].ip_is_private, Some(true));
+    assert_eq!(rules[9].outbound.as_deref(), Some("direct"));
 
     assert_eq!(config.route.final_outbound, "aether");
     assert_eq!(
@@ -527,6 +529,8 @@ pub fn test_k_aether_noninteractive_launch_arguments() {
             "--bind",
             "127.0.0.1:1819",
             "--wg",
+            "--noize",
+            "balanced",
             "-4",
             "--thorough",
             "--quick-reconnect"

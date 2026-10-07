@@ -665,7 +665,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, onSave, on
                 <div className="flex items-center justify-between p-2 rounded-sm bg-app-inset border border-app-border-subtle self-end">
                   <div>
                     <div className="text-xs font-semibold text-ink-100 font-mono">NEVER USE IRAN EXIT</div>
-                    <div className="text-[10px] text-ink-400 font-sans">Enforce non-Iran exit node (--exit-loc !IR)</div>
+                    <div className="text-[10px] text-ink-400 font-sans">Verify tunnel exit country; reject Iranian or unknown exits</div>
                   </div>
                   <input
                     type="checkbox"

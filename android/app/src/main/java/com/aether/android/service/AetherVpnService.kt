@@ -13,6 +13,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.aether.android.AetherApplication
 import com.aether.android.R
+import com.aether.android.core.Socks5TraceProbe
 import com.aether.android.model.AppSettings
 import com.aether.android.model.NoizeProfile
 import com.aether.android.model.Profile
@@ -28,7 +29,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.BufferedReader
 import java.io.File
-import java.io.InputStream
 import java.io.InputStreamReader
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -130,6 +130,7 @@ class AetherVpnService : VpnService() {
                 val profileId = intent.getStringExtra("profile_id")
                 Log.i(TAG, "ACTION_CONNECT profileId=$profileId")
                 userInitiatedStop = false
+                autoReconnectAttempts = 0
                 startVpn(profileId, forceFreshScan = false)
             }
             ACTION_DISCONNECT -> {
@@ -141,6 +142,7 @@ class AetherVpnService : VpnService() {
                 val profileId = intent.getStringExtra("profile_id")
                 Log.i(TAG, "ACTION_RESCAN profileId=$profileId")
                 userInitiatedStop = false
+                autoReconnectAttempts = 0
                 startVpn(profileId, forceFreshScan = true)
             }
             else -> {
@@ -187,7 +189,8 @@ class AetherVpnService : VpnService() {
 
         // Re-entry guard: cancel any in-flight attempt synchronously so a
         // stale coroutine can never error-stomp or kill this fresh attempt.
-        connectJob?.cancel()
+        val previousConnectJob = connectJob
+        previousConnectJob?.cancel()
 
         lastProfileId = profile.id
         lastProfileName = profile.name
@@ -218,6 +221,10 @@ class AetherVpnService : VpnService() {
 
         connectJob = serviceScope.launch {
             try {
+                // Cancellation alone does not finish a blocking process/socket
+                // operation. Wait for the previous attempt before replacing it.
+                previousConnectJob?.join()
+                ensureActive()
                 // 0. Tear down any previous transport and free port 1819.
                 //    Without this, a leaked daemon from an earlier attempt keeps
                 //    port 1819 open, the readiness check below passes instantly
@@ -304,10 +311,8 @@ class AetherVpnService : VpnService() {
                     }
                 }
 
-                if (settings.preventIranExit) {
-                    cmd.add("--exit-loc")
-                    cmd.add("!IR")
-                }
+                // The shipped core has no --exit-loc flag. Enforce this policy
+                // on the real SOCKS egress trace before declaring CONNECTED.
 
                 if (forceFreshScan || !lastconnFile.exists()) {
                     cmd.add("--no-quick-reconnect")
@@ -334,11 +339,12 @@ class AetherVpnService : VpnService() {
                 val recentLogs = Collections.synchronizedList(mutableListOf<String>())
 
                 // 3. Monitor Aether Stdout in Real-Time
-                candidateMonitoringJob = launch {
+                candidateMonitoringJob = serviceScope.launch {
                     try {
                         val reader = BufferedReader(InputStreamReader(proc.inputStream, Charsets.UTF_8))
                         var line: String? = null
                         while (isActive && reader.readLine().also { line = it } != null) {
+                            ensureActive()
                             val currentLine = line ?: continue
                             Log.d(TAG, "[Aether] $currentLine")
                             recentLogs.add(currentLine)
@@ -396,6 +402,11 @@ class AetherVpnService : VpnService() {
                     debugLog(this@AetherVpnService, "connect: TIMEOUT waiting for port. daemonAlive=${proc.isAlive} tail=$tail")
                     throw IllegalStateException("Timed out waiting for Aether SOCKS5 proxy on 127.0.0.1:1819. Last log: $tail")
                 }
+                ensureActive()
+                if (!performSocks5LivenessProbe("127.0.0.1", 1819, 6_000)) {
+                    throw IllegalStateException("Aether egress verification failed: tunnel must return a WARP trace with an allowed exit country")
+                }
+                ensureActive()
                 Log.i(TAG, "connect[gen]: SOCKS5 port ready, establishing TUN")
                 debugLog(this@AetherVpnService, "connect: establishing TUN")
 
@@ -444,7 +455,6 @@ class AetherVpnService : VpnService() {
                 }
                 Log.i(TAG, "connect[gen]: TProxy engine started, CONNECTED")
                 debugLog(this@AetherVpnService, "connect: TProxy started, CONNECTED ip=$activeCleanIp:$activeCleanPort rtt=$activeCleanRtt")
-                autoReconnectAttempts = 0
 
                 // 7. Transition to CONNECTED
                 val activeConnectedProfile = profile.copy(
@@ -472,6 +482,7 @@ class AetherVpnService : VpnService() {
                 debugLog(this@AetherVpnService, "connect: CANCELLED (superseded by newer attempt or disconnect)")
                 throw ce
             } catch (t: Throwable) {
+                ensureActive()
                 Log.e(TAG, "VPN start failed", t)
                 debugLog(this@AetherVpnService, "connect: FAILED ${t.javaClass.name}: ${t.message}\n${t.stackTraceToString().take(2000)}")
                 if (autoReconnectAttempts > 0 && !userInitiatedStop) {
@@ -592,6 +603,8 @@ class AetherVpnService : VpnService() {
                     }
                 }
                 checks++
+                // A briefly live listener must not reset the retry budget.
+                if (checks >= 6) autoReconnectAttempts = 0
             }
         }
     }
@@ -634,10 +647,11 @@ class AetherVpnService : VpnService() {
             startVpn(lastProfileId, forceFreshScan = true)
         } else {
             debugLog(this, "tunnel failure: $reason -> ERROR after $autoReconnectAttempts reconnect attempts")
+            val exhaustedAttempts = autoReconnectAttempts
             stopVpn()
             _vpnStatus.value = VpnStatus(
                 state = VpnState.ERROR,
-                errorMessage = "$reason after $autoReconnectAttempts reconnect attempts. " +
+                errorMessage = "$reason after $exhaustedAttempts reconnect attempts. " +
                     "The network may be heavily filtered right now — try again in a moment."
             )
         }
@@ -645,62 +659,14 @@ class AetherVpnService : VpnService() {
 
     /**
      * Real end-to-end probe through the local SOCKS5 proxy: performs the
-     * SOCKS5 greeting, then a CONNECT request for a remote DOMAIN (port 80).
-     * Success requires the full chain to work: local proxy -> WARP tunnel ->
-     * remote resolution + egress. A dead tunnel fails the CONNECT reply or
-     * times out, even though the TCP listener may still accept sockets.
+     * SOCKS5 greeting, DOMAIN CONNECT and an HTTP Cloudflare WARP trace.
+     * A successful CONNECT reply alone does not prove usable traffic.
      */
     private fun performSocks5LivenessProbe(host: String, port: Int, timeoutMs: Int): Boolean {
-        var socket: Socket? = null
-        return try {
-            socket = Socket()
-            socket.tcpNoDelay = true
-            socket.connect(InetSocketAddress(host, port), timeoutMs)
-            socket.soTimeout = timeoutMs
-            val out = socket.getOutputStream()
-            val input = socket.getInputStream()
-
-            // SOCKS5 greeting: VER=5, 1 method, NO AUTHENTICATION
-            out.write(byteArrayOf(0x05, 0x01, 0x00))
-            out.flush()
-            val greeting = ByteArray(2)
-            if (readFully(input, greeting) < 2) return false
-            if (greeting[0] != 0x05.toByte() || greeting[1] != 0x00.toByte()) return false
-
-            // SOCKS5 CONNECT request with ATYP=DOMAINNAME
-            val domain = "cp.cloudflare.com".toByteArray(Charsets.US_ASCII)
-            val request = ByteArray(7 + domain.size)
-            request[0] = 0x05
-            request[1] = 0x01
-            request[2] = 0x00
-            request[3] = 0x03
-            request[4] = domain.size.toByte()
-            System.arraycopy(domain, 0, request, 5, domain.size)
-            request[5 + domain.size] = ((80 ushr 8) and 0xFF).toByte()
-            request[6 + domain.size] = (80 and 0xFF).toByte()
-            out.write(request)
-            out.flush()
-
-            // SOCKS5 reply: VER REP RSV ATYP ...; REP == 0x00 means the remote
-            // connection was established through the tunnel.
-            val response = ByteArray(4)
-            if (readFully(input, response) < 4) return false
-            response[1] == 0x00.toByte()
-        } catch (t: Throwable) {
-            false
-        } finally {
-            try { socket?.close() } catch (ignored: Throwable) {}
-        }
-    }
-
-    private fun readFully(input: InputStream, buffer: ByteArray): Int {
-        var offset = 0
-        while (offset < buffer.size) {
-            val read = input.read(buffer, offset, buffer.size - offset)
-            if (read < 0) return offset
-            offset += read
-        }
-        return offset
+        return Socks5TraceProbe.verify(
+            host, port, timeoutMs,
+            AetherApplication.instance.settingsRepository.settings.value.preventIranExit
+        )
     }
 
     private fun establishVpnInterface(settings: AppSettings): ParcelFileDescriptor? {
@@ -719,10 +685,6 @@ class AetherVpnService : VpnService() {
                 b.addRoute("::", 0)
             } catch (ignored: Throwable) {}
 
-            try {
-                b.addDisallowedApplication(packageName)
-            } catch (ignored: Throwable) {}
-
             applySplitTunneling(b, settings)
             val pfd = b.establish()
             if (pfd != null) return pfd
@@ -739,27 +701,27 @@ class AetherVpnService : VpnService() {
             .addDnsServer("198.18.0.2")
             .addDnsServer(settings.primaryDns)
 
-        try {
-            b4.addDisallowedApplication(packageName)
-        } catch (ignored: Throwable) {}
-
         applySplitTunneling(b4, settings)
         return b4.establish()
     }
 
     private fun applySplitTunneling(builder: Builder, settings: AppSettings) {
-        if (settings.selectedPackages.isEmpty()) return
+        if (settings.splitTunnelMode == SplitTunnelMode.ONLY_SELECTED) {
+            val packages = settings.selectedPackages.filter { it != packageName }
+            require(packages.isNotEmpty()) { "Select at least one app for Only Selected mode" }
+            // Android forbids mixing allowed and disallowed application lists.
+            // Omitting our package from the allowlist keeps the daemon outside TUN.
+            packages.forEach { builder.addAllowedApplication(it) }
+            return
+        }
+        builder.addDisallowedApplication(packageName)
         when (settings.splitTunnelMode) {
             SplitTunnelMode.BYPASS_SELECTED -> {
                 for (pkg in settings.selectedPackages) {
                     try { builder.addDisallowedApplication(pkg) } catch (ignored: Throwable) {}
                 }
             }
-            SplitTunnelMode.ONLY_SELECTED -> {
-                for (pkg in settings.selectedPackages) {
-                    try { builder.addAllowedApplication(pkg) } catch (ignored: Throwable) {}
-                }
-            }
+            SplitTunnelMode.ONLY_SELECTED -> error("Only Selected mode already handled")
             SplitTunnelMode.ALL_APPS -> {}
         }
     }

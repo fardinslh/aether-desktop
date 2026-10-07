@@ -553,6 +553,12 @@ impl SingBoxConfigGenerator {
         is_private: bool,
     ) -> &'a str {
         for rule in &config.route.rules {
+            // These helpers receive no hostname. A domain rule cannot match
+            // an unknown domain; treating it as a catch-all misreports public
+            // traffic as direct whenever the .ir bypass is enabled.
+            if rule.domain_suffix.is_some() {
+                continue;
+            }
             // Check hijack-dns infrastructure rule
             if rule.action.as_deref() == Some("hijack-dns") {
                 let port_matches = match rule.port {

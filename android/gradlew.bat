@@ -72,8 +72,17 @@ set CLASSPATH=%APP_HOME%\gradle\wrapper\gradle-wrapper.jar
 @rem Execute Gradle
 "%JAVA_EXE%" %DEFAULT_JVM_OPTS% %JAVA_OPTS% %GRADLE_OPTS% "-Dorg.gradle.appname=%APP_BASE_NAME%" -classpath "%CLASSPATH%" org.gradle.wrapper.GradleWrapperMain %*
 
+set GRADLE_EXIT_CODE=%ERRORLEVEL%
+if "%GRADLE_EXIT_CODE%" == "0" goto success
+goto fail
+
+:success
+endlocal
+exit /b 0
+
 :fail
 rem Set variable GRADLE_EXIT_CONSOLE if you need the _script_ return code instead of
 rem the _cmd.exe /c_ return code!
-if  not "" == "%GRADLE_EXIT_CONSOLE%" exit 1
-exit /b 1
+if not defined GRADLE_EXIT_CODE set GRADLE_EXIT_CODE=1
+if not "" == "%GRADLE_EXIT_CONSOLE%" exit %GRADLE_EXIT_CODE%
+exit /b %GRADLE_EXIT_CODE%

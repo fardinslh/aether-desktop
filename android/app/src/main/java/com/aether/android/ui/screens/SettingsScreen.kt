@@ -395,7 +395,7 @@ fun SettingsScreen(
                 ) {
                     Column {
                         Text("Aether Android Release", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                        Text("Installed: v0.1.4 · Core: ${updateInfo?.aetherCoreVersion ?: "v2.3.0"}", color = TextSecondary, fontSize = 12.sp)
+                        Text("Installed: v0.1.5 · Core: ${updateInfo?.aetherCoreVersion ?: "v2.3.0"}", color = TextSecondary, fontSize = 12.sp)
                     }
                     Button(
                         onClick = onCheckUpdates,
@@ -489,7 +489,7 @@ fun SettingsScreen(
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Version 0.1.4 · Powered by Aether Core v2.3.0",
+                    text = "Version 0.1.5 · Powered by Aether Core v2.3.0",
                     fontSize = 11.sp,
                     fontFamily = FontFamily.Monospace,
                     color = TextTertiary
