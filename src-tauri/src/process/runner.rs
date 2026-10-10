@@ -9,6 +9,8 @@ use crate::models::settings::AetherLaunchOptions;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -113,9 +115,28 @@ pub fn parse_candidate_rtt_from_line(line: &str) -> Option<u32> {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn start_crash_guard(child: &mut Child) -> Result<Option<Child>, String> {
+    let app = std::env::current_exe().map_err(|e| e.to_string())?;
+    // Unit/integration test harnesses do not implement the private guardian entry point.
+    if app.file_name().and_then(|v| v.to_str()) != Some("aether-desktop") { return Ok(None); }
+    match Command::new(app).args(["--guard-process-group", &child.id().to_string()])
+        .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).process_group(0).spawn() {
+        Ok(guardian) => Ok(Some(guardian)),
+        Err(e) => {
+            unsafe { libc::kill(-(child.id() as i32), libc::SIGKILL); }
+            let _ = child.wait();
+            Err(format!("Unable to protect transport cleanup: {}", e))
+        }
+    }
+}
+
 pub struct ProcessHandle {
     name: String,
     child: Option<Child>,
+    attempt_job: Option<crate::process::job::ProcessJobGroup>,
+    #[cfg(target_os = "macos")]
+    crash_guard: Option<Child>,
     stop_flag: Arc<AtomicBool>,
     interactive_prompt_detected: Arc<AtomicBool>,
 }
@@ -126,6 +147,11 @@ impl ProcessHandle {
             match child.try_wait() {
                 Ok(None) => true,
                 Ok(Some(_)) => {
+                    #[cfg(unix)]
+                    unsafe { libc::kill(-(child.id() as i32),libc::SIGKILL); }
+                    self.attempt_job = None;
+                    #[cfg(target_os = "macos")]
+                    self.close_crash_guard();
                     self.child = None;
                     false
                 }
@@ -144,7 +170,16 @@ impl ProcessHandle {
         self.interactive_prompt_detected.load(Ordering::SeqCst)
     }
 
+    #[cfg(target_os = "macos")]
+    fn close_crash_guard(&mut self) {
+        if let Some(mut guardian) = self.crash_guard.take() {
+            drop(guardian.stdin.take());
+            let _ = guardian.wait();
+        }
+    }
+
     pub fn kill(&mut self, logger: &RingBufferLogger) {
+        self.attempt_job = None;
         if let Some(mut child) = self.child.take() {
             self.stop_flag.store(true, Ordering::SeqCst);
             let pid = child.id();
@@ -153,8 +188,14 @@ impl ProcessHandle {
                 &self.name,
                 format!("Stopping process (PID: {:?})", pid),
             );
+            #[cfg(unix)]
+            unsafe { libc::kill(-(pid as i32), libc::SIGKILL); }
+            #[cfg(windows)]
+            { let _ = Command::new("taskkill").args(["/PID", &pid.to_string(), "/T", "/F"]).creation_flags(CREATE_NO_WINDOW).output(); }
             let _ = child.kill();
             let _ = child.wait();
+            #[cfg(target_os = "macos")]
+            self.close_crash_guard();
             crate::process::detector::ProcessDetector::kill_process_by_pid(pid);
             logger.log("INFO", &self.name, "Process terminated");
         }
@@ -244,12 +285,24 @@ impl AetherRunner {
         self.cached_endpoint_reused.store(false, Ordering::SeqCst);
         self.fresh_scan_observed.store(false, Ordering::SeqCst);
 
-        let aether_config_path =
-            SettingsStorage::get_aether_config_path_for_protocol(&settings.aether.protocol);
-        let cli_args = settings
+        let aether_config_path = if let Some(profile) = settings.aether.manual_profile {
+            let dir = aether_data_dir.join(profile.id());
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            let path=dir.join("aether.toml");
+            let legacy=SettingsStorage::get_aether_config_path_for_protocol(&settings.aether.protocol);
+            if !path.exists() && legacy.exists() { std::fs::copy(legacy,&path).map_err(|e|format!("Identity migration failed: {}",e))?; }
+            path
+        } else { SettingsStorage::get_aether_config_path_for_protocol(&settings.aether.protocol) };
+        let mut cli_args = settings
             .aether
             .build_cli_arguments_with_options(Some(&aether_config_path), options);
 
+        if let Some(dir) = Path::new(exe_path).parent() {
+            let pt = dir.join("pt");
+            let psiphon = pt.join(if cfg!(windows) { "psiphon-tunnel-core.exe" } else { "psiphon-tunnel-core" });
+            if psiphon.exists() { cli_args.extend(["--psiphon-bin".into(), psiphon.to_string_lossy().into()]); }
+            if pt.exists() { cli_args.extend(["--tor-pt-dir".into(), pt.to_string_lossy().into()]); }
+        }
         logger.log(
             "INFO",
             "Aether",
@@ -266,12 +319,16 @@ impl AetherRunner {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
+        #[cfg(unix)]
+        cmd.process_group(0);
         #[cfg(windows)]
         cmd.creation_flags(CREATE_NO_WINDOW);
 
         let mut child = cmd
             .spawn()
             .map_err(|e| format!("Failed to spawn Aether: {}", e))?;
+        #[cfg(target_os = "macos")]
+        let crash_guard = start_crash_guard(&mut child)?;
         crate::process::job::assign_child_to_global_job(&child);
         let pid = child.id();
         logger.log(
@@ -342,9 +399,14 @@ impl AetherRunner {
             });
         }
 
+        let attempt_job=crate::process::job::ProcessJobGroup::new();
+        if let Some(job)=&attempt_job { if !job.assign_child(&child) { let _=child.kill();let _=child.wait();return Err("Unable to isolate the child process tree".into()); } }
         self.handle = Some(ProcessHandle {
             name: "Aether".to_string(),
             child: Some(child),
+            attempt_job,
+            #[cfg(target_os = "macos")]
+            crash_guard,
             stop_flag,
             interactive_prompt_detected,
         });
@@ -561,6 +623,10 @@ pub struct SingBoxRunner {
     config_path: PathBuf,
     active_executable_path: Option<String>,
     active_interface_name: Option<String>,
+    #[cfg(target_os="macos")]
+    helper_running: bool,
+    #[cfg(target_os="macos")]
+    helper_heartbeat: Arc<AtomicBool>,
 }
 
 impl SingBoxRunner {
@@ -571,10 +637,16 @@ impl SingBoxRunner {
             config_path,
             active_executable_path: None,
             active_interface_name: None,
+            #[cfg(target_os="macos")]
+            helper_running: false,
+            #[cfg(target_os="macos")]
+            helper_heartbeat: Arc::new(AtomicBool::new(false)),
         }
     }
 
     pub fn is_running(&mut self) -> bool {
+        #[cfg(target_os="macos")]
+        if self.helper_running { return super::macos_helper::status().ok().and_then(|v|v["running"].as_bool()).unwrap_or(false); }
         if let Some(ref mut h) = self.handle {
             h.is_running()
         } else {
@@ -583,6 +655,8 @@ impl SingBoxRunner {
     }
 
     pub fn pid(&self) -> Option<u32> {
+        #[cfg(target_os="macos")]
+        if self.helper_running { return super::macos_helper::status().ok().and_then(|v|v["pid"].as_u64()).map(|p|p as u32); }
         self.handle.as_ref().and_then(|h| h.child_pid())
     }
 
@@ -628,6 +702,8 @@ impl SingBoxRunner {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
+        #[cfg(unix)]
+        cmd.process_group(0);
         #[cfg(windows)]
         cmd.creation_flags(CREATE_NO_WINDOW);
 
@@ -668,6 +744,17 @@ impl SingBoxRunner {
             format!("Launching sing-box TUN router from {}", singbox_exe),
         );
 
+        #[cfg(target_os="macos")]
+        {
+            let config: serde_json::Value = serde_json::from_slice(&std::fs::read(config_path).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+            super::macos_helper::request(serde_json::json!({"command":"start","config":config}))?;
+            self.helper_running = true;
+            self.helper_heartbeat = Arc::new(AtomicBool::new(true));
+            let heartbeat = self.helper_heartbeat.clone();
+            std::thread::spawn(move || { while heartbeat.load(Ordering::SeqCst) { let _=super::macos_helper::status(); std::thread::sleep(Duration::from_secs(3)); } });
+            logger.log("INFO","sing-box","Privileged router started by launchd helper");
+            return Ok(());
+        }
         let mut cmd = Command::new(singbox_exe);
         cmd.arg("run")
             .arg("-c")
@@ -676,12 +763,16 @@ impl SingBoxRunner {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
+        #[cfg(unix)]
+        cmd.process_group(0);
         #[cfg(windows)]
         cmd.creation_flags(CREATE_NO_WINDOW);
 
         let mut child = cmd
             .spawn()
             .map_err(|e| format!("Failed to spawn sing-box: {}", e))?;
+        #[cfg(target_os = "macos")]
+        let crash_guard = start_crash_guard(&mut child)?;
         crate::process::job::assign_child_to_global_job(&child);
         let pid = child.id();
         logger.log(
@@ -733,9 +824,14 @@ impl SingBoxRunner {
             });
         }
 
+        let attempt_job=crate::process::job::ProcessJobGroup::new();
+        if let Some(job)=&attempt_job { if !job.assign_child(&child) { let _=child.kill();let _=child.wait();return Err("Unable to isolate the child process tree".into()); } }
         self.handle = Some(ProcessHandle {
             name: "sing-box".to_string(),
             child: Some(child),
+            attempt_job,
+            #[cfg(target_os = "macos")]
+            crash_guard,
             stop_flag,
             interactive_prompt_detected,
         });
@@ -1021,6 +1117,8 @@ impl SingBoxRunner {
     }
 
     pub fn stop(&mut self, logger: &RingBufferLogger) {
+        #[cfg(target_os="macos")]
+        { if self.helper_running { self.helper_heartbeat.store(false,Ordering::SeqCst); super::macos_helper::stop(); self.helper_running = false; } }
         if let Some(ref mut h) = self.handle {
             h.kill(logger);
         }
@@ -1195,5 +1293,21 @@ mod tests {
         );
         assert!(fresh_scan.load(Ordering::SeqCst));
         assert_eq!(best_rtt.load(Ordering::SeqCst), 42);
+    }
+}
+
+#[cfg(all(test, unix))]
+mod process_tree_tests {
+    use super::*;
+    #[test]
+    fn crash_cleanup_also_terminates_descendants() {
+        let mut child=Command::new("/bin/sh").args(["-c","sleep 30 & echo $!; sleep 1"]).process_group(0).stdout(Stdio::piped()).spawn().unwrap();
+        let mut line=String::new();BufReader::new(child.stdout.take().unwrap()).read_line(&mut line).unwrap();
+        let descendant:i32=line.trim().parse().unwrap();
+        let mut handle=ProcessHandle{name:"test-owned-group".into(),child:Some(child),attempt_job:None,#[cfg(target_os="macos")]crash_guard:None,stop_flag:Arc::new(AtomicBool::new(false)),interactive_prompt_detected:Arc::new(AtomicBool::new(false))};
+        thread::sleep(Duration::from_millis(1200));assert!(!handle.is_running());
+        // A killed descendant may briefly remain a zombie; it must not run.
+        let output=Command::new("/bin/ps").args(["-o","stat=","-p",&descendant.to_string()]).output().unwrap();
+        let state=String::from_utf8_lossy(&output.stdout);assert!(state.trim().is_empty() || state.trim().starts_with('Z'),"descendant remains live: {}",state);
     }
 }

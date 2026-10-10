@@ -30,6 +30,8 @@ export const AddApplicationModal: React.FC<AddApplicationModalProps> = ({
   onAddRule,
   onEditExisting,
 }) => {
+  const [platform, setPlatform] = useState<string>("unknown");
+  useEffect(() => { api.getPlatform().then(setPlatform).catch(() => {}); }, []);
   const [tab, setTab] = useState<"running" | "browse">("running");
   const [runningApps, setRunningApps] = useState<RunningProcessInfo[]>([]);
   const [runningFilter, setRunningFilter] = useState<string>("");
@@ -81,10 +83,10 @@ export const AddApplicationModal: React.FC<AddApplicationModalProps> = ({
     }
     const cleanProc = processName.trim().toLowerCase();
     const existing = existingRules.find(
-      (r) => r.processName.toLowerCase() === cleanProc || r.processName.toLowerCase() === `${cleanProc}.exe`
+      (r) => r.processName.toLowerCase() === cleanProc || (platform === "windows" && r.processName.toLowerCase() === `${cleanProc}.exe`)
     );
     setDuplicateRule(existing || null);
-  }, [processName, existingRules]);
+  }, [processName, existingRules, platform]);
 
   const handleSelectRunningApp = (app: RunningProcessInfo) => {
     setDisplayName(app.name);
@@ -132,7 +134,7 @@ export const AddApplicationModal: React.FC<AddApplicationModalProps> = ({
     e.preventDefault();
     if (!processName.trim() || duplicateRule) return;
 
-    const normalizedProc = processName.toLowerCase().endsWith(".exe")
+    const normalizedProc = platform !== "windows" || processName.toLowerCase().endsWith(".exe")
       ? processName
       : `${processName}.exe`;
 
@@ -263,12 +265,12 @@ export const AddApplicationModal: React.FC<AddApplicationModalProps> = ({
             <div className="space-y-3">
               <div>
                 <label className="block text-[11px] font-mono font-semibold uppercase text-ink-300 mb-1">
-                  Target Binary Path (.exe)
+                  Application or executable path
                 </label>
                 <div className="flex gap-2">
                   <input
                     type="text"
-                    placeholder="e.g. C:\Program Files\Spotify\Spotify.exe or Telegram.exe"
+                    placeholder={platform === "macos" ? "/Applications/Example.app" : "Executable path or process name"}
                     value={executablePath || processName}
                     onChange={(e) => handleBrowsePathChange(e.target.value)}
                     className="flex-1 px-3 py-1.5 bg-app-inset border border-app-border-subtle rounded-sm text-xs text-ink-200 font-mono focus:outline-none focus:border-signal-cyan"

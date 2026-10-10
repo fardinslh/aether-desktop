@@ -68,8 +68,7 @@ impl HealthProber {
         let endpoints = [
             "https://www.cloudflare.com/cdn-cgi/trace",
             "https://1.1.1.1/cdn-cgi/trace",
-            "http://www.cloudflare.com/cdn-cgi/trace",
-            "http://1.1.1.1/cdn-cgi/trace",
+
         ];
 
         let mut last_err = String::new();
@@ -1149,7 +1148,7 @@ impl HealthProber {
                 adapter_name: String::new(),
                 if_index: 0,
                 is_up: true,
-                ip_addresses: vec![],
+                ip_addresses: std::process::Command::new("/sbin/ifconfig").arg(&name).output().ok().map(|o| String::from_utf8_lossy(&o.stdout).lines().filter_map(|l| { let mut p=l.split_whitespace(); match p.next() { Some("inet") | Some("inet6") => p.next().map(str::to_string), _ => None } }).collect()).unwrap_or_default(),
             })
             .collect()
     }

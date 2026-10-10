@@ -92,6 +92,8 @@ pub fn pick_windows_executable() -> Option<String> {
         None
     }
 
-    #[cfg(not(windows))]
+    #[cfg(target_os="macos")]
+    { return std::process::Command::new("/usr/bin/osascript").args(["-e","POSIX path of (choose application with prompt \"Choose an application to route\")"]).output().ok().filter(|o|o.status.success()).map(|o|String::from_utf8_lossy(&o.stdout).trim().trim_end_matches('/').to_string()); }
+    #[cfg(not(any(windows,target_os="macos")))]
     None
 }

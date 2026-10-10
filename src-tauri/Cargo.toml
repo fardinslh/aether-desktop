@@ -1,7 +1,7 @@
 [package]
 name = "aether-desktop"
-version = "0.1.5"
-description = "Production-quality Windows desktop VPN and network routing manager"
+version = "0.2.0"
+description = "Desktop VPN and application routing manager for Windows and macOS"
 authors = ["Aether Team"]
 edition = "2021"
 default-run = "aether-desktop"
@@ -73,6 +73,15 @@ windows-sys = { version = "0.59", features = [
 [target.'cfg(any(windows, target_os = "macos", target_os = "linux"))'.dependencies]
 tauri = { version = "2.2.4", features = ["tray-icon"] }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[[bin]]
+name = "aether-router-helper"
+path = "src/bin/router_helper.rs"
+required-features = ["macos-helper"]
+
 [features]
+macos-helper = []
 custom-protocol = ["tauri/custom-protocol"]
 dev-bins = []

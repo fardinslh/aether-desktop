@@ -1,0 +1,6 @@
+{
+  "libaether.so": "2b44db73249eab204416c4e4977151db47aee487e1b96bae3c7e729f2812680e",
+  "liblyrebird.so": "185cdbcfb8189cb502e841bc21ee5e19545bd0c4699bb656d21028ef5eacbd73",
+  "libpsiphon_tunnel_core.so": "7cab04ebf82ceed76ae53b99c306db26233b80825b930e2e7288f07a4087387a",
+  "libhev-socks5-tunnel.so": "8bace92d72df65c5b4d5ea9c79ccbdad8d227d3b91e55d458c57d46a99621073"
+}

@@ -34,6 +34,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.aether.android.model.AppSettings
 import com.aether.android.model.NoizeProfile
+import com.aether.android.model.ConnectionMode
+import com.aether.android.model.ConnectionProfile
 import com.aether.android.model.VpnProtocol
 import com.aether.android.repository.AppUpdateInfo
 import com.aether.android.ui.theme.*
@@ -87,6 +89,21 @@ fun SettingsScreen(
             colors = CardDefaults.cardColors(containerColor = SurfaceDark)
         ) {
             Column(modifier = Modifier.padding(14.dp)) {
+                Text("CONNECTION MODE", color = TextSecondary)
+                ConnectionMode.entries.forEach { mode ->
+                    Row(Modifier.fillMaxWidth().clickable { onUpdateSettings { it.copy(connectionMode=mode) } }) {
+                        RadioButton(selected=settings.connectionMode==mode,onClick={ onUpdateSettings { it.copy(connectionMode=mode) } })
+                        Text(mode.name.replace('_',' '),color=TextSecondary)
+                    }
+                }
+                if(settings.connectionMode==ConnectionMode.MANUAL) {
+                    ConnectionProfile.entries.forEach { p ->
+                        Row(Modifier.fillMaxWidth().clickable { onUpdateSettings { it.copy(manualProfile=p) } }) {
+                            RadioButton(selected=settings.manualProfile==p,onClick={ onUpdateSettings { it.copy(manualProfile=p) } })
+                            Text(p.id + if(p.udp) "" else " · TCP only",color=TextSecondary)
+                        }
+                    }
+                }
                 // Protocol Selector
                 Text(
                     text = "CARRIER PROTOCOL",
@@ -164,6 +181,7 @@ fun SettingsScreen(
 
                 HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp), color = BorderDark)
 
+                OutlinedTextField(value=settings.ech.orEmpty(),onValueChange={ value -> onUpdateSettings { it.copy(ech=value.ifBlank { null }) } },label={ Text("ECH · empty disables · auto enables") },modifier=Modifier.fillMaxWidth())
                 // Fragmentation Toggle
                 Row(
                     modifier = Modifier

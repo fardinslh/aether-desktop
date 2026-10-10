@@ -1,0 +1,31 @@
+Aether Desktop 0.2.0 — local Apple Silicon build
+
+Runtime versions: Aether 2.3.0; sing-box 1.14.3. The installer includes their full release runtimes, including Psiphon and lyrebird, with per-file SHA-256 validation. First connection needs no GitHub download.
+
+Install the local .pkg using macOS Installer. macOS requests administrator authentication. Launch /Applications/Aether Desktop.app as your normal user. No Apple Developer account is used; this build is locally signed and is not a public notarized release.
+
+The helper accepts authenticated requests from the installed app only. It runs the fixed, verified router, validates the generated TUN configuration, and stops it when the app heartbeat disappears. Disconnect stops both the router and transport. A failed failover keeps the router active, blocking protected traffic until Disconnect. Explicit Direct rules remain active.
+
+For each carrier, compare identical app/routing settings and repeat at least 10 cold connections and 10 warm connections per version/profile. Record success, time until real HTTPS traffic, 30-minute stability, and recovery after a 20-second outage. Test cellular MCI and Irancell plus a fixed ISP separately. Do not claim improvement from a faster handshake alone.
+
+macOS acceptance: verify IPv4/IPv6 public IP and DNS through the selected route; test UDP on MASQUE and UDP failure on Psiphon/Tor; test app bundle helpers, manual Direct exceptions, sleep/wake, network change, Quit and forced app termination. Compare active utun interfaces/routes before and after each case. Check DNS and protected traffic again while failover is in progress.
+
+Verified locally:
+- 68 Rust tests (39 unit, 1 privileged-helper validation, 28 routing/lifecycle integration), all passing.
+- Frontend lifecycle and source-level regression tests, including macOS application process names, all passing. TypeScript and Vite production build passed.
+- 8 Android JVM tests, debug APK assembled for arm64-v8a, armeabi-v7a and x86_64. Packaged native executable/helper SHA-256 values match their ABI manifests.
+- macOS application signature, packaged runtime hashes, installer archive, launchd plist and real sing-box configuration validation passed.
+- Installed macOS build established a system TUN connection through Psiphon Auto. Two independent HTTPS services passed through the selected exit. IPv4 and IPv6 HTTPS used the same selected exit; the IPv6 route used utun99. A STUN UDP probe received no response in the TCP-only profile; this alone is not a complete UDP leak measurement.
+- Forced termination of the entire owned transport group preserved utun99 and the same router PID. Protected HTTPS failed during the outage and recovered through a VPN exit in 50.7 seconds.
+- A same-user terminal client was rejected by the privileged helper; only the installed verified GUI was accepted.
+- The final macOS crash guardian was tested with a real owned process group and descendant: closing the GUI-owned pipe stopped both. The root helper also records its router PID for verified cleanup after a helper restart.
+
+Remaining validation:
+- Normal macOS GUI Disconnect and Quit removed the TUN, router, core and Psiphon helper. Live crash validation of the final macOS package remains pending.
+- App-specific Direct/helper routing, DNS capture/leak checks, working MASQUE UDP, Tor, sleep/wake and physical network changes still need live acceptance testing.
+- No native Windows TUN or physical Android VPN tests were run on this Mac.
+- Carrier identity was not established for the local macOS connection. MCI, Irancell and fixed-ISP comparisons with 0.1.5, including 30-minute stability, remain pending. Improvement has not been accepted from these local checks alone. The CSV is a measurement template, not measured results.
+
+Android artifact: this is a debug/test APK with application ID com.aether.android.debug, not an in-place signed production update.
+
+Windows and Android preview builds are intended for field testing; macOS is outside this preview release.

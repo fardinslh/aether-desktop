@@ -139,6 +139,9 @@ pub struct ConnectionOrchestrator {
     pub next_attempt_id: AtomicU64,
     pub cancel_requested: Arc<AtomicBool>,
     pub recovery_in_progress: AtomicBool,
+    pub recovery_allowed: AtomicBool,
+    pub connection_details: RwLock<crate::models::profile::ConnectionDetails>,
+    pub health_window: parking_lot::Mutex<(u8, std::time::Instant)>,
 }
 
 impl ConnectionOrchestrator {
@@ -156,6 +159,9 @@ impl ConnectionOrchestrator {
             next_attempt_id: AtomicU64::new(1),
             cancel_requested: Arc::new(AtomicBool::new(false)),
             recovery_in_progress: AtomicBool::new(false),
+            recovery_allowed: AtomicBool::new(false),
+            connection_details: RwLock::new(Default::default()),
+            health_window: parking_lot::Mutex::new((0, std::time::Instant::now() - Duration::from_secs(15))),
         }
     }
 
@@ -163,7 +169,7 @@ impl ConnectionOrchestrator {
         *self.app_handle.write() = Some(handle);
     }
 
-    fn set_state(&self, new_state: ConnectionState) {
+    pub(crate) fn set_state(&self, new_state: ConnectionState) {
         *self.state.write() = new_state;
         self.logger.log(
             "INFO",
@@ -175,7 +181,7 @@ impl ConnectionOrchestrator {
         }
     }
 
-    fn set_error(&self, err_msg: String) {
+    pub(crate) fn set_error(&self, err_msg: String) {
         *self.last_error.write() = Some(err_msg.clone());
         self.logger
             .log("ERROR", "STATE", format!("Connection error: {}", err_msg));
@@ -219,6 +225,7 @@ impl ConnectionOrchestrator {
             Err(_) => return Err("Connection operation already in progress".to_string()),
         };
         self.cancel_requested.store(false, Ordering::SeqCst);
+        self.recovery_allowed.store(false,Ordering::SeqCst);
 
         // 2. Synchronous atomic entry check and state transition under write lock
         let attempt_id = self.next_attempt_id.fetch_add(1, Ordering::SeqCst);
@@ -245,9 +252,10 @@ impl ConnectionOrchestrator {
             let _ = handle.emit("connection-state-changed", ConnectionState::StartingAether);
         }
 
-        let default_options = crate::models::settings::AetherLaunchOptions::default();
-        self.connect_internal(settings, attempt_id, &default_options)
-            .await
+        // Legacy manual settings resolve to their original protocol in the adaptive lifecycle.
+        let result=self.connect_adaptive(settings).await;
+        if let Err(e)=&result { if self.cancel_requested.load(Ordering::SeqCst) { self.force_shutdown(); self.set_state(ConnectionState::Disconnected); } else { self.set_error(e.clone()); } }
+        result
     }
 
     async fn connect_internal(
@@ -876,6 +884,9 @@ impl ConnectionOrchestrator {
             };
             self.cancel_requested.store(false, Ordering::SeqCst);
 
+        if settings.aether.connection_mode != crate::models::profile::ConnectionMode::Manual || settings.aether.manual_profile.is_some() || cfg!(target_os="macos") {
+            return Err("For a deep scan, disconnect and choose Manual mode with Thorough scan, then connect. The active protected router is preserved.".into());
+        }
         let opt_id = self.next_attempt_id.fetch_add(1, Ordering::SeqCst);
         let current_state = *self.state.read();
 
@@ -1781,6 +1792,7 @@ impl ConnectionOrchestrator {
         if let Ok(mut aether) = self.aether.try_lock() {
             aether.stop(&self.logger);
         }
+        self.recovery_allowed.store(false,Ordering::SeqCst);
         *self.active_aether_ip.write() = None;
         *self.state.write() = ConnectionState::Disconnected;
     }
@@ -1796,8 +1808,12 @@ impl ConnectionOrchestrator {
             );
             let expected_aether_ip = self.active_aether_ip.read().clone();
             let mut sb_guard = self.singbox.lock().await;
+            let mut active = settings.clone();
+            active.aether.manual_profile = self.connection_details.read().active_profile.or(active.aether.manual_profile);
+            #[cfg(target_os="macos")]
+            { active.sing_box.interface_name = "utun99".into(); }
             sb_guard
-                .restart_transparently(settings, &self.logger, expected_aether_ip.as_deref())
+                .restart_transparently(&active, &self.logger, expected_aether_ip.as_deref())
                 .await
         } else {
             Ok(())
@@ -1867,7 +1883,7 @@ impl ConnectionOrchestrator {
             let singbox_running = self.singbox.lock().await.is_running();
             let is_conn = *self.state.read() == ConnectionState::Connected;
 
-            let health = HealthProber::evaluate_health(
+            let mut health = HealthProber::evaluate_health(
                 &settings.aether.host,
                 settings.aether.port,
                 &settings.secondary_proxy.host,
@@ -1882,9 +1898,14 @@ impl ConnectionOrchestrator {
             )
             .await;
 
-            if is_conn && connected_health_failed(&health) {
-                self.set_error("Connected tunnel failed health verification".to_string());
+            if is_conn && health.aether_tunnel.ok {
+                if let Err(e) = super::adaptive::verify_independent_https(&settings.aether.host,settings.aether.port).await { health.aether_tunnel = crate::models::health::ServiceHealth::err(e); }
             }
+            if is_conn && connected_health_failed(&health) {
+                let fail = { let mut w = self.health_window.lock(); if w.1.elapsed() >= Duration::from_secs(15) { w.0 += 1; w.1 = std::time::Instant::now(); } w.0 >= 3 };
+                if fail { self.set_error("Three consecutive tunnel health failures".to_string()); }
+            }
+            if is_conn && !connected_health_failed(&health) { self.health_window.lock().0 = 0; }
             health
         }
     }
@@ -1898,6 +1919,7 @@ impl ConnectionOrchestrator {
             return;
         }
         if *self.state.read() != ConnectionState::Error
+            || !self.recovery_allowed.swap(false,Ordering::SeqCst)
             || self.cancel_requested.load(Ordering::SeqCst)
         {
             self.recovery_in_progress.store(false, Ordering::SeqCst);
@@ -1906,8 +1928,8 @@ impl ConnectionOrchestrator {
 
         self.set_state(ConnectionState::Reconnecting);
         let result = async {
-            self.disconnect().await?;
-            self.connect(settings).await
+            let _guard = self.op_lock.lock().await;
+            self.connect_adaptive(settings).await
         }
         .await;
         if let Err(err) = result {
@@ -2103,7 +2125,8 @@ mod tests {
 
         // 2. Reconnect resets cancel_requested
         // The attempt starts, resets cancel flag, and attempts to run
-        let _ = orch.connect(&settings).await;
+        let _ = tokio::time::timeout(Duration::from_millis(100), orch.connect(&settings)).await;
+        orch.force_shutdown();
         assert!(!orch.cancel_requested.load(Ordering::SeqCst));
     }
 }

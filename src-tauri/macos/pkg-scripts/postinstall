@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+base='/Library/Application Support/AetherDesktop/router'
+client='/Applications/Aether Desktop.app/Contents/MacOS/aether-desktop'
+uid=$(/usr/bin/stat -f '%u' /dev/console)
+client_hash=$(/usr/bin/shasum -a 256 "$client" | /usr/bin/awk '{print $1}')
+router_hash=$(/usr/bin/shasum -a 256 "$base/sing-box" | /usr/bin/awk '{print $1}')
+/usr/bin/printf '{"uid":%s,"clientSha256":"%s","routerSha256":"%s"}\n' "$uid" "$client_hash" "$router_hash" > "$base/installed.json"
+/usr/sbin/chown -R root:wheel "$base" '/Applications/Aether Desktop.app' /Library/PrivilegedHelperTools/com.aether.desktop.router
+/bin/chmod 700 "$base"
+/bin/chmod 600 "$base/installed.json"
+/bin/chmod 755 /Library/PrivilegedHelperTools/com.aether.desktop.router
+/bin/launchctl bootout system/com.aether.desktop.router 2>/dev/null || true
+/bin/launchctl bootstrap system /Library/LaunchDaemons/com.aether.desktop.router.plist
+exit 0

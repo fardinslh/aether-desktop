@@ -23,8 +23,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 
+fn reference_settings() -> AppSettings { let mut s=AppSettings::default(); s.secondary_proxy.enabled=true; s }
+
 pub fn test_reference_config_match() {
-    let settings = AppSettings::default();
+    let settings = reference_settings();
     let config = SingBoxConfigGenerator::generate(&settings);
 
     assert_eq!(config.log.level, "info");
@@ -35,7 +37,7 @@ pub fn test_reference_config_match() {
         InboundConfig::Tun(tun) => {
             assert_eq!(tun.tag, "tun-in");
             assert_eq!(tun.interface_name, "singbox-tun");
-            assert_eq!(tun.address, vec!["172.19.0.1/30"]);
+            assert_eq!(tun.address, vec!["172.19.0.1/30", "fdfe:dcba:9876::1/126"]);
             assert_eq!(tun.mtu, 1500);
             assert!(tun.auto_route);
             assert!(tun.strict_route);
@@ -138,7 +140,7 @@ pub fn test_reference_config_match() {
 }
 
 pub fn test_scenario_1_discord_high_priority_3478() {
-    let settings = AppSettings::default();
+    let settings = reference_settings();
     let config = SingBoxConfigGenerator::generate(&settings);
 
     let outbound =
@@ -147,7 +149,7 @@ pub fn test_scenario_1_discord_high_priority_3478() {
 }
 
 pub fn test_scenario_2_discord_high_priority_5349() {
-    let settings = AppSettings::default();
+    let settings = reference_settings();
     let config = SingBoxConfigGenerator::generate(&settings);
 
     let outbound =
@@ -156,7 +158,7 @@ pub fn test_scenario_2_discord_high_priority_5349() {
 }
 
 pub fn test_scenario_3_normal_secondary_proxy() {
-    let mut settings = AppSettings::default();
+    let mut settings = reference_settings();
     settings.application_rules.push(ApplicationRule::new(
         "Spotify",
         "Spotify.exe",
@@ -174,7 +176,7 @@ pub fn test_scenario_3_normal_secondary_proxy() {
 }
 
 pub fn test_scenario_4_global_compatibility_fallback_against_normal_rule() {
-    let mut settings = AppSettings::default();
+    let mut settings = reference_settings();
     settings.application_rules.push(ApplicationRule::new(
         "Spotify",
         "Spotify.exe",
@@ -192,7 +194,7 @@ pub fn test_scenario_4_global_compatibility_fallback_against_normal_rule() {
 }
 
 pub fn test_scenario_5_high_custom_override() {
-    let mut settings = AppSettings::default();
+    let mut settings = reference_settings();
     settings.application_rules.push(ApplicationRule::new(
         "Spotify",
         "Spotify.exe",
@@ -210,7 +212,7 @@ pub fn test_scenario_5_high_custom_override() {
 }
 
 pub fn test_scenario_6_generals_regression() {
-    let settings = AppSettings::default();
+    let settings = reference_settings();
     let config = SingBoxConfigGenerator::generate(&settings);
 
     let outbound_3478 =
@@ -223,7 +225,7 @@ pub fn test_scenario_6_generals_regression() {
 }
 
 pub fn test_scenario_7_unmatched_normal_traffic() {
-    let settings = AppSettings::default();
+    let settings = reference_settings();
     let config = SingBoxConfigGenerator::generate(&settings);
 
     let outbound =
@@ -232,7 +234,7 @@ pub fn test_scenario_7_unmatched_normal_traffic() {
 }
 
 pub fn test_scenario_8_private_lan() {
-    let settings = AppSettings::default();
+    let settings = reference_settings();
     let config = SingBoxConfigGenerator::generate(&settings);
 
     let outbound_192 = SingBoxConfigGenerator::resolve_route_with_ip(
@@ -277,7 +279,7 @@ pub fn test_scenario_8_private_lan() {
 }
 
 pub fn test_scenario_9_proxy_loop_prevention() {
-    let settings = AppSettings::default();
+    let settings = reference_settings();
     let config = SingBoxConfigGenerator::generate(&settings);
 
     for proc in &["aether.exe", "xray.exe", "v2ray.exe", "v2rayN.exe", "sing-box.exe"] {
@@ -292,7 +294,7 @@ pub fn test_scenario_9_proxy_loop_prevention() {
 // =========================================================================
 
 pub fn test_a_candidate_validation_failure_preserves_old_state() {
-    let mut original = AppSettings::default();
+    let mut original = reference_settings();
     if let Some((disc, _)) = aether_desktop_lib::dependencies::DependencyManager::discover_singbox_binary("") {
         original.sing_box.executable_path = disc.to_string_lossy().to_string();
     }
@@ -390,7 +392,7 @@ pub fn test_e_persistence_failure_runtime_rollback() {
         let logger = aether_desktop_lib::logging::RingBufferLogger::new(10);
         let orchestrator = ConnectionOrchestrator::new(state.clone(), logger);
 
-        let old_settings = AppSettings::default();
+        let old_settings = reference_settings();
         let mut candidate = old_settings.clone();
         candidate.secondary_proxy.port = 10809;
 
@@ -515,7 +517,7 @@ pub fn test_j_download_size_and_truncation_guards() {
 }
 
 pub fn test_k_aether_noninteractive_launch_arguments() {
-    let settings = AppSettings::default();
+    let settings = reference_settings();
     let config_path = std::path::PathBuf::from(
         "C:\\Users\\User\\AppData\\Local\\AetherDesktop\\aether\\aether.toml",
     );
@@ -595,7 +597,7 @@ pub fn test_n_process_elevation_token_check() {
 }
 
 pub fn test_o_dns_hijack_infrastructure_overrides_private_lan_rule() {
-    let settings = AppSettings::default();
+    let settings = reference_settings();
     let config = SingBoxConfigGenerator::generate(&settings);
 
     // 1. DNS query destined to LAN Gateway (192.168.1.1:53) -> intercepted by hijack-dns
@@ -752,7 +754,7 @@ pub fn test_q_concurrent_connect_atomic_single_attempt() {
 
     let tokio_rt = tokio::runtime::Runtime::new().unwrap();
 
-    let mut settings = AppSettings::default();
+    let mut settings = reference_settings();
     // Use an unassigned port to prevent actual binding
     settings.aether.port = 58199;
     settings.aether.executable_path = "C:\\invalid\\aether.exe".to_string();
@@ -799,7 +801,7 @@ pub fn test_r_op_lock_held_preserves_disconnected_state() {
     // Lock op_lock manually to simulate concurrent operation in progress
     let _held_guard = orchestrator.op_lock.try_lock().unwrap();
 
-    let settings = AppSettings::default();
+    let settings = reference_settings();
     let res = tokio_rt.block_on(orchestrator.connect(&settings));
 
     assert!(res.is_err(), "Connect must fail when op_lock is held");
@@ -1064,7 +1066,7 @@ pub fn test_y_snapshot_restore_failure_is_fatal_to_rollback() {
     let logger = RingBufferLogger::new(100);
     let state = Arc::new(RwLock::new(ConnectionState::Connected));
     let orch = ConnectionOrchestrator::new(state.clone(), logger);
-    let settings = AppSettings::default();
+    let settings = reference_settings();
 
     let res = tokio_rt.block_on(orch.rollback_and_restore(
         &settings,
@@ -1176,7 +1178,7 @@ pub fn test_aa_restore_deadline_bounded_to_25s() {
 }
 
 pub fn test_ab_discord_preset_migration_from_secondary_proxy_to_aether() {
-    let mut settings = AppSettings::default();
+    let mut settings = reference_settings();
     // Simulate legacy persisted settings with old Discord SecondaryProxy preset
     settings.application_rules = vec![
         ApplicationRule::new(
@@ -1207,7 +1209,7 @@ pub fn test_ab_discord_preset_migration_from_secondary_proxy_to_aether() {
 }
 
 pub fn test_ac_user_customized_discord_rule_preservation_during_migration() {
-    let mut settings = AppSettings::default();
+    let mut settings = reference_settings();
     // 1. User created rule -> must NOT migrate even if SecondaryProxy
     let user_discord = ApplicationRule::new(
         "My Custom Discord",
@@ -1280,7 +1282,7 @@ pub fn test_ad_save_exported_logs_creates_crlf_log_file() {
 }
 
 pub fn test_ae_dota2_valve_sdr_udp_port_range_routes_to_secondary_v2ray() {
-    let mut settings = AppSettings::default();
+    let mut settings = reference_settings();
 
     // Dota 2 main application route: dota2.exe -> Aether
     settings.application_rules = vec![ApplicationRule::new(
@@ -1343,7 +1345,7 @@ pub fn test_ae_dota2_valve_sdr_udp_port_range_routes_to_secondary_v2ray() {
 }
 
 pub fn test_af_dota2_tcp_and_non_sdr_ports_route_to_aether() {
-    let mut settings = AppSettings::default();
+    let mut settings = reference_settings();
 
     // Dota 2 main application route: dota2.exe -> Aether
     settings.application_rules = vec![ApplicationRule::new(
@@ -1394,7 +1396,7 @@ pub fn test_af_dota2_tcp_and_non_sdr_ports_route_to_aether() {
 }
 
 pub fn test_ag_other_process_on_sdr_ports_routes_to_normal() {
-    let mut settings = AppSettings::default();
+    let mut settings = reference_settings();
 
     // Dota 2 main application route: dota2.exe -> Aether
     settings.application_rules = vec![
@@ -1456,7 +1458,7 @@ pub fn test_ag_other_process_on_sdr_ports_routes_to_normal() {
 }
 
 pub fn test_ah_disabling_dota_sdr_toggle_restores_all_dota_to_aether() {
-    let mut settings = AppSettings::default();
+    let mut settings = reference_settings();
 
     // Dota 2 main application route: dota2.exe -> Aether
     settings.application_rules = vec![ApplicationRule::new(
@@ -1498,7 +1500,7 @@ pub fn test_ah_disabling_dota_sdr_toggle_restores_all_dota_to_aether() {
 }
 
 pub fn test_ai_repeated_saves_do_not_duplicate_dota_sdr_rule() {
-    let mut settings = AppSettings::default();
+    let mut settings = reference_settings();
 
     let dota_rule_id = "compat-dota2-valve-sdr";
 
@@ -1542,7 +1544,7 @@ pub fn test_ai_repeated_saves_do_not_duplicate_dota_sdr_rule() {
 }
 
 pub fn test_aj_dota2_mode_direct_routes_to_direct() {
-    let mut settings = AppSettings::default();
+    let mut settings = reference_settings();
 
     // Dota 2 main application route: dota2.exe -> Aether
     settings.application_rules = vec![ApplicationRule::new(
@@ -1583,7 +1585,7 @@ pub fn test_aj_dota2_mode_direct_routes_to_direct() {
 }
 
 pub fn test_ak_user_compatibility_rules_preserved_on_dota_save() {
-    let mut settings = AppSettings::default();
+    let mut settings = reference_settings();
 
     // User created custom compatibility rule (must be preserved untouched)
     let user_rule = CompatibilityRule {
@@ -1913,7 +1915,7 @@ pub fn test_ar_external_aether_guards_abort_optimization_before_disruption() {
     let state = Arc::new(RwLock::new(ConnectionState::Connected));
     let logger = RingBufferLogger::new(100);
     let orchestrator = ConnectionOrchestrator::new(state.clone(), logger);
-    let settings = AppSettings::default();
+    let settings = reference_settings();
 
     // 1. Mark Aether as external (unmanaged)
     orchestrator.is_aether_managed.store(false, Ordering::SeqCst);
@@ -2003,14 +2005,14 @@ pub fn test_at_quick_reconnect_cli_tri_state_and_forced_fresh_scan() {
     let config_path = PathBuf::from("C:\\Users\\User\\AppData\\Local\\AetherDesktop\\aether\\aether.toml");
 
     // 1. Normal Connect + Quick Reconnect ON:
-    let mut settings_qr_on = AppSettings::default();
+    let mut settings_qr_on = reference_settings();
     settings_qr_on.aether.quick_reconnect = true;
     let args_qr_on = settings_qr_on.aether.build_cli_arguments(Some(&config_path));
     assert!(args_qr_on.contains(&"--quick-reconnect".to_string()), "Quick Reconnect ON must emit --quick-reconnect");
     assert!(!args_qr_on.contains(&"--no-quick-reconnect".to_string()), "Quick Reconnect ON must NOT emit --no-quick-reconnect");
 
     // 2. Normal Connect + Quick Reconnect OFF:
-    let mut settings_qr_off = AppSettings::default();
+    let mut settings_qr_off = reference_settings();
     settings_qr_off.aether.quick_reconnect = false;
     let args_qr_off = settings_qr_off.aether.build_cli_arguments(Some(&config_path));
     assert!(args_qr_off.contains(&"--no-quick-reconnect".to_string()), "Quick Reconnect OFF must emit --no-quick-reconnect");
@@ -2062,7 +2064,7 @@ pub fn test_au_cached_endpoint_reuse_rejected_during_forced_fresh_scan() {
 }
 
 pub fn test_av_steam_suite_routes_to_aether() {
-    let settings = AppSettings::default();
+    let settings = reference_settings();
     let config = SingBoxConfigGenerator::generate(&settings);
 
     // 1. Steam bootstrap process routes to Aether
@@ -2079,7 +2081,7 @@ pub fn test_av_steam_suite_routes_to_aether() {
 }
 
 pub fn test_aw_steam_companion_propagation_when_steam_customized() {
-    let mut settings = AppSettings::default();
+    let mut settings = reference_settings();
 
     // User explicitly assigns Steam to direct in application rules without adding webhelper
     settings.application_rules.retain(|r| !r.process_name.to_lowercase().starts_with("steam"));

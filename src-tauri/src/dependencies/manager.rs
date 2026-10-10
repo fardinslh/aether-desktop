@@ -112,7 +112,7 @@ impl DependencyManager {
             .unwrap_or_default()
             .to_string_lossy()
             .to_lowercase();
-        if name_lower != "aether.exe" {
+        if name_lower != if cfg!(windows) { "aether.exe" } else { "aether" } {
             return Err(format!(
                 "Executable name must be 'aether.exe' (got '{}')",
                 name_lower
@@ -172,7 +172,7 @@ impl DependencyManager {
             .unwrap_or_default()
             .to_string_lossy()
             .to_lowercase();
-        if name_lower != "sing-box.exe" {
+        if name_lower != if cfg!(windows) { "sing-box.exe" } else { "sing-box" } {
             return Err(format!(
                 "Executable name must be 'sing-box.exe' (got '{}')",
                 name_lower
@@ -267,6 +267,7 @@ impl DependencyManager {
     }
 
     pub fn discover_aether_binary(configured_path: &str) -> Option<(PathBuf, String)> {
+        if let Some(path) = super::bundled::verified_binary("aether") { return Some((path, "aether 2.3.0".into())); }
         // 1. Check configured path
         if !configured_path.is_empty() {
             let p = PathBuf::from(configured_path);
@@ -325,6 +326,7 @@ impl DependencyManager {
     }
 
     pub fn discover_singbox_binary(configured_path: &str) -> Option<(PathBuf, String)> {
+        if let Some(path) = super::bundled::verified_binary("sing-box") { return Some((path, "sing-box 1.14.3".into())); }
         // 1. Check configured path
         if !configured_path.is_empty() {
             let p = PathBuf::from(configured_path);

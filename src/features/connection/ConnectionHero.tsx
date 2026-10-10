@@ -14,6 +14,8 @@ import {
   X,
 } from "lucide-react";
 import { ConnectionState, HealthStatus, RouteOptimizationResult } from "../../types";
+import { invoke } from "@tauri-apps/api/core";
+import { ConnectionDetails } from "../../types";
 import { api } from "../../services/api";
 
 interface ConnectionHeroProps {
@@ -43,6 +45,16 @@ export const ConnectionHero: React.FC<ConnectionHeroProps> = ({
   const [optimizationError, setOptimizationError] = useState<string | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
   const [bestCandidateRtt, setBestCandidateRtt] = useState<number | null>(null);
+
+  const [platform, setPlatform] = useState<string>("unknown");
+  useEffect(() => { api.getPlatform().then(setPlatform).catch(() => {}); }, []);
+  const [details, setDetails] = useState<ConnectionDetails | null>(null);
+  useEffect(() => {
+    let active = true;
+    const refresh = () => invoke<ConnectionDetails>("get_connection_details").then(d => { if (active) setDetails(d); }).catch(() => {});
+    refresh(); const timer = setInterval(refresh, 2000);
+    return () => { active = false; clearInterval(timer); };
+  }, []);
 
   const isConnected = connectionState === "CONNECTED";
   const isDisconnected = connectionState === "DISCONNECTED";
@@ -128,16 +140,16 @@ export const ConnectionHero: React.FC<ConnectionHeroProps> = ({
       connectionState === "STARTING_AETHER" ||
       connectionState === "WAITING_FOR_AETHER"
     ) {
-      return "Spawning managed Aether WireGuard/Shadowsocks daemon...";
+      return `Starting ${details?.activeProfile || "Aether"}...`;
     }
     if (connectionState === "SCANNING_AETHER") {
-      return "Probing resilient Aether gateway candidates (Thorough Mode)...";
+      return `Trying ${details?.activeProfile || "gateway candidates"}...`;
     }
     if (connectionState === "TESTING_AETHER") {
-      return "Verifying SOCKS5 proxy handshake on 127.0.0.1:1819...";
+      return "Verifying HTTPS through the selected route...";
     }
     if (connectionState === "STARTING_ROUTER") {
-      return "Initializing sing-box Wintun driver & network adapter...";
+      return "Initializing the system TUN interface...";
     }
     if (connectionState === "TESTING_ROUTING") {
       return "Executing 3-stage egress routing & DNS verification...";
@@ -177,8 +189,8 @@ export const ConnectionHero: React.FC<ConnectionHeroProps> = ({
               </span>
             )}
             
-            {/* Find Faster Gateway button */}
-            <button
+            {/* Legacy Windows gateway optimizer */}
+            {platform === "windows" && <button
               onClick={handleOptimizeClick}
               disabled={isTransitioning || isOptimizing}
               className="flex items-center gap-1 px-2 py-1 sm:py-0.5 rounded-xs bg-app-surface hover:bg-app-panel border border-app-border hover:border-signal-cyan/60 text-ink-200 hover:text-signal-cyan text-[10px] font-mono transition-all disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
@@ -186,12 +198,12 @@ export const ConnectionHero: React.FC<ConnectionHeroProps> = ({
             >
               <Zap className={`w-3 h-3 ${isOptimizing ? "animate-pulse text-signal-cyan" : "text-signal-cyan"}`} />
               <span>{isConnected ? "Optimize" : "Find Best"}</span>
-            </button>
+            </button>}
 
             <span className="flex items-center gap-1 ml-0.5">
               <span className={`w-1.5 h-1.5 rounded-full ${isConnected ? "bg-signal-green" : isTransitioning ? "bg-signal-cyan animate-pulse" : "bg-ink-500"}`} />
               <span className="text-ink-400 font-sans text-[10px] uppercase">
-                {isConnected ? "Active" : isTransitioning ? "Sync" : "Standby"}
+                {isConnected ? (details?.supportsUdp === false ? "TCP only" : "Active") : isTransitioning ? "Sync" : "Standby"}
               </span>
             </span>
           </div>
@@ -402,7 +414,7 @@ export const ConnectionHero: React.FC<ConnectionHeroProps> = ({
                     {connectionState === "SCANNING_AETHER" || isOptimizing
                       ? "Searching for a faster gateway..."
                       : connectionState === "STARTING_ROUTER"
-                      ? "Configuring Wintun adapter..."
+                      ? "Configuring TUN adapter..."
                       : connectionState === "TESTING_ROUTING"
                       ? "Validating 3-stage routing..."
                       : "Starting managed Aether daemon..."}
@@ -510,7 +522,7 @@ export const ConnectionHero: React.FC<ConnectionHeroProps> = ({
               <span>Aether TUN</span>
             </div>
             <div className={`text-xs font-semibold mt-0.5 ${isConnected ? "text-signal-green" : "text-ink-400"}`}>
-              {isConnected ? "Port 1819" : "Standby"}
+              {details?.activeProfile || (isConnected ? "Port 1819" : "Standby")}
             </div>
           </div>
 

@@ -83,6 +83,19 @@ pub fn run() {
         .manage(app_state)
         .setup(move |app| {
             orchestrator_setup.set_app_handle(app.handle().clone());
+            let watchdog = orchestrator_setup.clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                    let settings = crate::settings::SettingsStorage::load();
+                    if *watchdog.state.read() == ConnectionState::Connected {
+                        let _ = watchdog.check_health(&settings).await;
+                    }
+                    #[cfg(target_os="macos")]
+                    if *watchdog.state.read() != ConnectionState::Disconnected { let _ = crate::process::macos_helper::status(); }
+                    if settings.general.reconnect_automatically && *watchdog.state.read() == ConnectionState::Error { watchdog.recover_connection(&settings).await; }
+                }
+            });
 
             #[cfg(target_os = "android")]
             {
@@ -163,6 +176,7 @@ pub fn run() {
             commands::save_settings,
             commands::reset_settings,
             commands::get_connection_state,
+            commands::get_connection_details,
             commands::connect_tunnel,
             commands::find_faster_gateway,
             commands::disconnect_tunnel,

@@ -915,3 +915,6 @@ pub async fn ensure_dependencies_and_complete_setup(
 pub async fn get_best_candidate_rtt(state: State<'_, AppState>) -> Result<Option<u32>, String> {
     Ok(state.orchestrator.get_best_candidate_rtt().await)
 }
+
+#[tauri::command]
+pub fn get_connection_details(state: State<'_, AppState>) -> crate::models::profile::ConnectionDetails { state.orchestrator.connection_details.read().clone() }

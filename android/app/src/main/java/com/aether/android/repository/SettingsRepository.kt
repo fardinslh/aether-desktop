@@ -25,7 +25,7 @@ class SettingsRepository(context: Context) {
     private fun loadSettings() {
         val json = prefs.getString("app_settings_json", null)
         if (json != null) {
-            val s: AppSettings = gson.fromJson(json, AppSettings::class.java) ?: AppSettings()
+            val s=com.aether.android.model.SettingsMigration.decode(json)
             _settings.value = s
         } else {
             val initial = AppSettings()

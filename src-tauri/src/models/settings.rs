@@ -83,6 +83,12 @@ impl AetherNoizeProfile {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AetherSettings {
+    #[serde(default)]
+    pub connection_mode: super::profile::ConnectionMode,
+    #[serde(default)]
+    pub manual_profile: Option<super::profile::ConnectionProfile>,
+    #[serde(default)]
+    pub ech: Option<String>,
     pub executable_path: String,
     pub host: String,
     pub port: u16,
@@ -117,7 +123,10 @@ pub struct AetherSettings {
 impl Default for AetherSettings {
     fn default() -> Self {
         Self {
-            executable_path: "C:\\Aether\\aether.exe".to_string(),
+            connection_mode: super::profile::ConnectionMode::Auto,
+            manual_profile: None,
+            ech: None,
+            executable_path: String::new(),
             host: "127.0.0.1".to_string(),
             port: 1819,
             protocol: AetherProtocol::Wireguard,
@@ -125,7 +134,7 @@ impl Default for AetherSettings {
             scan_mode: AetherScanMode::Thorough,
             quick_reconnect: true,
             masque_http2: false,
-            tls_fragment: true,
+            tls_fragment: false,
             fragment_size: None,
             fragment_delay: None,
             noize_profile: AetherNoizeProfile::Balanced,
@@ -231,8 +240,21 @@ impl AetherSettings {
                     args.push(self.noize_profile.as_str().to_string());
                 }
             }
-            AetherProtocol::WarpInWarp => args.push("--gool".to_string()),
+            AetherProtocol::WarpInWarp => args.push("--gool-classic".to_string()),
         }
+
+        if let Some(profile) = self.manual_profile {
+            let start = args.iter().position(|a| a == "--wg" || a == "--masque" || a == "--gool").unwrap_or(args.len());
+            args.truncate(start);
+            args.extend(profile.flags());
+            if self.noize_profile != AetherNoizeProfile::Off && profile.supports_udp() { args.extend(["--noize".into(),self.noize_profile.as_str().into()]); }
+            if self.tls_fragment && matches!(profile, super::profile::ConnectionProfile::MasqueH2 | super::profile::ConnectionProfile::PsiphonReverse) {
+                args.push("--fragment".into());
+                if let Some(s) = &self.fragment_size { args.extend(["--fragment-size".into(), s.clone()]); }
+                if let Some(s) = &self.fragment_delay { args.extend(["--fragment-delay".into(), s.clone()]); }
+            }
+        }
+        if let Some(ech) = self.ech.as_ref().filter(|s| !s.trim().is_empty()) { args.extend(["--ech".into(), ech.clone()]); }
 
         // Exit-country policy is checked against the SOCKS egress trace.
         // The bundled core does not implement an --exit-loc CLI option.
@@ -416,7 +438,7 @@ impl Default for AppSettings {
         Self {
             aether: AetherSettings::default(),
             secondary_proxy: SecondaryProxySettings {
-                enabled: true,
+                enabled: false,
                 mode: SecondaryProxyMode::ExternalSocks,
                 host: "127.0.0.1".to_string(),
                 port: 10808,

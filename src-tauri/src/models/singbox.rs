@@ -220,6 +220,8 @@ pub struct RouteConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct RouteRule {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_path_regex: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub protocol: Option<Vec<String>>,
 

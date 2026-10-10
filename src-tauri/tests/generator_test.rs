@@ -27,6 +27,7 @@ fn ensure_isolated_config_dir() {
             uuid::Uuid::new_v4()
         ));
         std::env::set_var("AETHER_DESKTOP_CONFIG_DIR", &isolated_config);
+        std::env::set_var("AETHER_DESKTOP_RUNTIME_DIR", isolated_config.join("runtime"));
         println!(
             "Isolated AETHER_DESKTOP_CONFIG_DIR: {}",
             isolated_config.display()

@@ -9,6 +9,9 @@ enum class VpnState {
 }
 
 data class VpnStatus(
+    val activeProfile: ConnectionProfile? = null,
+    val supportsUdp: Boolean = false,
+    val failureReason: String? = null,
     val state: VpnState = VpnState.DISCONNECTED,
     val connectedProfile: Profile? = null,
     val uplinkSpeedBps: Long = 0,

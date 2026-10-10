@@ -1,0 +1,25 @@
+{
+  "bundle": {
+    "targets": [
+      "app"
+    ],
+    "resources": {
+      "resources/runtime/": "runtime/"
+    }
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Aether Desktop",
+        "width": 840,
+        "height": 660,
+        "minWidth": 640,
+        "minHeight": 540,
+        "resizable": true,
+        "decorations": false,
+        "center": true
+      }
+    ]
+  }
+}

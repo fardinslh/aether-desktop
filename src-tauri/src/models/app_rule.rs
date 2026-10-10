@@ -70,7 +70,7 @@ impl ApplicationRule {
         icon_base64: Option<String>,
     ) -> Self {
         let process_name_str = process_name.into();
-        let normalized_process = if process_name_str.to_lowercase().ends_with(".exe") {
+        let normalized_process = if !cfg!(windows) || process_name_str.to_lowercase().ends_with(".exe") {
             process_name_str
         } else {
             format!("{}.exe", process_name_str)

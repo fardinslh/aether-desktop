@@ -278,7 +278,7 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({
             AETHER DESKTOP INITIALIZATION
           </h1>
           <p className="text-xs text-ink-400 max-w-md mx-auto font-sans">
-            Automated, per-application routing orchestration for Windows network stack.
+            System VPN with per-application routing.
           </p>
         </div>
 
@@ -390,7 +390,7 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({
                     )}
                   </div>
                   <p className="text-[11px] text-ink-400 font-mono">
-                    Wintun router managing network paths.
+                    TUN router managing network paths.
                   </p>
                 </div>
               </div>
@@ -541,13 +541,13 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({
           {showAdvanced && (
             <div className="mt-3 space-y-3 bg-app-inset p-3 rounded-sm border border-app-border-subtle text-xs">
               <div className="space-y-1">
-                <label className="text-[10px] text-ink-400">CUSTOM AETHER.EXE PATH</label>
+                <label className="text-[10px] text-ink-400">CUSTOM AETHER PATH</label>
                 <div className="flex gap-2">
                   <input
                     type="text"
                     value={manualAetherPath}
                     onChange={(e) => setManualAetherPath(e.target.value)}
-                    placeholder="C:\Path\To\aether.exe"
+                    placeholder="Path to Aether executable"
                     className="flex-1 bg-app-panel border border-app-border rounded-sm px-3 py-1.5 text-xs font-mono text-ink-200 focus:outline-none focus:border-signal-cyan"
                   />
                   <button
@@ -566,13 +566,13 @@ export const FirstRunWizard: React.FC<FirstRunWizardProps> = ({
               </div>
 
               <div className="space-y-1">
-                <label className="text-[10px] text-ink-400">CUSTOM SING-BOX.EXE PATH</label>
+                <label className="text-[10px] text-ink-400">CUSTOM SING-BOX PATH</label>
                 <div className="flex gap-2">
                   <input
                     type="text"
                     value={manualSingboxPath}
                     onChange={(e) => setManualSingboxPath(e.target.value)}
-                    placeholder="C:\Path\To\sing-box.exe"
+                    placeholder="Path to sing-box executable"
                     className="flex-1 bg-app-panel border border-app-border rounded-sm px-3 py-1.5 text-xs font-mono text-ink-200 focus:outline-none focus:border-signal-cyan"
                   />
                   <button

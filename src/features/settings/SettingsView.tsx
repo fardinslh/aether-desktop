@@ -14,7 +14,6 @@ import {
   RefreshCw,
   AlertCircle,
   ArrowUpCircle,
-  Sparkles,
 } from "lucide-react";
 import {
   AppSettings,
@@ -56,6 +55,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, onSave, on
   const [updatingComponent, setUpdatingComponent] = useState<string | null>(null);
   const [updateProgress, setUpdateProgress] = useState<DownloadProgress | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
+  const [platform, setPlatform] = useState<string>("unknown");
+  useEffect(() => { api.getPlatform().then(setPlatform).catch(() => {}); }, []);
 
   const handleCheckUpdates = async () => {
     setIsCheckingUpdates(true);
@@ -241,7 +242,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, onSave, on
             ENGINE CONFIGURATION & SUBSYSTEMS
           </h2>
           <p className="text-[11px] text-ink-400 font-sans mt-0.5">
-            Configure Aether, built-in secondary proxy, sing-box Wintun driver, and compatibility parameters.
+            Configure Aether, built-in secondary proxy, sing-box TUN router, and compatibility parameters.
           </p>
         </div>
 
@@ -302,7 +303,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, onSave, on
       <div className="flex-1 min-h-0 overflow-y-auto rounded-md border border-app-border bg-app-panel p-3 sm:p-4 space-y-3.5">
         {activeTab === "general" && (
           <div className="space-y-2.5 font-sans">
-            <div className="flex items-center justify-between p-3 rounded-sm bg-app-surface border border-app-border">
+            {platform === "windows" && <div className="flex items-center justify-between p-3 rounded-sm bg-app-surface border border-app-border">
               <div>
                 <div className="text-xs font-semibold text-ink-100">Start with Windows</div>
                 <div className="text-[10px] text-ink-400">Launch Aether Desktop automatically on system login</div>
@@ -318,7 +319,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, onSave, on
                 }
                 className="w-3.5 h-3.5 rounded-xs text-signal-cyan focus:ring-signal-cyan bg-app-inset border-app-border cursor-pointer"
               />
-            </div>
+            </div>}
 
             <div className="flex items-center justify-between p-3 rounded-sm bg-app-surface border border-app-border">
               <div>
@@ -416,22 +417,23 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, onSave, on
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-[11px] font-mono font-semibold uppercase text-ink-300 mb-1">
-                  Protocol Profile
+                  Connection mode
                 </label>
-                <select
-                  value={localSettings.aether.protocol || "wireguard"}
-                  onChange={(e) =>
-                    setLocalSettings({
-                      ...localSettings,
-                      aether: { ...localSettings.aether, protocol: e.target.value as any },
-                    })
-                  }
-                  className="w-full px-3 py-1.5 bg-app-inset border border-app-border-subtle rounded-sm text-xs text-ink-200 font-mono focus:outline-none focus:border-signal-cyan"
-                >
-                  <option value="wireguard">WireGuard (--wg) [Recommended]</option>
-                  <option value="masque">MASQUE (--masque)</option>
-                  <option value="warp_in_warp">WARP-in-WARP / Gool (--gool)</option>
+                <select value={localSettings.aether.connectionMode || "manual"}
+                  onChange={e => setLocalSettings({...localSettings,aether:{...localSettings.aether,connectionMode:e.target.value as any}})}
+                  className="w-full px-3 py-1.5 bg-app-inset border border-app-border text-xs">
+                  <option value="auto">Auto · current network</option>
+                  <option value="manual">Manual profile</option>
+                  <option value="emergency_tor">Emergency · Tor bridges · TCP only</option>
                 </select>
+                {(localSettings.aether.connectionMode || "manual") === "manual" &&
+                  <select value={localSettings.aether.manualProfile || (localSettings.aether.protocol === "masque" ? (localSettings.aether.masqueHttp2 ? "masque_h2" : "masque_h3") : localSettings.aether.protocol === "warp_in_warp" ? "gool_classic" : "wireguard")}
+                    onChange={e => setLocalSettings({...localSettings,aether:{...localSettings.aether,manualProfile:e.target.value as any}})}
+                    className="mt-2 w-full px-3 py-1.5 bg-app-inset border border-app-border text-xs">
+                    {Object.entries({masque_h2:"MASQUE / HTTP2",masque_h3:"MASQUE / HTTP3",wireguard:"WireGuard",gool:"WireGuard in MASQUE",gool_classic:"WireGuard in WireGuard",masque_in_masque:"MASQUE in MASQUE",psiphon_auto:"Psiphon Auto · TCP only",psiphon_cdn:"Psiphon CDN · TCP only",psiphon_reverse:"WARP via Psiphon",tor:"Tor bridges · TCP only"}).map(([value,label])=><option key={value} value={value}>{label}</option>)}
+                  </select>}
+                <label className="block mt-3 text-xs">ECH (empty disables; auto enables)</label>
+                <input value={localSettings.aether.ech || ""} onChange={e=>setLocalSettings({...localSettings,aether:{...localSettings.aether,ech:e.target.value || null}})} className="w-full bg-app-inset border border-app-border px-2 py-1 text-xs" />
               </div>
 
               <div>
@@ -461,6 +463,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, onSave, on
                   Endpoint Scan Mode
                 </label>
                 <select
+                  disabled={(localSettings.aether.connectionMode || "manual") !== "manual"}
                   value={localSettings.aether.scanMode || "thorough"}
                   onChange={(e) =>
                     setLocalSettings({
@@ -575,65 +578,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ settings, onSave, on
                 Optimized anti-censorship settings for Iranian operators (Irancell, MCI, Shatel) to bypass severe UDP throttling, handshake drops, and DPI inspection.
               </p>
 
-              {/* Carrier Mode for MASQUE */}
-              {localSettings.aether.protocol === "masque" && (
-                <div className="space-y-3 pt-1 border-t border-app-border-subtle">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="text-xs font-semibold text-ink-100 font-mono">MASQUE CARRIER MODE</div>
-                      <div className="text-[10px] text-ink-400">
-                        {localSettings.aether.masqueHttp2
-                          ? "HTTP/2 (TCP over TLS) — Recommended if UDP/QUIC is throttled in Iran"
-                          : "HTTP/3 (QUIC over UDP) — High speed on unthrottled links"}
-                      </div>
-                    </div>
-                    <select
-                      value={localSettings.aether.masqueHttp2 ? "h2" : "h3"}
-                      onChange={(e) =>
-                        setLocalSettings({
-                          ...localSettings,
-                          aether: {
-                            ...localSettings.aether,
-                            masqueHttp2: e.target.value === "h2",
-                          },
-                        })
-                      }
-                      className="px-2.5 py-1 bg-app-inset border border-app-border-subtle rounded-sm text-xs text-ink-200 font-mono focus:outline-none focus:border-signal-cyan"
-                    >
-                      <option value="h3">HTTP/3 (QUIC / UDP)</option>
-                      <option value="h2">HTTP/2 (TCP / TLS) [--h2]</option>
-                    </select>
-                  </div>
-
-                  {localSettings.aether.masqueHttp2 && (
-                    <div className="flex items-center justify-between p-2 rounded-sm bg-app-inset border border-app-border-subtle">
-                      <div>
-                        <div className="text-xs font-semibold text-signal-cyan font-mono flex items-center gap-1.5">
-                          <Sparkles className="w-3.5 h-3.5" />
-                          <span>TLS CLIENTHELLO FRAGMENTATION</span>
-                        </div>
-                        <div className="text-[10px] text-ink-400 font-sans">
-                          Splits SNI handshake packets to evade Deep Packet Inspection (DPI) [--fragment]
-                        </div>
-                      </div>
-                      <input
-                        type="checkbox"
-                        checked={localSettings.aether.tlsFragment ?? true}
-                        onChange={(e) =>
-                          setLocalSettings({
-                            ...localSettings,
-                            aether: {
-                              ...localSettings.aether,
-                              tlsFragment: e.target.checked,
-                            },
-                          })
-                        }
-                        className="w-3.5 h-3.5 rounded-xs text-signal-cyan focus:ring-signal-cyan bg-app-surface border-app-border cursor-pointer"
-                      />
-                    </div>
-                  )}
-                </div>
-              )}
+              <div className="space-y-2 pt-2 border-t border-app-border-subtle">
+                <label className="flex justify-between text-xs text-ink-200">
+                  TLS ClientHello fragmentation (HTTP/2 profiles)
+                  <input type="checkbox" checked={localSettings.aether.tlsFragment ?? false} onChange={e=>setLocalSettings({...localSettings,aether:{...localSettings.aether,tlsFragment:e.target.checked}})} />
+                </label>
+                {localSettings.aether.tlsFragment && <div className="grid grid-cols-2 gap-2">
+                  <input aria-label="Fragment size" placeholder="Size · e.g. 10-30" value={localSettings.aether.fragmentSize || ""} onChange={e=>setLocalSettings({...localSettings,aether:{...localSettings.aether,fragmentSize:e.target.value || null}})} className="bg-app-inset border border-app-border px-2 py-1 text-xs" />
+                  <input aria-label="Fragment delay" placeholder="Delay · e.g. 10-20" value={localSettings.aether.fragmentDelay || ""} onChange={e=>setLocalSettings({...localSettings,aether:{...localSettings.aether,fragmentDelay:e.target.value || null}})} className="bg-app-inset border border-app-border px-2 py-1 text-xs" />
+                </div>}
+              </div>
 
               {/* Obfuscation (Noize) Profile */}
               <div className="grid grid-cols-2 gap-3 pt-1 border-t border-app-border-subtle">

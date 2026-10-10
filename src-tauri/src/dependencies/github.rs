@@ -54,7 +54,8 @@ pub struct GithubClient;
 
 impl GithubClient {
     pub async fn fetch_latest_release(repo: &str) -> Result<GithubRelease, String> {
-        let url = format!("https://api.github.com/repos/{}/releases/latest", repo);
+        let endpoint = match repo { "CluvexStudio/Aether" => "tags/v2.3.0", "SagerNet/sing-box" => "tags/v1.14.3", _ => "latest" };
+        let url = format!("https://api.github.com/repos/{}/releases/{}", repo, endpoint);
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
             .user_agent("AetherDesktop/0.1.0 (Windows NT 10.0; Win64; x64)")

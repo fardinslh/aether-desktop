@@ -72,7 +72,7 @@ impl ProcessDetector {
             let proc_name_raw = process.name().to_string_lossy().to_string();
             let proc_name_lower = proc_name_raw.to_lowercase();
 
-            let proc_name = if proc_name_lower.ends_with(".exe") {
+            let proc_name = if !cfg!(windows) || proc_name_lower.ends_with(".exe") {
                 proc_name_raw.clone()
             } else {
                 format!("{}.exe", proc_name_raw)
@@ -89,6 +89,8 @@ impl ProcessDetector {
             seen_process_names.insert(proc_lower);
 
             let exe_path = process.exe().map(|p| p.to_string_lossy().to_string());
+            #[cfg(target_os="macos")]
+            if !exe_path.as_ref().is_some_and(|p|p.contains(".app/Contents/")) { continue; }
             let friendly_name = Self::get_friendly_name(&proc_name);
 
             results.push(RunningProcessInfo {
@@ -237,6 +239,13 @@ impl ProcessDetector {
 
     /// Derives metadata from a file path when browsing for an .exe
     pub fn inspect_executable(file_path: &str) -> (String, String) {
+        #[cfg(target_os="macos")]
+        if file_path.ends_with(".app") || file_path.ends_with(".app/") {
+            let plist=Path::new(file_path).join("Contents/Info.plist");
+            if let Ok(output)=std::process::Command::new("/usr/bin/plutil").args(["-extract","CFBundleExecutable","raw","-o","-"]).arg(plist).output() {
+                if output.status.success() { return (Path::new(file_path).file_stem().unwrap_or_default().to_string_lossy().into(),String::from_utf8_lossy(&output.stdout).trim().into()); }
+            }
+        }
         let path = Path::new(file_path);
         let process_name = path
             .file_name()

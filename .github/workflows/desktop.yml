@@ -1,0 +1,60 @@
+name: Desktop builds
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Desktop platform
+        type: choice
+        required: true
+        default: windows
+        options: [windows, macos]
+permissions:
+  contents: read
+jobs:
+  desktop:
+    runs-on: ${{ inputs.platform == 'macos' && 'macos-15' || 'windows-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: 22}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: npm ci
+      - run: node --test tests/frontend-lifecycle.test.js tests/audit-review.cjs
+      - run: python scripts/prepare-runtime.py ${{ inputs.platform == 'macos' && 'macos-arm64' || 'windows-x86_64' }}
+      - run: python scripts/verify-runtime.py src-tauri/resources/runtime
+      - name: Run Rust tests with isolated non-elevated test binaries
+        env:
+          AETHER_TEST_BUILD: '1'
+          CARGO_TARGET_DIR: target/tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+      - if: runner.os == 'Windows'
+        run: npm run tauri -- build --config src-tauri/tauri.windows.conf.json
+      - if: runner.os == 'macOS'
+        run: |
+          npm run tauri -- build --features macos-helper --config src-tauri/tauri.macos.conf.json
+          cp src-tauri/target/release/aether-router-helper "src-tauri/target/release/bundle/macos/Aether Desktop.app/Contents/MacOS/"
+          bash scripts/package-macos.sh
+      - name: Validate Windows installer payload and collect the installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem src-tauri/target/release/bundle/nsis/*-setup.exe | Select-Object -First 1
+          if (-not $installer) { throw 'Windows installer missing' }
+          & 'C:/Program Files/7-Zip/7z.exe' x $installer.FullName '-onsis-check' -y | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw 'Installer extraction failed' }
+          $manifest = Get-ChildItem nsis-check -Recurse -Filter manifest.json | Select-Object -First 1
+          if (-not $manifest) { throw 'Bundled runtime manifest missing from installer' }
+          python scripts/verify-runtime.py $manifest.DirectoryName
+          if ($LASTEXITCODE -ne 0) { throw 'Installer runtime validation failed' }
+          New-Item -ItemType Directory release-windows -Force | Out-Null
+          Copy-Item $installer.FullName release-windows/Aether-Desktop-0.2.0-x64-setup.exe
+          Copy-Item $manifest.FullName release-windows/runtime-manifest.json
+          $hash = (Get-FileHash release-windows/Aether-Desktop-0.2.0-x64-setup.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  Aether-Desktop-0.2.0-x64-setup.exe" | Out-File release-windows/SHA256SUMS.txt -Encoding ascii
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Aether-${{ inputs.platform }}
+          path: ${{ runner.os == 'Windows' && 'release-windows/' || 'src-tauri/target/release/bundle/' }}
+          if-no-files-found: error

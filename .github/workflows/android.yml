@@ -36,36 +36,7 @@ jobs:
 
       - name: Fetch and Stage Native Engine Binaries (Aether & Tun2Socks)
         run: |
-          mkdir -p android/app/src/main/jniLibs/arm64-v8a
-          mkdir -p android/app/src/main/jniLibs/armeabi-v7a
-          mkdir -p android/app/src/main/jniLibs/x86_64
-
-          echo "=== Fetching Aether Core v2.3.0 ==="
-          curl -sSL "https://github.com/CluvexStudio/Aether/releases/download/v2.3.0/aether-android-arm64.tar.gz" | tar -xz -C android/app/src/main/jniLibs/arm64-v8a/
-          mv android/app/src/main/jniLibs/arm64-v8a/aether android/app/src/main/jniLibs/arm64-v8a/libaether.so
-          chmod +x android/app/src/main/jniLibs/arm64-v8a/libaether.so
-
-          curl -sSL "https://github.com/CluvexStudio/Aether/releases/download/v2.3.0/aether-android-armv7.tar.gz" | tar -xz -C android/app/src/main/jniLibs/armeabi-v7a/
-          mv android/app/src/main/jniLibs/armeabi-v7a/aether android/app/src/main/jniLibs/armeabi-v7a/libaether.so
-          chmod +x android/app/src/main/jniLibs/armeabi-v7a/libaether.so
-
-          curl -sSL "https://github.com/CluvexStudio/Aether/releases/download/v2.3.0/aether-android-x86_64.tar.gz" | tar -xz -C android/app/src/main/jniLibs/x86_64/
-          mv android/app/src/main/jniLibs/x86_64/aether android/app/src/main/jniLibs/x86_64/libaether.so
-          chmod +x android/app/src/main/jniLibs/x86_64/libaether.so
-
-          echo "=== Fetching In-Process TProxy Engine (libhev-socks5-tunnel.so) ==="
-          curl -sSL "https://github.com/heiher/sockstun/releases/download/8.0/hev.sockstun-8.0-release.apk" -o /tmp/sockstun.apk
-          unzip -p /tmp/sockstun.apk lib/arm64-v8a/libhev-socks5-tunnel.so > android/app/src/main/jniLibs/arm64-v8a/libhev-socks5-tunnel.so
-          chmod +x android/app/src/main/jniLibs/arm64-v8a/libhev-socks5-tunnel.so
-
-          unzip -p /tmp/sockstun.apk lib/armeabi-v7a/libhev-socks5-tunnel.so > android/app/src/main/jniLibs/armeabi-v7a/libhev-socks5-tunnel.so
-          chmod +x android/app/src/main/jniLibs/armeabi-v7a/libhev-socks5-tunnel.so
-
-          unzip -p /tmp/sockstun.apk lib/x86_64/libhev-socks5-tunnel.so > android/app/src/main/jniLibs/x86_64/libhev-socks5-tunnel.so
-          chmod +x android/app/src/main/jniLibs/x86_64/libhev-socks5-tunnel.so
-
-          echo "=== Staged JNI Libraries ==="
-          ls -lh android/app/src/main/jniLibs/*
+          python3 scripts/prepare-runtime.py android
 
       - name: Build Native Android APK
         working-directory: android

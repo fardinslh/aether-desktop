@@ -1,5 +1,6 @@
 pub mod app_rule;
 pub mod health;
+pub mod profile;
 pub mod settings;
 pub mod singbox;
 pub mod state;

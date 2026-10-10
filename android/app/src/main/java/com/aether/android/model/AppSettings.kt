@@ -19,6 +19,9 @@ enum class NoizeProfile {
 }
 
 data class AppSettings(
+    val connectionMode: ConnectionMode = ConnectionMode.AUTO,
+    val manualProfile: ConnectionProfile? = null,
+    val ech: String? = null,
     val splitTunnelMode: SplitTunnelMode = SplitTunnelMode.ALL_APPS,
     val selectedPackages: Set<String> = emptySet(),
     val primaryDns: String = "1.1.1.1",
@@ -29,7 +32,7 @@ data class AppSettings(
     val selectedProfileId: String? = null,
     val vpnProtocol: VpnProtocol = VpnProtocol.MASQUE_H2,
     val noizeProfile: NoizeProfile = NoizeProfile.FIREWALL,
-    val enableFragmentation: Boolean = true,
+    val enableFragmentation: Boolean = false,
     val fragmentSize: String = "10-30",
     val fragmentDelay: String = "10-20",
     val bypassIranTraffic: Boolean = true,

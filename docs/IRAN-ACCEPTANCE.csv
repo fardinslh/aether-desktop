@@ -1,0 +1,16 @@
+version,platform,carrier,network_type,mode,profile,sample_type,attempt,success,connect_seconds,stable_30_minutes,recovery_seconds,dns_tunneled,ipv6_tunneled_or_blocked,udp_expected,udp_passed,notes
+0.1.5,android,MCI,mobile,legacy_manual,,,,,,,,,,,,pending_field_measurement
+0.1.5,android,Irancell,mobile,legacy_manual,,,,,,,,,,,,pending_field_measurement
+0.1.5,android,fixed_isp,fixed,legacy_manual,,,,,,,,,,,,pending_field_measurement
+0.2.0,android,MCI,mobile,auto,,,,,,,,,,,,pending_field_measurement
+0.2.0,android,Irancell,mobile,auto,,,,,,,,,,,,pending_field_measurement
+0.2.0,android,fixed_isp,fixed,auto,,,,,,,,,,,,pending_field_measurement
+0.1.5,windows,MCI,mobile,legacy_manual,,,,,,,,,,,,pending_field_measurement
+0.1.5,windows,Irancell,mobile,legacy_manual,,,,,,,,,,,,pending_field_measurement
+0.1.5,windows,fixed_isp,fixed,legacy_manual,,,,,,,,,,,,pending_field_measurement
+0.2.0,windows,MCI,mobile,auto,,,,,,,,,,,,pending_field_measurement
+0.2.0,windows,Irancell,mobile,auto,,,,,,,,,,,,pending_field_measurement
+0.2.0,windows,fixed_isp,fixed,auto,,,,,,,,,,,,pending_field_measurement
+0.2.0,macos,MCI,mobile,auto,,,,,,,,,,,,pending_field_measurement
+0.2.0,macos,Irancell,mobile,auto,,,,,,,,,,,,pending_field_measurement
+0.2.0,macos,fixed_isp,fixed,auto,,,,,,,,,,,,pending_field_measurement

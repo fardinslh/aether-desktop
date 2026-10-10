@@ -25,7 +25,7 @@ function harness(file, dependencies = {}) {
   };
   const exports = {};
   const context = {
-    exports, React: react, console: { ...console, error() {} },
+    exports, React: react, crypto: require('node:crypto').webcrypto, console: { ...console, error() {} },
     require: name => name === 'react' ? react : dependencies[name] || {},
     setTimeout: fn => { timers.set(++timerId, fn); return timerId; },
     clearTimeout: id => timers.delete(id),
@@ -105,6 +105,30 @@ function descendants(node) {
   component.effects.at(-1)();
   assert.equal(component.slots[0], newSettings);
   console.log('PASS: SettingsView accepts replacement settings');
+
+  for (const platform of ['macos', 'windows']) {
+    let savedRule;
+    const modal = harness('src/features/routing/AddApplicationModal.tsx', {
+      '../../services/api': { api: {
+        getPlatform: async () => platform,
+        getRunningApplications: async () => [],
+        pickExecutableFile: async () => platform === 'macos' ? '/Applications/Example.app' : 'C:\\Example.exe',
+        inspectExecutable: async () => ({ displayName: 'Example', processName: 'Example', iconBase64: null }),
+      } },
+    });
+    const modalProps = { isOpen: true, existingRules: [], onClose() {}, onAddRule: rule => { savedRule = rule; } };
+    let view = modal.render(() => modal.exports.AddApplicationModal(modalProps));
+    modal.effects[0]();
+    await Promise.resolve();
+    descendants(view).find(n => n.type === 'button' && descendants(n).some(c => c.type === 'span' && c.props.children.includes('BROWSE EXECUTABLE'))).props.onClick();
+    view = modal.render(() => modal.exports.AddApplicationModal(modalProps));
+    await descendants(view).find(n => n.type === 'button' && n.props.onClick?.name === 'handleNativeBrowse').props.onClick();
+    view = modal.render(() => modal.exports.AddApplicationModal(modalProps));
+    descendants(view).find(n => n.type === 'form').props.onSubmit({ preventDefault() {} });
+    assert.equal(savedRule.processName, platform === 'macos' ? 'Example' : 'Example.exe');
+    assert.ok(savedRule.executablePath);
+  }
+  console.log('PASS: app routing preserves macOS process names and Windows executable normalization');
 
   let resetCalls = 0;
   const app = harness('src/App.tsx', {

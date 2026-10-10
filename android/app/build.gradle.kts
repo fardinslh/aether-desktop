@@ -21,13 +21,14 @@ if (keystorePropertiesFile.exists()) {
 android {
     namespace = "com.aether.android"
     compileSdk = 35
+    buildToolsVersion = "35.0.0"
 
     defaultConfig {
         applicationId = "com.aether.android"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "0.1.5"
+        versionCode = 6
+        versionName = "0.2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -76,6 +77,7 @@ android {
 
     packaging {
         jniLibs.useLegacyPackaging = true
+        jniLibs.keepDebugSymbols += "**/lib*.so" // Preserve verified executable bytes.
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }

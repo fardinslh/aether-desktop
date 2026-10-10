@@ -38,7 +38,7 @@ impl SingBoxConfigGenerator {
         // 2. DNS configuration (Remote UDP/TCP DNS over Aether, Local fallback over Direct)
         let dns = Some(DnsConfig {
             servers: vec![
-                DnsServer::Udp(crate::models::singbox::UdpDnsServer {
+                DnsServer::Tcp(crate::models::singbox::TcpDnsServer {
                     tag: "remote-dns".to_string(),
                     server: "1.1.1.1".to_string(),
                     server_port: Some(53),
@@ -50,7 +50,7 @@ impl SingBoxConfigGenerator {
                     server_port: Some(53),
                     detour: Some("aether".to_string()),
                 }),
-                DnsServer::Udp(crate::models::singbox::UdpDnsServer {
+                DnsServer::Tcp(crate::models::singbox::TcpDnsServer {
                     tag: "remote-dns-backup".to_string(),
                     server: "1.0.0.1".to_string(),
                     server_port: Some(53),
@@ -69,7 +69,7 @@ impl SingBoxConfigGenerator {
         let inbounds = vec![InboundConfig::Tun(TunInbound {
             tag: "tun-in".to_string(),
             interface_name: settings.sing_box.interface_name.clone(),
-            address: vec![settings.sing_box.tun_address.clone()],
+            address: vec![settings.sing_box.tun_address.clone(), "fdfe:dcba:9876::1/126".into()],
             mtu: settings.sing_box.mtu,
             auto_route: true,
             strict_route: settings.sing_box.strict_route,
@@ -96,6 +96,7 @@ impl SingBoxConfigGenerator {
         // 5.0 Priority 0: DNS Infrastructure Hijack -> hijack-dns (Intercepts DNS queries before private IP rule)
         rules.push(RouteRule {
             protocol: Some(vec!["dns".to_string()]),
+            process_path_regex: None,
             process_name: None,
             port: None,
             port_range: None,
@@ -107,6 +108,7 @@ impl SingBoxConfigGenerator {
         });
         rules.push(RouteRule {
             protocol: None,
+            process_path_regex: None,
             process_name: None,
             port: Some(vec![53]),
             port_range: None,
@@ -124,6 +126,7 @@ impl SingBoxConfigGenerator {
             .collect();
         rules.push(RouteRule {
             protocol: None,
+            process_path_regex: None,
             process_name: Some(loop_processes),
             port: None,
             port_range: None,
@@ -148,7 +151,8 @@ impl SingBoxConfigGenerator {
                     };
                     rules.push(RouteRule {
                         protocol: None,
-                        process_name: Some(procs.clone()),
+                        process_path_regex: None,
+            process_name: Some(procs.clone()),
                         port: compat_rule.ports.clone(),
                         port_range: compat_rule.port_ranges.clone(),
                         network: network_str,
@@ -320,7 +324,8 @@ impl SingBoxConfigGenerator {
         if !high_direct_apps.is_empty() {
             rules.push(RouteRule {
                 protocol: None,
-                process_name: Some(high_direct_apps),
+                process_path_regex: None,
+            process_name: Some(high_direct_apps),
                 port: None,
                 port_range: None,
                 network: None,
@@ -333,7 +338,8 @@ impl SingBoxConfigGenerator {
         if !high_v2ray_apps.is_empty() {
             rules.push(RouteRule {
                 protocol: None,
-                process_name: Some(high_v2ray_apps),
+                process_path_regex: None,
+            process_name: Some(high_v2ray_apps),
                 port: None,
                 port_range: None,
                 network: None,
@@ -346,7 +352,8 @@ impl SingBoxConfigGenerator {
         if !high_aether_apps.is_empty() {
             rules.push(RouteRule {
                 protocol: None,
-                process_name: Some(high_aether_apps),
+                process_path_regex: None,
+            process_name: Some(high_aether_apps),
                 port: None,
                 port_range: None,
                 network: None,
@@ -370,7 +377,8 @@ impl SingBoxConfigGenerator {
             };
             rules.push(RouteRule {
                 protocol: None,
-                process_name: compat_rule.process_names.clone(),
+                process_path_regex: None,
+            process_name: compat_rule.process_names.clone(),
                 port: compat_rule.ports.clone(),
                 port_range: compat_rule.port_ranges.clone(),
                 network: network_str,
@@ -388,7 +396,8 @@ impl SingBoxConfigGenerator {
         if settings.compatibility.generals_stun_turn_fallback {
             rules.push(RouteRule {
                 protocol: None,
-                process_name: None,
+                process_path_regex: None,
+            process_name: None,
                 port: Some(GENERALS_STUN_TURN_PORTS.to_vec()),
                 port_range: None,
                 network: None,
@@ -404,7 +413,8 @@ impl SingBoxConfigGenerator {
         if !normal_direct_apps.is_empty() {
             rules.push(RouteRule {
                 protocol: None,
-                process_name: Some(normal_direct_apps),
+                process_path_regex: None,
+            process_name: Some(normal_direct_apps),
                 port: None,
                 port_range: None,
                 network: None,
@@ -419,7 +429,8 @@ impl SingBoxConfigGenerator {
         if !normal_v2ray_apps.is_empty() {
             rules.push(RouteRule {
                 protocol: None,
-                process_name: Some(normal_v2ray_apps),
+                process_path_regex: None,
+            process_name: Some(normal_v2ray_apps),
                 port: None,
                 port_range: None,
                 network: None,
@@ -434,7 +445,8 @@ impl SingBoxConfigGenerator {
         if !normal_aether_apps.is_empty() {
             rules.push(RouteRule {
                 protocol: None,
-                process_name: Some(normal_aether_apps),
+                process_path_regex: None,
+            process_name: Some(normal_aether_apps),
                 port: None,
                 port_range: None,
                 network: None,
@@ -449,7 +461,8 @@ impl SingBoxConfigGenerator {
         if settings.aether.bypass_iran_traffic {
             rules.push(RouteRule {
                 protocol: None,
-                process_name: None,
+                process_path_regex: None,
+            process_name: None,
                 port: None,
                 port_range: None,
                 network: None,
@@ -464,7 +477,8 @@ impl SingBoxConfigGenerator {
         if settings.compatibility.private_ip_bypass {
             rules.push(RouteRule {
                 protocol: None,
-                process_name: None,
+                process_path_regex: None,
+            process_name: None,
                 port: None,
                 port_range: None,
                 network: None,
@@ -475,6 +489,29 @@ impl SingBoxConfigGenerator {
             });
         }
 
+        #[cfg(target_os="macos")]
+        if settings.sing_box.interface_name.starts_with("utun") {
+            let mut expanded = Vec::new();
+            for mut rule in rules {
+                if let Some(names) = rule.process_name.take() {
+                    for name in names {
+                        let mut scoped = rule.clone();
+                        if let Some(path) = settings.application_rules.iter().find(|a| a.process_name.eq_ignore_ascii_case(&name)).and_then(|a|a.executable_path.as_ref()) {
+                            let bundle = path.find(".app").map(|n| &path[..n+4]);
+                            scoped.process_path_regex = Some(vec![if let Some(bundle)=bundle { format!("^{}/Contents/",regex::escape(bundle)) } else { format!("^{}$",regex::escape(path)) }]);
+                        } else { scoped.process_name = Some(vec![name.trim_end_matches(".exe").to_string()]); }
+                        expanded.push(scoped);
+                    }
+                } else { expanded.push(rule); }
+            }
+            // Native transport helper processes must reach the physical network.
+            expanded.insert(0, RouteRule { process_name: Some(vec!["aether".into(),"psiphon-tunnel-core".into(),"lyrebird".into(),"snowflake-client".into(),"webtunnel".into(),"sing-box".into()]),action:Some("route".into()),outbound:Some("direct".into()),..Default::default() });
+            rules = expanded;
+        }
+        if settings.aether.manual_profile.is_some() && !cfg!(target_os="macos") {
+            // Core bootstrap DNS must reach the physical network while TUN stays up.
+            rules.insert(0, RouteRule { process_name:Some(vec!["aether.exe".into(),"sing-box.exe".into(),"psiphon-tunnel-core.exe".into(),"lyrebird.exe".into()]),action:Some("route".into()),outbound:Some("direct".into()),..Default::default() });
+        }
         // 6. Final route configuration
         let route = RouteConfig {
             auto_detect_interface: true,
@@ -685,6 +722,7 @@ mod tests {
     #[test]
     fn embedded_vless_replaces_external_socks_outbound() {
         let mut settings = AppSettings::default();
+        settings.secondary_proxy.enabled = true;
         settings.secondary_proxy.mode = SecondaryProxyMode::Embedded;
         settings.secondary_proxy.share_link = "vless://123e4567-e89b-12d3-a456-426614174000@example.com:443?encryption=none&security=tls&sni=example.com&type=ws&host=example.com&path=%2Fproxy".to_string();
 
@@ -697,5 +735,28 @@ mod tests {
             }
             other => panic!("Expected embedded VLESS outbound, got {other:?}"),
         }
+    }
+}
+
+#[cfg(test)] mod native_safety_tests {
+    use super::*;
+    #[test] fn protected_dns_and_ipv6_remain_in_tunnel_configuration() {
+        let mut settings=AppSettings::default();settings.aether.manual_profile=Some(crate::models::profile::ConnectionProfile::PsiphonAuto);
+        let config=SingBoxConfigGenerator::generate(&settings);
+        let json=serde_json::to_value(config).unwrap();
+        assert!(json["inbounds"][0]["address"].as_array().unwrap().iter().any(|a|a.as_str().unwrap().contains(':')));
+        for dns in json["dns"]["servers"].as_array().unwrap() { if dns["type"]!="local" { assert_eq!(dns["detour"],"aether");assert_eq!(dns["type"],"tcp"); } }
+        assert_eq!(json["route"]["final"],"aether");
+    }
+    #[cfg(target_os="macos")]
+    #[test] fn bundles_cover_helpers_without_matching_other_apps() {
+        let mut settings=AppSettings::default();settings.sing_box.interface_name="utun99".into();
+        settings.application_rules=vec![crate::models::ApplicationRule::new("Example","Example",RouteDestination::Aether,Some("/Applications/Example.app".into()),crate::models::app_rule::RuleSource::User,RulePriority::Normal,None)];
+        let config=SingBoxConfigGenerator::generate(&settings);
+        let pattern=config.route.rules.iter().find_map(|r|r.process_path_regex.as_ref()).unwrap()[0].clone();
+        let regex=regex::Regex::new(&pattern).unwrap();
+        assert!(regex.is_match("/Applications/Example.app/Contents/Frameworks/Example Helper.app/Contents/MacOS/Example Helper"));
+        assert!(!regex.is_match("/Applications/ExampleOther.app/Contents/MacOS/Example"));
+        assert_eq!(config.route.rules[0].outbound.as_deref(),Some("direct"));
     }
 }

@@ -50,7 +50,14 @@ export type AetherNoizeProfile =
   | "gfw"
   | "aggressive";
 
+export type ConnectionMode = "auto" | "manual" | "emergency_tor";
+export type ConnectionProfile = "masque_h2" | "masque_h3" | "wireguard" | "gool" | "gool_classic" | "masque_in_masque" | "psiphon_auto" | "psiphon_cdn" | "psiphon_reverse" | "tor";
+export interface ConnectionDetails { activeProfile: ConnectionProfile | null; supportsUdp: boolean; phase: string; failureReason: string | null; }
+
 export interface AetherSettings {
+  connectionMode?: ConnectionMode;
+  manualProfile?: ConnectionProfile | null;
+  ech?: string | null;
   executablePath: string;
   host: string;
   port: number;
