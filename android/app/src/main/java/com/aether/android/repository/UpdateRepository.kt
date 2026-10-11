@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.util.Log
+import com.aether.android.BuildConfig
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
 import kotlinx.coroutines.Dispatchers
@@ -45,7 +46,7 @@ class UpdateRepository(private val context: Context) {
         private const val TAG = "UpdateRepository"
         private const val APP_REPO_URL = "https://api.github.com/repos/fardinslh/aether-desktop/releases/latest"
         private const val AETHER_CORE_REPO_URL = "https://api.github.com/repos/CluvexStudio/Aether/releases/latest"
-        const val CURRENT_APP_VERSION = "0.1.5"
+        val CURRENT_APP_VERSION = BuildConfig.VERSION_NAME
     }
 
     private val client = OkHttpClient.Builder()

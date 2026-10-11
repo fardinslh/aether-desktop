@@ -54,12 +54,18 @@ pub struct ConnectionDetails {
 
 pub fn auto_attempts(cached: Option<ConnectionProfile>) -> Vec<(ConnectionProfile, u64, bool)> {
     let mut attempts = Vec::new();
-    if let Some(profile) = cached.filter(|p| !matches!(p, ConnectionProfile::Tor)) {
+    let cached = cached.filter(|p| !matches!(p, ConnectionProfile::Tor));
+    if let Some(profile) = cached {
         attempts.push((profile, 25, true));
+        // A stale gateway does not mean this transport stopped working.
+        // Rescan the last successful transport before trying other protocols.
+        attempts.push((profile, profile.timeout_secs(), false));
     }
     for p in [ConnectionProfile::MasqueH2, ConnectionProfile::MasqueH3,
         ConnectionProfile::PsiphonAuto, ConnectionProfile::PsiphonCdn] {
-        attempts.push((p, p.timeout_secs(), false));
+        if Some(p) != cached {
+            attempts.push((p, p.timeout_secs(), false));
+        }
     }
     attempts
 }
@@ -77,6 +83,12 @@ pub fn auto_attempts(cached: Option<ConnectionProfile>) -> Vec<(ConnectionProfil
         assert!(ConnectionProfile::PsiphonReverse.supports_udp());
         assert!(!ConnectionProfile::PsiphonAuto.supports_udp());
         assert!(!ConnectionProfile::Tor.supports_udp());
+    }
+    #[test] fn stale_psiphon_gateway_rescans_psiphon_before_blocked_masque() {
+        let attempts = auto_attempts(Some(ConnectionProfile::PsiphonAuto));
+        assert_eq!(attempts[0], (ConnectionProfile::PsiphonAuto, 25, true));
+        assert_eq!(attempts[1], (ConnectionProfile::PsiphonAuto, 180, false));
+        assert_eq!(attempts.iter().filter(|(p, _, quick)| *p == ConnectionProfile::PsiphonAuto && !quick).count(), 1);
     }
 }
 

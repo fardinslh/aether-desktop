@@ -53,11 +53,14 @@ class AetherVpnService : VpnService() {
         /** Samsung logd silently drops app-tagged logcat lines, so all
          *  instrumentation also appends to a file readable via
          *  `adb shell run-as com.aether.android.debug`. */
+        @Synchronized
         fun debugLog(context: Context, message: String) {
             try {
                 val ts = java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US)
                     .format(java.util.Date())
-                java.io.File(context.filesDir, DEBUG_LOG).appendText("[$ts] $message\n")
+                val file = File(context.filesDir, DEBUG_LOG)
+                if (file.length() > 512 * 1024) file.writeText(file.readText().takeLast(256 * 1024))
+                file.appendText("[$ts] $message\n")
             } catch (ignored: Throwable) {}
         }
 
@@ -345,7 +348,12 @@ class AetherVpnService : VpnService() {
     private var tproxyRunning = false
     private suspend fun selectTransport(settings: AppSettings, forceFreshScan: Boolean): ConnectionProfile {
         val nativeDir = File(applicationInfo.nativeLibraryDir)
-        val manifest = org.json.JSONObject(assets.open("runtime/${Build.SUPPORTED_ABIS.first()}.json").bufferedReader().use { it.readText() })
+        // A 32-bit APK can run on a 64-bit phone. Match the installed native
+        // libraries to the app process, rather than the device's preferred ABI.
+        val runtimeAbi = if (android.os.Process.is64Bit()) Build.SUPPORTED_64_BIT_ABIS.first()
+            else Build.SUPPORTED_32_BIT_ABIS.first()
+        val manifest = org.json.JSONObject(assets.open("runtime/$runtimeAbi.json").bufferedReader().use { it.readText() })
+        debugLog(this, "Runtime ABI: $runtimeAbi")
         for (name in manifest.keys()) {
             val f = File(nativeDir,name)
             val hash = java.security.MessageDigest.getInstance("SHA-256").digest(f.readBytes()).joinToString("") { "%02x".format(it.toInt() and 255) }
@@ -397,6 +405,7 @@ class AetherVpnService : VpnService() {
                 val launch=listOf("/system/bin/sh","-c","echo \$\$ > \"\$1\"; shift; exec \"\$@\"","aether-launch",pidFile.absolutePath)+cmd
                 val proc=ProcessBuilder(launch).directory(dir).redirectErrorStream(true).start()
                 aetherProcess=proc
+                debugLog(this, "Trying ${profile.id}: ${seconds}s startup budget, quick=$quick")
                 repeat(20) { if(!pidFile.exists())delay(10) }
                 ownedAetherPid=pidFile.takeIf { it.exists() }?.readText()?.trim()?.toIntOrNull()
                 check(ownedAetherPid != null) { "Unable to track the transport process" }
@@ -404,19 +413,33 @@ class AetherVpnService : VpnService() {
                 candidateMonitoringJob=serviceScope.launch {
                     try { proc.inputStream.bufferedReader().useLines { lines -> lines.forEach { line ->
                         Log.d(TAG,line)
+                        debugLog(this@AetherVpnService, "${profile.id}: ${line.take(2000)}")
                         parseCandidateFromLine(line)?.let { (_,rtt) -> _vpnStatus.value=_vpnStatus.value.copy(bestCandidateRtt=rtt) }
                     } } } catch (_:Throwable) {}
                 }
                 val deadline=System.currentTimeMillis()+seconds*1000
+                val attemptJob = currentCoroutineContext()[Job]
+                var lastProbeError = "SOCKS listener has not opened"
                 while(System.currentTimeMillis()<deadline) {
                     currentCoroutineContext().ensureActive()
-                    check(proc.isAlive) { "Core process exited" }
-                    if(isSocksPortReady("127.0.0.1",1819) && performSocks5LivenessProbe("127.0.0.1",1819,minOf(6_000L,deadline-System.currentTimeMillis()).coerceAtLeast(1).toInt())) { cache?.writeText(profile.id);return profile }
+                    check(proc.isAlive) { "Core process exited with code ${proc.exitValue()}; see $DEBUG_LOG" }
+                    if(isSocksPortReady("127.0.0.1",1819)) {
+                        val probe = Socks5TraceProbe.verifyDetailed(
+                            "127.0.0.1", 1819,
+                            minOf(Socks5TraceProbe.TIMEOUT_MS.toLong(), deadline-System.currentTimeMillis()).coerceAtLeast(1).toInt(),
+                            settings.preventIranExit,
+                            isActive = { attemptJob?.isActive != false }
+                        )
+                        currentCoroutineContext().ensureActive()
+                        if (probe.isSuccess) { cache?.writeText(profile.id);return profile }
+                        lastProbeError = probe.exceptionOrNull()?.message ?: "HTTPS verification failed"
+                        debugLog(this, "${profile.id} probe: $lastProbeError")
+                    }
                     delay(500)
                 }
-                error("${profile.id} exceeded ${seconds}s")
+                error("${profile.id} exceeded ${seconds}s: $lastProbeError")
             } catch(e:CancellationException) { stopAetherTree();throw e }
-            catch(e:Exception) { failures.add("${profile.id}: ${e.message}");_vpnStatus.value=_vpnStatus.value.copy(failureReason=e.message);stopAetherTree() }
+            catch(e:Exception) { debugLog(this,"${profile.id} failed: ${e.message}");failures.add("${profile.id}: ${e.message}");_vpnStatus.value=_vpnStatus.value.copy(failureReason=e.message);stopAetherTree() }
         }
         error(failures.joinToString("; "))
     }
@@ -519,7 +542,7 @@ class AetherVpnService : VpnService() {
             while (isActive) {
                 delay(15_000)
                 if (_vpnStatus.value.state != VpnState.CONNECTED) continue
-                val ok = aetherProcess?.isAlive == true && performSocks5LivenessProbe("127.0.0.1",1819,6_000)
+                val ok = aetherProcess?.isAlive == true && performSocks5LivenessProbe("127.0.0.1",1819,Socks5TraceProbe.TIMEOUT_MS)
                 failures = if (ok) 0 else failures + 1
                 if (failures >= 3) { handleTunnelFailure("Three consecutive HTTPS health failures"); break }
                 checks++
@@ -585,11 +608,13 @@ class AetherVpnService : VpnService() {
      * SOCKS5 greeting, DOMAIN CONNECT and an HTTP Cloudflare WARP trace.
      * A successful CONNECT reply alone does not prove usable traffic.
      */
-    private fun performSocks5LivenessProbe(host: String, port: Int, timeoutMs: Int): Boolean {
-        return Socks5TraceProbe.verify(
+    private suspend fun performSocks5LivenessProbe(host: String, port: Int, timeoutMs: Int): Boolean {
+        val job = currentCoroutineContext()[Job]
+        return Socks5TraceProbe.verifyDetailed(
             host, port, timeoutMs,
-            AetherApplication.instance.settingsRepository.settings.value.preventIranExit
-        )
+            AetherApplication.instance.settingsRepository.settings.value.preventIranExit,
+            isActive = { job?.isActive != false }
+        ).isSuccess
     }
 
     private fun establishVpnInterface(settings: AppSettings): ParcelFileDescriptor? {
@@ -651,9 +676,7 @@ class AetherVpnService : VpnService() {
 
     private fun isSocksPortReady(host: String, port: Int): Boolean {
         return try {
-            val s = Socket()
-            s.connect(InetSocketAddress(host, port), 250)
-            s.close()
+            Socket().use { it.connect(InetSocketAddress(host, port), 250) }
             true
         } catch (e: Throwable) {
             false

@@ -14,5 +14,17 @@ enum class ConnectionProfile(val id:String,val udp:Boolean,val timeoutSeconds:Lo
  @SerializedName("psiphon_reverse") PSIPHON_REVERSE("psiphon_reverse",true,240,listOf("--masque","--h2","--psiphon-reverse")),
  @SerializedName("tor") TOR("tor",false,420,listOf("--tor-only","--tor-bridges"));
  fun manualAttempt(deepScan: Boolean) = Triple(this, if(deepScan) maxOf(timeoutSeconds,340L) else timeoutSeconds, !deepScan)
- companion object { fun autoAttempts(cached:ConnectionProfile?) = buildList { if(cached!=null && cached!=TOR)add(Triple(cached,25L,true)); for(p in listOf(MASQUE_H2,MASQUE_H3,PSIPHON_AUTO,PSIPHON_CDN))add(Triple(p,p.timeoutSeconds,false)) } }
+ companion object {
+  fun autoAttempts(cached:ConnectionProfile?) = buildList {
+   val previous = cached?.takeIf { it != TOR }
+   if(previous != null) {
+    add(Triple(previous,25L,true))
+    // Retry the working transport with a fresh gateway before other protocols.
+    add(Triple(previous,previous.timeoutSeconds,false))
+   }
+   for(p in listOf(MASQUE_H2,MASQUE_H3,PSIPHON_AUTO,PSIPHON_CDN)) {
+    if(p != previous) add(Triple(p,p.timeoutSeconds,false))
+   }
+  }
+ }
 }

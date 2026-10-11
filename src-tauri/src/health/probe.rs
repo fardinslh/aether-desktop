@@ -61,7 +61,7 @@ impl HealthProber {
 
         let client = reqwest::Client::builder()
             .proxy(proxy)
-            .timeout(Duration::from_secs(6))
+            .timeout(Duration::from_secs(15))
             .build()
             .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
 
@@ -79,7 +79,7 @@ impl HealthProber {
                     "INFO",
                     "Aether",
                     &format!(
-                        "[SOCKS-VERIFY-START] Sending verification probe to endpoint='{}' via {} (timeout: 6s)...",
+                        "[SOCKS-VERIFY-START] Sending verification probe to endpoint='{}' via {} (timeout: 15s)...",
                         endpoint, proxy_url
                     ),
                 );

@@ -17,6 +17,12 @@ class ConnectionMigrationTest {
   assertFalse(ConnectionProfile.autoAttempts(ConnectionProfile.TOR).any{it.first==ConnectionProfile.TOR})
  }
  @Test fun publicTcpTransportCannotClaimUdp(){assertFalse(ConnectionProfile.PSIPHON_AUTO.udp);assertFalse(ConnectionProfile.PSIPHON_CDN.udp);assertFalse(ConnectionProfile.TOR.udp);assertTrue(ConnectionProfile.PSIPHON_REVERSE.udp)}
+ @Test fun stalePsiphonGatewayRescansPsiphonBeforeOtherProtocols(){
+  val attempts=ConnectionProfile.autoAttempts(ConnectionProfile.PSIPHON_AUTO)
+  assertEquals(Triple(ConnectionProfile.PSIPHON_AUTO,25L,true),attempts[0])
+  assertEquals(Triple(ConnectionProfile.PSIPHON_AUTO,180L,false),attempts[1])
+  assertEquals(1,attempts.count { it.first==ConnectionProfile.PSIPHON_AUTO && !it.third })
+ }
  @org.junit.Test fun deepManualScanGetsItsFullBudgetWithoutChangingAuto() {
   val deep=ConnectionProfile.MASQUE_H2.manualAttempt(true)
   org.junit.Assert.assertEquals(340L,deep.second)

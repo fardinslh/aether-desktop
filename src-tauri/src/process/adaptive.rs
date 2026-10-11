@@ -71,8 +71,18 @@ impl ConnectionOrchestrator {
                         if self.cancel_requested.load(Ordering::SeqCst) { return Err("Connection cancelled".into()); }
                         if !self.aether.lock().await.is_running() { return Err("Aether process exited".into()); }
                         if HealthProber::check_port_open(&active.aether.host,active.aether.port,150).await {
-                            if let Ok(trace) = HealthProber::query_cloudflare_trace_via_socks5(&active.aether.host,active.aether.port).await {
-                                if (!active.aether.prevent_iran_exit || trace.loc.len() == 2 && !trace.loc.eq_ignore_ascii_case("IR")) && verify_independent_https(&active.aether.host,active.aether.port).await.is_ok() { return Ok(trace.ip); }
+                            // Independent requests run together so a slow healthy
+                            // route has a full TLS budget without doubling startup.
+                            let probes = tokio::try_join!(
+                                HealthProber::query_cloudflare_trace_via_socks5(&active.aether.host,active.aether.port),
+                                verify_independent_https(&active.aether.host,active.aether.port)
+                            );
+                            match probes {
+                                Ok((trace, ())) => match HealthProber::enforce_exit_location(trace, active.aether.prevent_iran_exit) {
+                                    Ok(trace) => return Ok(trace.ip),
+                                    Err(e) => self.logger.log("WARN", "Auto", &format!("{}: {}", profile.id(), e)),
+                                },
+                                Err(e) => self.logger.log("WARN", "Auto", &format!("{} HTTPS verification: {}", profile.id(), e)),
                             }
                         }
                         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -105,7 +115,7 @@ impl ConnectionOrchestrator {
 }
 /// A second independent TLS service must return its documented success response.
 pub async fn verify_independent_https(host:&str,port:u16) -> Result<(),String> {
-    let client=reqwest::Client::builder().proxy(reqwest::Proxy::all(format!("socks5h://{}:{}",host,port)).map_err(|e|e.to_string())?).timeout(Duration::from_secs(6)).redirect(reqwest::redirect::Policy::none()).build().map_err(|e|e.to_string())?;
+    let client=reqwest::Client::builder().proxy(reqwest::Proxy::all(format!("socks5h://{}:{}",host,port)).map_err(|e|e.to_string())?).timeout(Duration::from_secs(15)).redirect(reqwest::redirect::Policy::none()).build().map_err(|e|e.to_string())?;
     let start=Instant::now();
     let response=client.get("https://www.gstatic.com/generate_204").send().await.map_err(|e|e.to_string())?;
     if response.status()!=reqwest::StatusCode::NO_CONTENT { return Err(format!("Independent HTTPS probe: {}",response.status())); }

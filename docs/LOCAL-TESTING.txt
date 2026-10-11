@@ -29,3 +29,14 @@ Remaining validation:
 Android artifact: this is a debug/test APK with application ID com.aether.android.debug, not an in-place signed production update.
 
 Windows and Android preview builds are intended for field testing; macOS is outside this preview release.
+
+Connection troubleshooting changes — 2026-10-11:
+- Both clients rescan the last successful transport immediately after a failed quick reconnect, before trying other protocols.
+- Desktop SOCKS HTTPS checks allow 15 seconds per request; initial independent checks run concurrently. Android allows 15 seconds per HTTPS request within a 30-second total deadline, bounded by the transport's remaining startup budget.
+- Android completes Content-Length, chunked and 204 responses at their HTTP boundaries. It no longer requires a complete response's TLS connection to close. Cancellation closes blocked probe sockets.
+- Android selects the runtime checksum manifest using the app process's ABI and records core output, exit codes and HTTPS probe errors in a size-bounded aether-debug.log.
+- Validation: 69 Rust tests and 15 Android JVM tests passed; frontend lifecycle checks and the production frontend build passed. The debug APK signature and all 12 packaged native runtime hashes were verified.
+- Test APK: dist-android/Aether-Android-connection-fix-2026-10-11.apk (com.aether.android.debug). This is a local debug/test build. No Windows installer was rebuilt for these changes, and no physical Android or native Windows connection test was run.
+- Existing installations retain their selected connection mode. Select Auto in Settings to exercise automatic fallback; Manual continues to use only the selected transport.
+- After a failed Android connection, collect the device log with: adb shell run-as com.aether.android.debug cat files/aether-debug.log
+- On Windows, use Diagnostics > Export Raw Log after the failed attempt. Compare identical network and settings before accepting a connection improvement.

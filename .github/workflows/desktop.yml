@@ -48,11 +48,13 @@ jobs:
           if (-not $manifest) { throw 'Bundled runtime manifest missing from installer' }
           python scripts/verify-runtime.py $manifest.DirectoryName
           if ($LASTEXITCODE -ne 0) { throw 'Installer runtime validation failed' }
+          $version = (Get-Content src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          $installerName = "Aether-Desktop-$version-x64-setup.exe"
           New-Item -ItemType Directory release-windows -Force | Out-Null
-          Copy-Item $installer.FullName release-windows/Aether-Desktop-0.2.0-x64-setup.exe
+          Copy-Item $installer.FullName "release-windows/$installerName"
           Copy-Item $manifest.FullName release-windows/runtime-manifest.json
-          $hash = (Get-FileHash release-windows/Aether-Desktop-0.2.0-x64-setup.exe -Algorithm SHA256).Hash.ToLower()
-          "$hash  Aether-Desktop-0.2.0-x64-setup.exe" | Out-File release-windows/SHA256SUMS.txt -Encoding ascii
+          $hash = (Get-FileHash "release-windows/$installerName" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $installerName" | Out-File release-windows/SHA256SUMS.txt -Encoding ascii
       - uses: actions/upload-artifact@v4
         with:
           name: Aether-${{ inputs.platform }}

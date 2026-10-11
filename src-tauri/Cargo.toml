@@ -1,6 +1,6 @@
 [package]
 name = "aether-desktop"
-version = "0.2.0"
+version = "0.2.1"
 description = "Desktop VPN and application routing manager for Windows and macOS"
 authors = ["Aether Team"]
 edition = "2021"
